@@ -209,7 +209,7 @@ export function completeCommands(
   const body = input.slice(1)
   // Token charset includes `. : /` so provider/model specs (e.g.
   // `deepseek/deepseek-flash`, `openai/gpt-4.1`) survive as ONE token —
-  // the /model completion matches its candidates against the whole spec.
+  // /model completion displays and inserts the full route, even when matched by model ID.
   if (!body.split(/[\t ]+/u).every(token => token === '' || isCommandCompletionToken(token))) return []
   const trailingSeparator = /[\t ]$/u.test(body)
   const tokens = body.split(/[\t ]+/u)
@@ -227,7 +227,7 @@ export function completeCommands(
 
   const normalizedPrefix = prefix.toLowerCase()
   return candidates.flatMap(candidate => {
-    const completionToken = matchingCompletionToken(candidate, normalizedPrefix)
+    const completionToken = matchingCompletionToken(candidate, normalizedPrefix, canonicalPath.length === 1 && canonicalPath[0] === 'model')
     if (completionToken === undefined || !isCommandCompletionToken(completionToken)) return []
     const path = [...tokens, completionToken]
     const commandLine = `/${path.join(' ')}`
@@ -255,7 +255,12 @@ function resolveCompletionNode(
     || candidate.aliases?.some(alias => alias.toLowerCase() === normalized))
 }
 
-function matchingCompletionToken(candidate: CommandCompletionNode, prefix: string): string | undefined {
+function matchingCompletionToken(candidate: CommandCompletionNode, prefix: string, matchModelId: boolean): string | undefined {
   if (candidate.name.toLowerCase().startsWith(prefix)) return candidate.name
-  return candidate.aliases?.find(alias => alias.toLowerCase().startsWith(prefix))
+  const alias = candidate.aliases?.find(value => value.toLowerCase().startsWith(prefix))
+  if (alias !== undefined) return alias
+  if (matchModelId && candidate.name.slice(candidate.name.lastIndexOf('/') + 1).toLowerCase().startsWith(prefix)) {
+    return candidate.name
+  }
+  return undefined
 }
