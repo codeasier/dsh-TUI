@@ -16,7 +16,10 @@ import instances from '../src/ink/instances.js'
 import {
   KittyGraphicsManager,
   transmitKittyRgba,
+  IMAGE_BACKGROUND_Z_INDEX,
+  IMAGE_FOREGROUND_Z_INDEX,
 } from '../src/ink/kitty-graphics.js'
+import { terminalImagesBindToCells } from '../src/ink/terminal.js'
 import Output from '../src/ink/output.js'
 import {
   INITIAL_STATE,
@@ -47,6 +50,13 @@ import {
   type TerminalImageSource,
 } from '../src/ink/terminal-image.js'
 import { settled } from './lib/term-test.mjs'
+
+// The terminal family decides how images are placed (see
+// terminalImagesBindToCells). Pin it to the spec-conforming default so these
+// assertions do not depend on the machine running them; the cell-bound family
+// is opted into explicitly below.
+const previousTermProgram = process.env.TERM_PROGRAM
+delete process.env.TERM_PROGRAM
 
 const source: TerminalImageSource = {
   data: new Uint8Array(40 * 40 * 4).fill(127),
@@ -271,6 +281,61 @@ assert.match(
   replacedAgain,
   new RegExp(`a=p,i=${replacementImageId},p=\\d+,c=6,r=3`, 'u'),
   'a dormant image comes back with one placement command',
+)
+
+// A cell-bound terminal (Orca Remote's xterm.js client) gets the whole z range
+// lifted and its placements replayed after any frame that repaints their
+// cells. Every live placement is re-emitted on a base change, because a
+// terminal keeps the z-index it was handed until the placement is replaced.
+assert.equal(
+  terminalImagesBindToCells(),
+  false,
+  'unknown terminals keep rasters on their own image layer',
+)
+process.env.TERM_PROGRAM = 'vscode'
+assert.equal(
+  terminalImagesBindToCells(),
+  true,
+  'the xterm.js family paints images as cell content',
+)
+process.env.TERM_PROGRAM = 'Orca'
+assert.equal(
+  terminalImagesBindToCells(),
+  true,
+  'Orca Remote names itself in TERM_PROGRAM and is cell-bound too',
+)
+delete process.env.TERM_PROGRAM
+
+const zBaseManager = new KittyGraphicsManager({ firstImageId: 1201 })
+const zBasePlacement = { ...placement, node: createNode('ink-image') }
+assert.match(
+  zBaseManager.reconcile([zBasePlacement]),
+  /a=p,i=1201,p=1,c=6,r=3,z=-2147483648,C=1/u,
+  'the default base keeps placements behind text and panel backgrounds',
+)
+assert.equal(
+  zBaseManager.setBackgroundZIndex(IMAGE_FOREGROUND_Z_INDEX),
+  true,
+  'lifting the base reports the change',
+)
+const zBaseLifted = zBaseManager.reconcile([zBasePlacement])
+assert.match(
+  zBaseLifted,
+  /a=p,i=1201,p=1,c=6,r=3,z=0,C=1/u,
+  'a lifted base re-places the existing placement at z=0',
+)
+assert.doesNotMatch(zBaseLifted, /\x1b_Ga=[tT],/u, 're-placing for a new base reuses the uploaded raster')
+assert.equal(
+  zBaseManager.setBackgroundZIndex(IMAGE_FOREGROUND_Z_INDEX),
+  false,
+  'an unchanged base is a no-op',
+)
+assert.equal(zBaseManager.reconcile([zBasePlacement]), '', 'a no-op base change emits no graphics bytes')
+assert.equal(zBaseManager.setBackgroundZIndex(IMAGE_BACKGROUND_Z_INDEX), true)
+assert.match(
+  zBaseManager.reconcile([zBasePlacement]),
+  /a=p,i=1201,p=1,c=6,r=3,z=-2147483648,C=1/u,
+  'lowering the base re-places the placement again',
 )
 
 // Partially visible images: the placement covers only the visible cells and
@@ -734,7 +799,6 @@ delete process.env.TMUX
 delete process.env.STY
 delete process.env.DSH_TUI_ACCESSIBILITY
 delete process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES
-
 const stdin = new FakeStdin()
 const stdout = new FakeStdout()
 const imageTree = (
@@ -1193,6 +1257,42 @@ stdin.write(
   '\x1b[6;20;9t\x1b[4;200;1600t' +
     '\x1b[?61;4c\x1b[?61;4c\x1b[?61;4c',
 )
+
+// The renderer re-checks the terminal family on every painted frame, so a
+// client identified after the graphics probe still gets its base corrected.
+// Alternating the source forces a placement, which is what carries the z: the
+// base alone cannot be observed without a placement to read it from.
+const zBaseTree = (imageSource: TerminalImageSource): React.ReactElement => (
+  <AlternateScreen>
+    <Image source={imageSource} width={4} height={2} alt="cover art">
+      <Text>{'▓▓▓▓\n▓▓▓▓'}</Text>
+    </Image>
+  </AlternateScreen>
+)
+const beforeLiftedZBase = stdout.output.length
+process.env.TERM_PROGRAM = 'vscode'
+instance.rerender(zBaseTree(noisySource))
+assert.ok(
+  await settled(() =>
+    /a=p,i=\d+,p=\d+,c=4,r=2,z=\d+,C=1/u.test(stdout.output.slice(beforeLiftedZBase)),
+  ),
+  'an xterm.js terminal must place images at a non-negative z-index',
+)
+assert.doesNotMatch(
+  stdout.output.slice(beforeLiftedZBase),
+  /a=p,[^;]*z=-\d/u,
+  'a lifted base must leave no negative placement behind',
+)
+const beforeBackgroundZBase = stdout.output.length
+delete process.env.TERM_PROGRAM
+instance.rerender(zBaseTree(source))
+assert.ok(
+  await settled(() =>
+    /a=p,i=\d+,p=\d+,c=4,r=2,z=-\d+,C=1/u.test(stdout.output.slice(beforeBackgroundZBase)),
+  ),
+  'a spec-conforming terminal must keep the background z-index',
+)
+
 stdout.isTTY = false
 const beforeUnmount = stdout.output.length
 instance.unmount()
@@ -1202,6 +1302,8 @@ assert.match(
   'alt-screen exit must delete images',
 )
 
+if (previousTermProgram === undefined) delete process.env.TERM_PROGRAM
+else process.env.TERM_PROGRAM = previousTermProgram
 for (const [key, value] of Object.entries(previousEnv)) {
   const envKey =
     key === 'tmux'

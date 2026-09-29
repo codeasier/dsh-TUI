@@ -29,7 +29,7 @@ import { noteTerminalFlush } from './flush-tick.js';
 import instances from './instances.js';
 import { suppressInputFor } from './input-suppression.js';
 import { LogUpdate } from './log-update.js';
-import { KittyGraphicsManager } from './kitty-graphics.js';
+import { IMAGE_BACKGROUND_Z_INDEX, IMAGE_FOREGROUND_Z_INDEX, KittyGraphicsManager } from './kitty-graphics.js';
 import { SixelGraphicsManager } from './sixel-graphics.js';
 import { selectTerminalImageProtocol } from './terminal-image-protocol.js';
 import { nodeCache } from './node-cache.js';
@@ -43,7 +43,7 @@ import createRenderer, { type Renderer } from './renderer.js';
 import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
 import { applySearchHighlight } from './transcript-highlight.js';
 import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, refreshSelectionFingerprint, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
-import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
+import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, terminalImagesBindToCells, type Terminal, writeDiffToTerminal } from './terminal.js';
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
@@ -1022,6 +1022,14 @@ export default class Ink {
     }
     const optimized = optimize(diff);
     const optimizeMs = performance.now() - tOptimize;
+    if (this.altScreenActive && this.kittyGraphicsSupported) {
+      // A cell-bound terminal never paints a negative placement (see
+      // terminalImagesBindToCells). Sixel covers the family whenever it is
+      // available, so this is the fallback for one that has no Sixel.
+      this.kittyGraphicsManager.setBackgroundZIndex(
+        terminalImagesBindToCells() ? IMAGE_FOREGROUND_Z_INDEX : IMAGE_BACKGROUND_Z_INDEX,
+      );
+    }
     const graphicsOutput =
       this.altScreenActive && this.kittyGraphicsSupported
         ? this.kittyGraphicsManager.reconcile(frame.images ?? [])
@@ -1803,7 +1811,12 @@ export default class Ink {
         if (this.isUnmounted || this.isPaused || this.terminalQueriesSuspended) {
           return;
         }
-        const protocol = selectTerminalImageProtocol(reply?.status, attributes?.params, process.env.DSH_TUI_IMAGE_PROTOCOL);
+        const protocol = selectTerminalImageProtocol(
+          reply?.status,
+          attributes?.params,
+          process.env.DSH_TUI_IMAGE_PROTOCOL,
+          terminalImagesBindToCells(),
+        );
         if (protocol === 'none') return;
         if (protocol === 'sixel') {
           const [mode] = await Promise.all([querier.send(decrqm(80)), querier.flush()]);

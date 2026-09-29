@@ -117,6 +117,33 @@ assert.equal(selectTerminalImageProtocol(undefined, [61], undefined), 'none')
 assert.equal(selectTerminalImageProtocol('OK', [61, 4], 'none'), 'none')
 assert.equal(selectTerminalImageProtocol('OK', [61, 4], 'sixel'), 'sixel')
 assert.equal(selectTerminalImageProtocol(undefined, undefined, 'invalid'), 'none')
+// A terminal that paints images as cell content (see
+// terminalImagesBindToCells) cannot move or park a Kitty placement, so Sixel
+// wins there whenever it is on offer; the override still beats the rule.
+assert.equal(
+  selectTerminalImageProtocol('OK', [61, 4], undefined, true),
+  'sixel',
+  'a cell-bound terminal prefers Sixel over a Kitty layer it cannot move images with',
+)
+assert.equal(
+  selectTerminalImageProtocol('OK', [61], undefined, true),
+  'kitty',
+  'a cell-bound terminal without Sixel keeps Kitty',
+)
+assert.equal(
+  selectTerminalImageProtocol(undefined, [61, 4], undefined, true),
+  'sixel',
+)
+assert.equal(
+  selectTerminalImageProtocol(undefined, [61], undefined, true),
+  'none',
+  'a cell-bound terminal with neither protocol falls back to text',
+)
+assert.equal(
+  selectTerminalImageProtocol('OK', [61, 4], 'kitty', true),
+  'kitty',
+  'the override beats the cell-bound preference',
+)
 
 const styles = new StylePool()
 const chars = new CharPool()

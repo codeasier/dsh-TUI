@@ -201,6 +201,47 @@ export function isXtermJs(): boolean {
 }
 
 /**
+ * True when the terminal paints Kitty images as if they were cell content
+ * instead of an independent layer.
+ *
+ * Two measured symptoms, both from one family (Orca Remote's client:
+ * XTVERSION reports `xterm.js(6.1.0-beta.303)` plus a Kitty graphics add-on,
+ * measured 2026-09-29):
+ *
+ * - Negative placements never appear. The renderer's default base is
+ *   `z < INT32_MIN/2` — "behind text and behind explicit panel backgrounds" —
+ *   which is what keeps an image from bleeding through dialogs, the preview's
+ *   dim catcher or an opaque card. This client answers the `a=q` capability
+ *   probe with `OK`, answers the XTWINOPS pixel queries and paints `z=0`
+ *   placements, but silently drops every placement with `z < 0`, including the
+ *   `z=-1` the protocol defines as "below text, above the cell background".
+ * - Cell writes erase the raster. Writing any cell inside a placement's rect
+ *   (a transcript scroll, a status-row tick, the card's own repaint) takes the
+ *   image off the screen while the uploaded data survives, so one replayed
+ *   `a=p` restores it.
+ *
+ * The graphics probe can see neither: the client never replies to a
+ * placement, not even with `q=1`. The family is therefore identified by name —
+ * XTVERSION (`xterm.js(...)`), which survives SSH where TERM_PROGRAM does not,
+ * plus the client's own `TERM_PROGRAM=Orca`, which its relay injects into the
+ * remote shell and which therefore *is* present over SSH.
+ *
+ * Callers give such terminals the foreground z base and replay placements
+ * after frames that repaint their cells. The only cost is partial occlusion —
+ * an image a panel covers in part stays visible through it — since a fully
+ * covered placement is not replayed and the frame that uncovers it repaints
+ * those cells anyway.
+ *
+ * Kept as an exclusion rather than an allowlist: unknown terminals keep the
+ * spec-conforming behaviour.
+ * @returns true when Kitty images behave like cell content.
+ */
+export function terminalImagesBindToCells(): boolean {
+  if (process.env.TERM_PROGRAM === 'Orca') return true
+  return isXtermJs()
+}
+
+/**
  * True when the terminal can be safely probed with DECRQM
  * (`CSI ? <mode> $ p`).
  *

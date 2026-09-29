@@ -344,7 +344,10 @@ async function withTerminal(
   graphics = false,
   terminalImages = true,
 ): Promise<void> {
-  const graphicsEnv = ['TMUX', 'STY', 'DSH_TUI_ACCESSIBILITY', 'DSH_TUI_DISABLE_TERMINAL_IMAGES']
+  // TERM_PROGRAM: the terminal family decides the graphics protocol (see
+  // terminalImagesBindToCells), and this fixture's Kitty replies assume the
+  // spec-conforming family. Pinned so the run does not depend on the machine.
+  const graphicsEnv = ['TMUX', 'STY', 'DSH_TUI_ACCESSIBILITY', 'DSH_TUI_DISABLE_TERMINAL_IMAGES', 'TERM_PROGRAM']
   const previousEnv = graphicsEnv.map(name => process.env[name])
   if (graphics) for (const name of graphicsEnv) delete process.env[name]
   const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
