@@ -209,7 +209,8 @@ export function completeCommands(
   const body = input.slice(1)
   // Token charset includes `. : /` so provider/model specs (e.g.
   // `deepseek/deepseek-flash`, `openai/gpt-4.1`) survive as ONE token —
-  // /model completion displays and inserts the full route, even when matched by model ID.
+  // /model completion displays and inserts the full route, whether it was
+  // matched by route prefix, model-ID prefix, or fuzzy subsequence.
   if (!body.split(/[\t ]+/u).every(token => token === '' || isCommandCompletionToken(token))) return []
   const trailingSeparator = /[\t ]$/u.test(body)
   const tokens = body.split(/[\t ]+/u)
@@ -226,10 +227,20 @@ export function completeCommands(
   }
 
   const normalizedPrefix = prefix.toLowerCase()
-  return candidates.flatMap(candidate => {
-    const completionToken = matchingCompletionToken(candidate, normalizedPrefix, canonicalPath.length === 1 && canonicalPath[0] === 'model')
-    if (completionToken === undefined || !isCommandCompletionToken(completionToken)) return []
-    const path = [...tokens, completionToken]
+  // /model 的模型子节点按三级匹配：路由/别名前缀 > 模型 ID 前缀 > 子序列模糊
+  // （fzf 风格，字符按序出现即可，`dsv4.1` 命中 `volceapi/deepseek-v4.1-flash`）。
+  // 前缀命中排在模糊命中之前；同级保持目录序（stable sort）。
+  const matchModelChildren = canonicalPath.length === 1 && canonicalPath[0] === 'model'
+  const matches: { candidate: CommandCompletionNode; token: string; tier: number }[] = []
+  for (const candidate of candidates) {
+    const match = matchingCompletionToken(candidate, normalizedPrefix, matchModelChildren)
+    if (match !== undefined && isCommandCompletionToken(match.token)) {
+      matches.push({ candidate, token: match.token, tier: match.tier })
+    }
+  }
+  matches.sort((a, b) => a.tier - b.tier)
+  return matches.flatMap(({ candidate, token }) => {
+    const path = [...tokens, token]
     const commandLine = `/${path.join(' ')}`
     return [{
       name: path.join(' '),
@@ -255,12 +266,33 @@ function resolveCompletionNode(
     || candidate.aliases?.some(alias => alias.toLowerCase() === normalized))
 }
 
-function matchingCompletionToken(candidate: CommandCompletionNode, prefix: string, matchModelId: boolean): string | undefined {
-  if (candidate.name.toLowerCase().startsWith(prefix)) return candidate.name
+/**
+ * Match a candidate against the typed prefix. Returns the completion token to
+ * insert plus a ranking tier: 0 = route/alias prefix, 1 = model-ID prefix
+ * (/model children only), 2 = fuzzy subsequence over the whole route
+ * (/model children only). `undefined` = no match.
+ */
+function matchingCompletionToken(candidate: CommandCompletionNode, prefix: string, matchModelId: boolean): { token: string; tier: number } | undefined {
+  if (candidate.name.toLowerCase().startsWith(prefix)) return { token: candidate.name, tier: 0 }
   const alias = candidate.aliases?.find(value => value.toLowerCase().startsWith(prefix))
-  if (alias !== undefined) return alias
-  if (matchModelId && candidate.name.slice(candidate.name.lastIndexOf('/') + 1).toLowerCase().startsWith(prefix)) {
-    return candidate.name
+  if (alias !== undefined) return { token: alias, tier: 0 }
+  if (matchModelId) {
+    const name = candidate.name.toLowerCase()
+    if (name.slice(name.lastIndexOf('/') + 1).startsWith(prefix)) return { token: candidate.name, tier: 1 }
+    if (isSubsequence(prefix, name)) return { token: candidate.name, tier: 2 }
   }
   return undefined
+}
+
+/**
+ * fzf 风格子序列匹配：query 的字符按顺序出现在 candidate 中即命中。
+ * 两侧均已小写；query 经 isCommandCompletionToken 校验，仅含 ASCII。
+ */
+function isSubsequence(query: string, candidate: string): boolean {
+  let index = 0
+  for (const char of candidate) {
+    if (char === query[index]) index += 1
+    if (index === query.length) return true
+  }
+  return index === query.length
 }
