@@ -80,7 +80,34 @@ echo "    $TARBALL"
 
 echo
 echo "==> 3/3 装进 profile"
+# 先删掉安装目录再 add（2026-09-29 实测两次，别省）：pnpm 对 `file:` tarball 的复用
+# 按**路径**判断 —— 路径不变时，即使 tarball 内容变了（lock 里的 integrity 都换成新的、
+# store 里也有新内容），profile 下这个目录仍旧原样留着，`dsh plugin add` 一路打印
+# 「完成」，/restart 后跑的却是旧构建。删掉目录，pnpm 只能按新的 integrity 重新解出。
+# 代价约 0.5s（store 已热）。
+rm -rf "$PROFILE_DIR/node_modules/@deepseek-harness-tui/dsh-tui"
 dsh plugin --profile "$PROFILE" add "file:$TARBALL"
+# 收口：确认解出来的真的是这次的产物（比对打包与安装后的 lib 树摘要）。不一致就重链一次
+# 再验，仍然不一致直接失败 —— 宁可炸在安装步骤，也别让 /restart 跑旧代码。
+lib_digest() {
+  (cd "$1" && find lib -type f | LC_ALL=C sort | while IFS= read -r f; do
+      printf '%s ' "$f"
+      sha256sum "$f"
+    done | sha256sum | cut -d' ' -f1)
+}
+tmp_unpack="$(mktemp -d)"
+tar -xzf "$TARBALL" -C "$tmp_unpack" package/lib
+want="$(lib_digest "$tmp_unpack/package")"
+rm -rf "$tmp_unpack"
+have="$(lib_digest "$PROFILE_DIR/node_modules/@deepseek-harness-tui/dsh-tui")"
+if [ "$want" != "$have" ]; then
+  echo "    profile 里仍是旧构建，强制重链…"
+  rm -rf "$PROFILE_DIR/node_modules/@deepseek-harness-tui/dsh-tui"
+  (cd "$PROFILE_DIR" && CI=true corepack pnpm install --frozen-lockfile >/dev/null)
+  have="$(lib_digest "$PROFILE_DIR/node_modules/@deepseek-harness-tui/dsh-tui")"
+fi
+[ "$want" = "$have" ] || { echo "安装产物与 tarball 不一致（$have ≠ $want）" >&2; exit 1; }
+echo "    lib 摘要一致：$(printf '%s' "$have" | cut -c1-12)…"
 
 # 装成功了才清旧包：此刻 profile 的 package.json 已指向 $TARBALL，其余都是死重量。
 for old in "$PACK_DIR"/*.tgz; do
