@@ -691,7 +691,7 @@ dsh-TUI 不预装通用技能；技能内容与发现规则由 DSH 及当前组�
   `layer`、`flip`、`aesthetic`、`hamburger`、`moon`、`moon8`、`whale-spout`、
   `whale-spin`、`whale-bubbles`、`clock`、`traffic_lights`、`comet`、`breathe`、
   `dots`、`arrow`、`spark`、`bar`、`braille`、`arc`、`circle`、`grow`、`noise`、
-  `bounce`、`rainbow`、`bar2`、`dqpb`、`toggle`，默认 `moon8`）。旧本地配置值
+  `bounce`、`rainbow`、`bar2`、`dqpb`、`toggle`，默认 `moon`）。旧本地配置值
   `claude` 读取时映射为 `moon8`，选择器不显示该旧预设；
   `/activity status` 查看当前选择。
 - `/preset <id>` 与 `/preset status` 见配置文档。

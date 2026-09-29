@@ -24,6 +24,7 @@ import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 import { ApprovalStore, bindApprovalStore } from './approvals.js'
 import { registerPromptDebug } from './promptDebug.js'
 import { readActivityFrames } from '../activityPrefs.js'
+import { DEFAULT_PRESET } from '../components/activityFrames.js'
 import { commitFullscreenFactoryMigration, planFullscreenFactoryMigration, readAppliedMigrations } from '../migrationPrefs.js'
 import { readModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
@@ -583,7 +584,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     activity: config.activity,
     // Explicit cordis.yml value (static deployment choice) wins over the
     // runtime `/activity` preference, which wins over the default.
-    activityFrames: config.activityFrames ?? readActivityFrames() ?? 'moon8',
+    activityFrames: config.activityFrames ?? readActivityFrames() ?? DEFAULT_PRESET,
     // Static footer preference: cordis.yml `contextBar` (schema default on).
     contextBar: config.contextBar,
     // Same precedence for the agent preset: cordis.yml `preset` over the

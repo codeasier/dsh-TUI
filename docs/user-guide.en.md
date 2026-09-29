@@ -270,7 +270,7 @@ The command menu = built-in commands (50) + DSH registry commands (`/plan` `/goa
 | `/effort` | `status` / `<id>` | reasoning effort: no-arg slider (`←/→` adjust); `status` current level; `<id>` set directly. Persisted to `~/.dsh-tui/effort.json`; new-session start level follows /settings `effortDefault` (§5.3) |
 | `/thinking` | none | extended-thinking display toggle (thinking expands item by item while streaming) |
 | `/tokens` | none | token usage + context percentage |
-| `/activity` | `frames <名>` / `status` | working-status animation: no-arg selector, `frames <名>` sets directly (includes `random`), default `moon8`. Persisted to `~/.dsh-tui/working-activity.json` |
+| `/activity` | `frames <名>` / `status` | working-status animation: no-arg selector, `frames <名>` sets directly (includes `random`), default `moon` (text semicircles); existing saved selections stay unchanged. Persisted to `~/.dsh-tui/working-activity.json` |
 | `/preset` | `<id>` / `status` | agent preset: `standard` / `ptc` (old 0.1.1 name `code`) / `minimal` / `cordis` / **Liangshen mode `liangshen`**; **cannot switch an already-started session**. Persisted to `~/.dsh-tui/agent-preset.json` |
 | `/theme` | `<名字>` / `status` | theme: no-arg selector; `<名字>` switch directly; `status` current theme (auto appends the OSC 11 result). Persisted to `~/.dsh-tui/theme.json` |
 | `/color` | no-arg / `<名>` / `status` / `reset` | session accent color: no-arg opens the palette (`↑/↓` pick, `Enter` apply); `<名>` set directly; `reset` back to default. Colors `red/orange/yellow/green/blue/purple/pink/cyan`, saved per session |
@@ -563,7 +563,7 @@ When dsh exits unexpectedly, safe mode gives a **read-only** environment diagnos
 | Theme | `/theme` | `auto` (OSC 11 follows terminal background) / `light` / `dark` / `dark-ansi`; `/theme <名>` direct; `/theme status` for the result |
 | Custom theme | manual | `~/.dsh-tui/themes/<名>.json`, `{base, colors}` format, hot-swap on select; naming it `auto` gets shadowed by the built-in |
 | Language | `/lang` | `en` / `zh` hot switch; priority `DSH_TUI_LANG` > profile config (legacy: settings.yaml user layer > cordis.yml) > persisted |
-| Status animation | `/activity` | selector or `/activity frames <名>`; default `moon8`, `random` randomizes |
+| Status animation | `/activity` | selector or `/activity frames <名>`; default `moon`, `random` randomizes |
 
 **Theme priority**: `DSH_TUI_THEME` > `~/.dsh-tui/theme.json` > OSC 11 terminal-background detection > dark fallback.
 

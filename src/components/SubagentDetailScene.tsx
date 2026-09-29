@@ -26,11 +26,11 @@ function formatTimestamp(ts: number): string {
 
 function statusGlyph(status: SubagentState['status']): { glyph: string; color: keyof Theme | undefined; label: string } {
   const minimalUi = isMinimalUiMode()
-  if (status === 'completed') return { glyph: minimalUi ? '✓' : '🟢', color: minimalUi ? undefined : 'success', label: 'done' }
-  if (status === 'failed') return { glyph: minimalUi ? '×' : '🔴', color: minimalUi ? undefined : 'error', label: 'failed' }
-  if (status === 'cancelled') return { glyph: minimalUi ? '×' : '🔴', color: minimalUi ? undefined : 'error', label: 'cancelled' }
-  if (status === 'unknown') return { glyph: minimalUi ? '·' : '⚪', color: minimalUi ? undefined : 'subtle', label: 'history' }
-  return { glyph: minimalUi ? '·' : '🟡', color: minimalUi ? undefined : 'warning', label: 'running' }
+  if (status === 'completed') return { glyph: '✓', color: minimalUi ? undefined : 'success', label: 'done' }
+  if (status === 'failed') return { glyph: '×', color: minimalUi ? undefined : 'error', label: 'failed' }
+  if (status === 'cancelled') return { glyph: '×', color: minimalUi ? undefined : 'error', label: 'cancelled' }
+  if (status === 'unknown') return { glyph: minimalUi ? '·' : '○', color: minimalUi ? undefined : 'subtle', label: 'history' }
+  return { glyph: minimalUi ? '·' : '◐', color: minimalUi ? undefined : 'warning', label: 'running' }
 }
 
 const PAGES = ['summary', 'output', 'tools'] as const

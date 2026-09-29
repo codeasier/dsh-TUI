@@ -106,7 +106,7 @@ import { PlanPicker } from '../components/PlanPicker.js'
 import { LangPicker } from '../components/LangPicker.js'
 import { ThemePicker, getThemeOptions } from '../components/ThemePicker.js'
 import { AUTO_THEME_NAME, getAutoThemeBase } from '../theme.js'
-import { FRAME_PRESETS, PRESET_NAMES } from '../components/activityFrames.js'
+import { DEFAULT_PRESET, FRAME_PRESETS, PRESET_NAMES } from '../components/activityFrames.js'
 import { ThinkingToggle } from '../components/ThinkingToggle.js'
 import { HistorySearchDialog } from '../components/HistorySearchDialog.js'
 import { RewindPicker } from '../components/RewindPicker.js'
@@ -1873,7 +1873,7 @@ export function Chat({
         if (parts[0] === 'status') {
           setHelpOpen(false)
           channel.pushLocal('/activity', [
-            t('activity-current-preset', { name: channel.activityFrames ?? 'moon8' }),
+            t('activity-current-preset', { name: channel.activityFrames ?? DEFAULT_PRESET }),
             t('activity-switch-hint'),
             t('activity-persist-hint'),
           ])
@@ -1887,7 +1887,7 @@ export function Chat({
           }
           const current = channel.activityFrames
           channel.pushLocal('/activity', [
-            t('activity-current-direct', { name: current ?? 'moon8' }),
+            t('activity-current-direct', { name: current ?? DEFAULT_PRESET }),
             ...PRESET_NAMES.map(name =>
               `${name.padEnd(10)} ${name === 'random' ? t('activity-random-each') : FRAME_PRESETS[name].frames.slice(0, 5).join(' ')}${name === current ? t('activity-current-marker') : ''}`,
             ),
