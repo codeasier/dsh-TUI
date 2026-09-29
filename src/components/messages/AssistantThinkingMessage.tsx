@@ -8,12 +8,12 @@ import {
   THINKING_SPINNER_FRAMES,
   THINKING_SPINNER_INTERVAL_MS,
   THINKING_SETTLED_MARKER,
+  THINKING_EXPANDED_MARKER,
 } from '../../terminal-utils/figures.js'
 import { BRAND, ICE } from '../shimmer.js'
 import { interpolateColor } from '../Spinner/spinnerUtils.js'
 import { isMinimalUiMode } from '../../minimalUiMode.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
-import { primaryComboString } from '../../utils/keymap.js'
 
 /** Preview body rows — a FIXED row count (kimicode-style constant-height
  *  ticker). Ink's truncate slices the whole string across newlines as one
@@ -50,14 +50,14 @@ type Props = {
 }
 
 /**
- * Thinking block: settled rows fold to `⚓ Thinking` plus the localized
- * ctrl+o expand hint (hint-expand-ctrl-o);
- * streaming rows switch between a three-line preview and the full reasoning
- * text on click. The live leading mark is a rotating braille spinner
- * (`⠋⠙⠹…`, Kimi Code style), settling back to the static anchor (`⚓`). When
- * the channel records the reasoning duration, the label carries it
- * (`⚓ Thinking · 12s …`) — dsh-tui's take on making thinking time visible in
- * the transcript.
+ * Thinking block: settled rows collapse to a single line — `+ Thinking · 12s`
+ * — and the leading mark flips to `-` while the block is open (click the row
+ * or Ctrl+O), the pair reading like a disclosure triangle. Streaming rows
+ * switch between a three-line preview and the full reasoning text on click;
+ * their leading mark is a rotating braille spinner (`⠋⠙⠹…`, Kimi Code
+ * style), settling back to `+`. When the channel records the reasoning
+ * duration, the label carries it — dsh-tui's take on making thinking time
+ * visible in the transcript.
  */
 export function AssistantThinkingMessage({
   thinking,
@@ -93,9 +93,18 @@ export function AssistantThinkingMessage({
 
   // Kimi Code style blue pulse: the streaming glyph breathes along the
   // header's brand→ice ladder, one sine period per ~7 frames (≈0.56s) —
-  // lively without strobing. The minimal UI drops the color (plain glyph);
-  // settled always keeps the plain dim anchor.
-  const label = `${t('thinking-label')}${duration}${streaming ? '…' : ` ${t('hint-expand-ctrl-o', { key: primaryComboString('transcript') })}`}`
+  // lively without strobing. Minimal mode drops the color (plain glyph);
+  // settled always keeps the plain dim mark.
+  //
+  // No expand hint on the settled label: it rode every single thinking step,
+  // so a long turn stacked a dozen identical `hint-expand-ctrl-o` tails —
+  // `+ Thinking · 12s` plus the same words again, once per step — and spent
+  // half the width repeating itself. The `+`/`-` disclosure and the `?`
+  // shortcut menu carry the affordance instead. (Upstream 0.11.2 made that
+  // hint keymap-aware via `primaryComboString('transcript')`; the removal
+  // stands either way — the cost was the repetition, not the key name. That
+  // is why the import is gone with it.)
+  const label = `${t('thinking-label')}${duration}${streaming ? '…' : ''}`
   const minimalUi = isMinimalUiMode()
   const pulse = (Math.sin(frame * 0.9) + 1) / 2
   const pulseColor = interpolateColor(BRAND, ICE, pulse)
@@ -114,7 +123,7 @@ export function AssistantThinkingMessage({
         <Text dimColor={!hovered} color={hovered ? 'text' : undefined} italic>{` ${label}`}</Text>
       </Box>
     ) : (
-      <Text italic dimColor={!hovered} color={hovered ? 'text' : undefined}>{`${minimalUi ? '*' : THINKING_SETTLED_MARKER} ${label}`}</Text>
+      <Text italic dimColor={!hovered} color={hovered ? 'text' : undefined}>{`${minimalUi ? '*' : verbose ? THINKING_EXPANDED_MARKER : THINKING_SETTLED_MARKER} ${label}`}</Text>
     )
 
   if (preview) {

@@ -20,21 +20,23 @@ export const UP_ARROW = '\u2191' // ↑
 export const DOWN_ARROW = '\u2193' // ↓
 
 /**
- * Thinking frames share a two-column footprint with the settled anchor. The
- * leading space prevents the label from shifting when the stream settles.
+ * Thinking frames share a one-column footprint with the settled/expanded
+ * markers below, so the label stays put when the stream settles.
  */
 export const THINKING_SPINNER_FRAMES = [
-  ' \u280b', // ⠋
-  ' \u2819', // ⠙
-  ' \u2839', // ⠹
-  ' \u2838', // ⠸
-  ' \u283c', // ⠼
-  ' \u2834', // ⠴
-  ' \u2826', // ⠦
-  ' \u2827', // ⠧
-  ' \u2807', // ⠇
-  ' \u280f', // ⠏
+  '\u280b', // ⠋
+  '\u2819', // ⠙
+  '\u2839', // ⠹
+  '\u2838', // ⠸
+  '\u283c', // ⠼
+  '\u2834', // ⠴
+  '\u2826', // ⠦
+  '\u2827', // ⠧
+  '\u2807', // ⠇
+  '\u280f', // ⠏
 ]
 export const THINKING_SPINNER_INTERVAL_MS = 80
-/** Settled marker shown after a reasoning block stops streaming. */
-export const THINKING_SETTLED_MARKER = '\u2693' // ⚓
+/** Settled marker: a collapsed reasoning block (click or Ctrl+O opens it). */
+export const THINKING_SETTLED_MARKER = '\u002b' // +
+/** Expanded marker: the same block while open — the pair reads as `+`/`-`. */
+export const THINKING_EXPANDED_MARKER = '\u002d' // -

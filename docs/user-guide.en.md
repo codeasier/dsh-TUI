@@ -433,6 +433,15 @@ An empty session shows the whale logo area at the top (scrolls away with the con
 - Pixel whale art and idle behavior ported from [dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale) (author
   [@lhh010](https://github.com/lhh010)), with thanks.
 
+**One-line summaries** (default on)
+
+- Thinking blocks and tool cards each take **a single line**: thinking is `+ 思考 · 7s`; a tool card is its
+  header row (`• Bash(ls -la)`) carrying the tool name, argument or path, status dot and elapsed clock.
+- Open/close: **click the row**, or press `Ctrl+O` to toggle detail for the whole transcript. A thinking
+  block's `+` becomes `-` while it is open.
+- Expanded, thinking shows its full text and a tool card its complete output (uncapped); a failed card
+  collapses to its `✗` header row plus the failure hint.
+
 **Long single-line fold** (default on)
 
 - Text with **a single line over 1000 chars** folds into
@@ -487,7 +496,7 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | splashFont | big-text face on the header splash: Daily rotation (default, changes with the local date) / bold / square / bevel / wide / dot matrix / stencil / thin (classic) / slab. Picking a face pins it; picking Daily rotation restores the rotation. Applies immediately |
 | whaleGirl | maid portrait (default off): swaps the header's pixel whale for the author-drawn maid as a **real raster** (Kitty/Sixel); falls back to the pixel whale without graphics support |
 | diffLayout | Edit/Write diff layout: auto (two columns ≥110 cols) / split / unified |
-| thinkingFold | thinking block: preview (2-3 line preview + folded when settled) / full (expanded to end of turn) |
+| thinkingFold | thinking block: preview (2-3 line live preview, folded to a single `+ 思考 · Ns` row when settled, the mark flipping to `-` while open) / full (expanded to end of turn) |
 | effortDefault | default reasoning effort: auto / off / low / high / max. Start level for new sessions (details below) |
 | smoothStreaming | smooth streaming output (default on): replies/thinking/tool-card text reveal at ~30fps; replay/history always direct |
 | toolBackground | tool-card background emphasis: none / subtle / strong |
