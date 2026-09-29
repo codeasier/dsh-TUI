@@ -97,9 +97,10 @@ export function AssistantThinkingMessage({
   // settled always keeps the plain dim mark.
   //
   // No expand hint on the settled label: it rode every single thinking step,
-  // so a long turn stacked a dozen `+ Thinking · 3s (ctrl+o to expand)` lines
-  // and spent half the width on the same words. The `+`/`-` disclosure and
-  // the `?` shortcut menu carry the affordance instead.
+  // so a long turn stacked a dozen identical `hint-expand-ctrl-o` tails —
+  // `+ Thinking · 12s` plus the same words again, once per step — and spent
+  // half the width repeating itself. The `+`/`-` disclosure and the `?`
+  // shortcut menu carry the affordance instead.
   const label = `${t('thinking-label')}${duration}${streaming ? '…' : ''}`
   const minimal = isMinimalMode()
   const pulse = (Math.sin(frame * 0.9) + 1) / 2
