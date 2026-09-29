@@ -5,6 +5,11 @@
  * terminal output, envelope-stripped read content — instead of the raw
  * tool-message dump. Exercises the pure component with fabricated ToolRows
  * (no channel needed: views are plain data on the row).
+ *
+ * A collapsed card is a ONE-LINE summary: header only, no `⎿` body. Bodies
+ * render in the expanded state (click the row / Ctrl+O), which is why the
+ * fixtures below default to `verbose` — scenario #7 covers the collapsed
+ * shape itself.
  */
 process.env.FORCE_COLOR = '3'
 // 固定英文 UI：本脚本的断言全部针对 en 文案（折叠/退出码/工具名），
@@ -70,7 +75,13 @@ const base = {
   durationMs: 12,
 }
 
-function card(key: string, tool: Record<string, unknown>, verbose = false, foldTerminalCommand = false): React.ReactElement {
+/**
+ * Fabricate one card. `verbose` defaults to true here on purpose: a collapsed
+ * card now paints its header line only (the `⎿` body is click / Ctrl+O
+ * detail), so every body-rendering scenario below is an EXPANDED one. The
+ * collapsed shape has its own scenario (#7) and passes `false` explicitly.
+ */
+function card(key: string, tool: Record<string, unknown>, verbose = true, foldTerminalCommand = false): React.ReactElement {
   return React.createElement(AssistantToolUseMessage, {
     key,
     tool: { ...base, ...tool },
@@ -101,8 +112,9 @@ const app = await render(card('edit', editTool), { stdout, debug: true, exitOnCt
  * Swap the rendered card; key forces a clean remount per scenario. Each
  * scenario's checks poll their own full condition via settled（等待与断言
  * 共用同一谓词），so no separate ready predicate is needed here.
+ * `verbose` follows {@link card}'s expanded-by-default convention.
  */
-function show(key: string, tool: Record<string, unknown>, verbose = false, foldTerminalCommand = false): void {
+function show(key: string, tool: Record<string, unknown>, verbose = true, foldTerminalCommand = false): void {
   app.rerender(card(key, tool, verbose, foldTerminalCommand))
 }
 
@@ -167,21 +179,18 @@ show('fallback', {
 check('无视图时回退 Name(args) 标题', await settled(() => screen().includes('Read({"file_path":"/tmp/a.ts"})')))
 check('无视图时结果仍缩进', await settled(() => { const r = rowOf('raw output here'); return r >= 0 && lines()[r]!.startsWith(' ⎿ raw output here') }))
 
-// 7. 折叠上限：文本正文超过 3 行折叠 + 提示；Ctrl+O 展开。
-show('cap', {
+// 7. 折叠上限：默认一张卡只占标题行，正文零行；Ctrl+O（verbose）展开全文。
+const seqTool = {
   name: 'bash',
   callView: { card: 'terminal', title: 'seq 6' },
   resultView: { card: 'terminal', output: '1\n2\n3\n4\n5\n6', exitCode: 0 },
   resultFull: '1\n2\n3\n4\n5\n6',
-})
-check('文本正文折叠为 3 行 + 提示', await settled(() => screen().includes('… +3 lines (ctrl+o to expand)') && rowOf('4') === -1))
-show('cap-open', {
-  name: 'bash',
-  callView: { card: 'terminal', title: 'seq 6' },
-  resultView: { card: 'terminal', output: '1\n2\n3\n4\n5\n6', exitCode: 0 },
-  resultFull: '1\n2\n3\n4\n5\n6',
-}, true)
-check('verbose 不折叠', await settled(() => rowOf('6') >= 0 && !screen().includes('ctrl+o to expand')))
+}
+await show('cap', seqTool, false)
+check('折叠态只有标题行', await settled(() => rowOf('Bash(seq 6)') >= 0 && !screen().includes('⎿')))
+check('折叠态不画正文行', await settled(() => rowOf('5') === -1 && !screen().includes('ctrl+o to expand')))
+await show('cap-open', seqTool, true)
+check('verbose 不折叠', await settled(() => rowOf('5') >= 0 && rowOf('6') >= 0 && !screen().includes('ctrl+o to expand')))
 
 // 8. 错误卡：errorText 红色缩进。
 show('error', {

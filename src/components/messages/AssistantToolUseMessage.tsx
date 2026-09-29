@@ -253,10 +253,16 @@ function viewLines(view: ToolCallView | ToolResultView): BodyLine[] {
   }
 }
 
-/** Collapsed bodies fold past the card's line budget; verbose (Ctrl+O) is
- *  always uncapped. Mirrors wrapText's "one extra line is shown directly". */
+/** Collapsed cards paint the header line ONLY — the body is click / Ctrl+O
+ *  detail. A zero budget is therefore an explicit empty body, not "cap at
+ *  zero rows": the two shortcuts below (`lines.length <= max`, and the
+ *  "one extra line is shown directly" rule that mirrors wrapText) would
+ *  otherwise leave one body row behind. Verbose (Ctrl+O / a clicked row) is
+ *  always uncapped. */
 function capLines(lines: BodyLine[], max: number, verbose: boolean): BodyLine[] {
-  if (verbose || lines.length <= max) return lines
+  if (verbose) return lines
+  if (max <= 0) return []
+  if (lines.length <= max) return lines
   if (lines.length - max === 1) return lines
   return [
     ...lines.slice(0, max),
@@ -620,7 +626,11 @@ export function AssistantToolUseMessage({
       body = [dim(t('tool-running-elapsed', { duration: formatDuration(Math.max(0, Date.now() - (tool.startedAt ?? Date.now()))) }))]
     }
   }
-  const cap = view?.card === 'diff' ? DIFF_BODY_MAX_LINES : TEXT_BODY_MAX_LINES
+  // Collapsed cards are one-line summaries — the tool name, its argument or
+  // path, the status dot and the elapsed clock all ride the header row, and
+  // the `⎿` body is detail behind a click / Ctrl+O. Zero budget means exactly
+  // that (see capLines).
+  const cap = verbose ? (view?.card === 'diff' ? DIFF_BODY_MAX_LINES : TEXT_BODY_MAX_LINES) : 0
   // Long-line clip before anything downstream reads the body: the syntax
   // highlighter walks `bodySource` by line index, so the folded text must be
   // the single source of truth for both.
@@ -699,7 +709,10 @@ export function AssistantToolUseMessage({
             </Box>
           )}
         </Box>
-        {useSplitDiff && view?.card === 'diff' ? (
+        {/* Collapsed cards take the `shownLines` path instead: SplitDiffView
+            has its own "totalRows - maxRows === 1 is shown directly" rule and
+            would leave one diff row behind at a zero budget. */}
+        {useSplitDiff && view?.card === 'diff' && verbose ? (
           <Box flexDirection="row">
             <Box width={3} flexShrink={0}>
               <Text dimColor>{GUTTER_FIRST}</Text>

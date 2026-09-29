@@ -401,6 +401,13 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 - 像素鲸鱼原图与闲置行为移植自 [dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale)（作者
   [@lhh010](https://github.com/lhh010)），特此致谢。
 
+**一行摘要**（默认开）
+
+- 思考块与工具卡默认都只占**一行**：思考是 `+ 思考 · 7s`，工具卡是 `• Bash(ls -la)` 这样的标题行
+  （工具名、参数或路径、状态点、耗时都在标题行上）。
+- 展开/收起：**点这一行**，或键盘 `Ctrl+O` 切换整段转录的详情。思考块的 `+` 展开后变成 `-`。
+- 展开后思考显示全文、工具卡显示完整输出（不截断）；失败的卡折叠时只剩 `✗` 标题行加失败提示。
+
 **超长单行折叠**（默认开）
 
 - **单行超过 1000 字符**的文本折叠为 `… 已折叠 N 字符（点击或 ctrl+o 展开）` 标记。
@@ -447,7 +454,7 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 | whale | 开屏头部像素鲸鱼娘（默认开）；每次启动随机三选一开场动画（经典/爱心/睡觉），`/deepseek` 彩蛋重掷 |
 | whaleIdle | 鲸鱼娘欢迎期闲置动画（默认开）：定格后摆鱼鳍/拍尾巴/眨眼，空闲 10 秒入睡冒 Z；点击冒爱心。开始第一个任务后定格 |
 | diffLayout | Edit/Write diff 布局：auto（≥110 列双栏）/ split / unified |
-| thinkingFold | 思考块：preview（流式 2-3 行预览 + 落定折叠）/ full（展开到轮末） |
+| thinkingFold | 思考块：preview（流式 2-3 行预览，落定后收成一行 `+ 思考 · Ns`，展开时前置标记变 `-`）/ full（展开到轮末） |
 | effortDefault | 默认推理强度：auto / off / low / high / max。新会话的起始档位（细节见下） |
 | smoothStreaming | 流式平滑输出（默认开）：回复/思考/工具卡正文按 ~30fps 匀速揭示；回放/历史完整直出 |
 | toolBackground | 工具卡背景强调：none / subtle / strong |

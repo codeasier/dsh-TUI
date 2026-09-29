@@ -21,7 +21,7 @@ const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }
     import('../src/components/activityFrames.js'),
     import('../src/dsh-adapter/activity-store.js'),
   ])
-const { THINKING_SPINNER_FRAMES, THINKING_SETTLED_MARKER } = figures
+const { THINKING_EXPANDED_MARKER, THINKING_SPINNER_FRAMES, THINKING_SETTLED_MARKER } = figures
 const { stringWidth } = width
 
 class FakeStdout extends Writable {
@@ -172,7 +172,7 @@ function check(name: string, ok: boolean, detail = '') {
 
 // 1. Every block separated by a blank line: the four marker lines must be
 //    pairwise separated by >= 1 empty line in the rendered transcript.
-const markers = ['hello, list the files', '⚓ Thinking', 'Bash', 'here are the files.']
+const markers = ['hello, list the files', '+ Thinking', 'Bash', 'here are the files.']
 const markerLines = markers.map(m => contentLines.findIndex(l => l.includes(m)))
 for (let i = 1; i < markerLines.length; i++) {
   const gap = markerLines[i]! - markerLines[i - 1]!
@@ -198,14 +198,15 @@ check(
 check('thinking dim', cursorMoved.includes('\x1b[38;2;141;149;166m'), 'inactive-grey SGR present')
 check('thinking italic', cursorMoved.includes('\x1b[3m'), 'italic SGR present')
 
-// 3b. All thinking markers must share ONE width: the braille spinner frames
-//     are padded to 2 columns to match the settled ⚓ anchor (U+2693 is
-//     Emoji_Presentation) — a narrower frame shifts the label right by one
-//     column the moment the step settles.
+// 3b. All thinking markers must share ONE width: the braille spinner frames,
+//     the settled `+` and the expanded `-` all occupy one column — a narrower
+//     frame would shift the label the moment the step settles.
 check(
   'thinking markers same width',
-  THINKING_SPINNER_FRAMES.every(m => stringWidth(m) === stringWidth(THINKING_SETTLED_MARKER)),
-  `settled ${JSON.stringify(THINKING_SETTLED_MARKER)}=${stringWidth(THINKING_SETTLED_MARKER)}; frames ` +
+  THINKING_SPINNER_FRAMES.every(m => stringWidth(m) === stringWidth(THINKING_SETTLED_MARKER)) &&
+    stringWidth(THINKING_EXPANDED_MARKER) === stringWidth(THINKING_SETTLED_MARKER),
+  `settled ${JSON.stringify(THINKING_SETTLED_MARKER)}=${stringWidth(THINKING_SETTLED_MARKER)}; ` +
+    `expanded ${JSON.stringify(THINKING_EXPANDED_MARKER)}=${stringWidth(THINKING_EXPANDED_MARKER)}; frames ` +
     THINKING_SPINNER_FRAMES.map(m => `${JSON.stringify(m)}=${stringWidth(m)}`).join(' '),
 )
 
@@ -219,11 +220,12 @@ check(
   'Bash(...) · 8s',
 )
 
-// 6. Thinking duration on the folded label (zh locale: 思考).
+// 6. Thinking duration on the folded label (zh locale: 思考). The settled row
+//    is a single line — no `(ctrl+o to expand)` tail rides it.
 check(
   'thinking duration on folded label',
-  contentLines.some(l => l.includes('⚓ 思考') && l.includes('12s')),
-  '⚓ 思考 · 12s (ctrl+o expand)',
+  contentLines.some(l => l.includes('+ 思考') && l.includes('12s')),
+  '+ 思考 · 12s',
 )
 
 // 7. Terminal tab title carries the ✦ prefix + DeepSeek whale (win32 path
