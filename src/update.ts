@@ -49,6 +49,33 @@ const RESTART_LOG = join(DATA_DIR, 'restart.log')
 /** Cap so a long debugging streak cannot grow the log unbounded. */
 const RESTART_LOG_MAX_BYTES = 256 * 1024
 
+/**
+ * Stop this process from reading the console it just handed to a child,
+ * without closing the tty.
+ *
+ * `stdin.destroy()` is not safe here. libuv restores the termios captured
+ * at this process's first `setRawMode(true)` — cooked, echoing — onto the
+ * shared terminal. The replacement has already entered raw mode and its
+ * `isRaw` flag stays true, so it does not re-apply. Mouse reports and
+ * DECRPM/DA1 replies then echo at the cursor as `^[...` garbage. Pause,
+ * drop readers, and refuse a later `resume()` instead of closing the fd.
+ */
+export function sealInheritedStdin(stdin: NodeJS.ReadStream = process.stdin): void {
+  try {
+    stdin.removeAllListeners('readable')
+    stdin.removeAllListeners('data')
+    stdin.pause()
+    stdin.read = (() => null) as typeof stdin.read
+    const pause = stdin.pause.bind(stdin)
+    stdin.resume = (() => {
+      pause()
+      return stdin
+    }) as typeof stdin.resume
+  } catch {
+    // Best effort. Never throw out of the handoff.
+  }
+}
+
 function writeRestartLine(line: string): void {
   try {
     mkdirSync(DATA_DIR, { recursive: true })
@@ -1866,10 +1893,12 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     // 1. SAMPLE this process's stdin state every second — if anything
     //    re-attaches a reader after the funnel's detachStdinForHandoff, the
     //    sample (taken before the re-assert below) shows it in the log.
-    // 2. RE-ASSERT the detach and finally destroy the stream: this process
-    //    must never read the shared console again — every keypress belongs
-    //    to the replacement, and a resumed pump here is exactly the
-    //    "restarted TUI sees dropped or swallowed input" failure (#284/#307).
+    // 2. RE-ASSERT the detach for the whole survival window, then seal the
+    //    stream so a later resume cannot read. Do NOT destroy stdin: closing
+    //    the tty handle restores this process's original cooked termios on
+    //    the shared terminal and the replacement's raw mode is silently
+    //    undone (mouse / DECRPM bytes echo into the prompt as `^[...`).
+    sealInheritedStdin()
     let watchdogTicks = 0
     const watchdog = setInterval(() => {
       watchdogTicks += 1
@@ -1882,24 +1911,12 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
         raw: stdin.isRaw === true,
         buffered: stdin.readableLength,
       })
-      try {
-        stdin.removeAllListeners('readable')
-        stdin.removeAllListeners('data')
-        stdin.pause()
-      } catch {
-        // Diagnosis/mitigation only.
-      }
+      // seal clears listeners; a late re-attach during the window is stripped
+      // again. The read/resume overrides from the first seal stay in place.
+      sealInheritedStdin()
       if (watchdogTicks === 15) {
         clearInterval(watchdog)
-        try {
-          // Terminal safeguard: a destroyed stream can never be resumed by
-          // any late re-attachment. The child holds its own inherited
-          // handle, so closing ours does not affect it.
-          process.stdin.destroy()
-          logRestartEvent('parent: stdin destroyed after watchdog')
-        } catch {
-          // Best effort.
-        }
+        logRestartEvent('parent: stdin sealed after watchdog')
       }
     }, 1000)
     watchdog.unref()

@@ -38,6 +38,7 @@ import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../s
 import { readHomePrefs } from '../homePrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
+import { pokeRawMode } from '../utils/ttyMode.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
 import { DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, applyPageMargin, isPageMarginMode, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, resolveMathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
@@ -213,6 +214,20 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     sampleAt(2000, 'stdin state +2s')
     sampleAt(5000, 'stdin state +5s')
     sampleAt(12000, 'stdin state +12s')
+    // The exiting parent used to stdin.destroy() ~15s after spawn. libuv
+    // then restored cooked echo on this shared tty while isRaw stayed true,
+    // so mouse reports and DECRPM/DA1 replies were painted into the prompt
+    // as `^[...`. A setRawMode(true) while the handle already believes it is
+    // raw is a libuv no-op; repair toggles only after tcgetattr says cooked.
+    // The window covers a slow boot (destroy is spawn+15s, apply may be late).
+    const repairTimer = setInterval(() => {
+      pokeRawMode(probedStdin, () => {
+        logRestartEvent('boot: reasserted raw mode after shared tty reset')
+      })
+    }, 500)
+    repairTimer.unref?.()
+    const stopRepair = setTimeout(() => clearInterval(repairTimer), 22000)
+    stopRepair.unref?.()
   }
   const hostMode = resolveTuiHostMode()
   if (hostMode === 'invalid-explicit-launch') {
