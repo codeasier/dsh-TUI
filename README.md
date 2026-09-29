@@ -198,7 +198,7 @@ Full reference: [Interaction and commands](docs/interaction.en.md).
 
 `/resume` · `/home` · `/agentview` · `/bg` · `⌸` open the same session manager: workspace rail, live state, filter, ★ pins. Also `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`.
 
-In `/model` completion, type either a provider/model prefix (`volceapi/glm`) or just a model ID prefix (`glm`); selecting a result inserts the full provider/model route.
+In `/model` completion, type a provider/model prefix (`volceapi/glm`), a model ID prefix (`glm`), or a fuzzy subsequence (`dsv4.1` → `volceapi/deepseek-v4.1-flash`); prefix hits rank above fuzzy hits, and selecting a result inserts the full provider/model route.
 
 The session manager paints the last successful list immediately while it checks the persistence store for changes. Titles that require a deeper log scan appear first with a fallback name and update in place when recovery finishes.
 

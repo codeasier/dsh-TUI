@@ -16,7 +16,9 @@
  *   4. the next `/model ` keystroke refetches the fresh catalog — the
  *      deleted provider is gone, the survivor is listed;
  *   5. model-ID prefixes match without a provider prefix and insert the
- *      canonical provider/model route (including on collisions).
+ *      canonical provider/model route (including on collisions);
+ *   6. fuzzy subsequence queries match (`dsv4.1` → `volceapi/deepseek-v4.1-flash`)
+ *      and prefix hits rank above fuzzy hits, in catalog order within a tier.
  *
  * Run with plain node against the compiled lib (after `pnpm build`):
  * `node scripts/verify-model-completion-invalidate.mjs`
@@ -49,7 +51,7 @@ const llmStub = {
   listModels(provider) {
     if (provider === 'deepseek') return Promise.resolve([{ provider, id: 'ds-1', name: 'DeepSeek 1' }])
     if (provider === 'my-gateway') return Promise.resolve([{ provider, id: 'gw-1', name: 'Gateway 1' }])
-    if (provider === 'volceapi') return Promise.resolve([{ provider, id: 'glm-5.3', name: 'GLM 5.3' }, { provider, id: 'ds-2', name: 'DeepSeek 2' }])
+    if (provider === 'volceapi') return Promise.resolve([{ provider, id: 'glm-5.3', name: 'GLM 5.3' }, { provider, id: 'ds-2', name: 'DeepSeek 2' }, { provider, id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }])
     return Promise.resolve([])
   },
 }
@@ -90,20 +92,29 @@ const has = (names, spec) => names.some(name => name.endsWith(` ${spec}`))
 // 1. Warm the session-lifetime cache across every registered provider.
 check('completion warms all providers', await settled(() => {
   const names = completionNames('/model ')
-  return names.length === 4 && has(names, 'my-gateway/gw-1') && has(names, 'deepseek/ds-1') && has(names, 'volceapi/glm-5.3')
+  return names.length === 5 && has(names, 'my-gateway/gw-1') && has(names, 'deepseek/ds-1') && has(names, 'volceapi/glm-5.3') && has(names, 'volceapi/deepseek-v4.1-flash')
 }, { timeoutMs: 4000 }), JSON.stringify(completionNames('/model ')))
 
 const completions = input => channel.commandCompletions(input)
 check('model ID prefix finds full route without provider',
   completions('/model GLM-5').length === 1
   && completions('/model GLM-5')[0].replacement === '/model volceapi/glm-5.3 ')
-check('shared model ID prefix keeps both provider routes',
+check('prefix hits rank above fuzzy hits in catalog order',
   JSON.stringify(completions('/model ds-').map(node => node.replacement))
-    === JSON.stringify(['/model deepseek/ds-1 ', '/model volceapi/ds-2 ']))
+    === JSON.stringify(['/model deepseek/ds-1 ', '/model volceapi/ds-2 ', '/model volceapi/deepseek-v4.1-flash ']))
+check('fuzzy subsequence matches across provider and model segments',
+  JSON.stringify(completions('/model dsv4.1').map(node => node.replacement))
+    === JSON.stringify(['/model volceapi/deepseek-v4.1-flash ']))
+check('fuzzy subsequence matches provider initials',
+  JSON.stringify(completions('/model vd4').map(node => node.replacement))
+    === JSON.stringify(['/model volceapi/deepseek-v4.1-flash ']))
+check('fuzzy subsequence matches non-contiguous suffix text',
+  JSON.stringify(completions('/model 5.3').map(node => node.replacement))
+    === JSON.stringify(['/model volceapi/glm-5.3 ']))
 check('full provider prefix still works',
   completionNames('/model volceapi/glm-').join(',') === 'model volceapi/glm-5.3')
-check('non-prefix model ID text does not match',
-  completions('/model 5.3').length === 0)
+check('text absent from every route does not match',
+  completions('/model zz9').length === 0)
 check('model ID matching stays scoped to /model',
   completeCommands('/preset ds-', [{ name: 'preset', description: '' }], () => [
     { name: 'volceapi/ds-2', description: '' },
@@ -126,7 +137,7 @@ check('invalidateModelCompletion drops the cache synchronously',
 //    provider is gone, the survivor is listed.
 check('completion refetches without the deleted provider', await settled(() => {
   const names = completionNames('/model ')
-  return names.length === 3 && has(names, 'deepseek/ds-1') && has(names, 'volceapi/glm-5.3') && !has(names, 'my-gateway/gw-1')
+  return names.length === 4 && has(names, 'deepseek/ds-1') && has(names, 'volceapi/deepseek-v4.1-flash') && !has(names, 'my-gateway/gw-1')
 }, { timeoutMs: 4000 }), JSON.stringify(completionNames('/model ')))
 
 if (failed === 0) {
