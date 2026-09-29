@@ -279,6 +279,10 @@ const GROUPS = {
 // 走编译产物——验证陈旧安装清理后重跑成功、瞬时重试升级、真实失败不
 // 触发任何恢复且不破坏 profile，重启尾部向替代进程传递 env 契约。
     ["verify-update-recovery", ['node', 'scripts/verify-update-recovery.mjs']],
+    // /restart 交接不得 stdin.destroy()：libuv 会把父进程保存的 cooked
+    // termios 写回共享终端，替代进程的 raw 模式被静默打掉，鼠标报告和
+    // DECRPM/DA1 回执以 `^[...` 回显进输入框。
+    ["verify-restart-tty-handoff", ['node', 'scripts/verify-restart-tty-handoff.mjs']],
 // /reload 与 /restart 纯函数回归：planReload 五类偏好的应用/跳过/
 // 无变化分支、env 与 cordis.yml 显式配置的优先级守卫、模型路由原子
 // 规则（provider-only pin 不挡偏好）、两命令的注册与解析。
