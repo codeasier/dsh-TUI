@@ -631,7 +631,7 @@ Additional forms:
   `triangle`, `box`, `box2`, `corners`, `point`, `layer`, `flip`, `aesthetic`,
   `hamburger`, `moon`, `moon8`, `whale-spout`, `whale-spin`, `whale-bubbles`, `clock`,
   `traffic_lights`, `comet`, `breathe`, `dots`, `arrow`, `spark`, `bar`, `braille`, `arc`,
-  `circle`, `grow`, `noise`, `bounce`, `rainbow`, `bar2`, `dqpb`, `toggle`; default `moon8`.
+  `circle`, `grow`, `noise`, `bounce`, `rainbow`, `bar2`, `dqpb`, `toggle`; default `moon`.
 - A legacy local `claude` setting is read as `moon8`, and the picker does not show that legacy preset.
 - `/activity status` reports the current choice.
 - `/preset <id>` and `/preset status` are described in the configuration guide.

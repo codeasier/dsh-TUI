@@ -24,10 +24,10 @@ function tokens(row: SubagentRow): string {
 }
 function status(row: SubagentRow): { glyph: string; label: string; color: keyof Theme | undefined } {
   const minimal = isMinimalMode()
-  if (row.status === 'completed') return { glyph: minimal ? '✓' : '🟢', label: t('subagent-status-completed'), color: minimal ? undefined : 'success' }
-  if (row.status === 'failed') return { glyph: minimal ? '×' : '🔴', label: t('subagent-status-failed'), color: minimal ? undefined : 'error' }
-  if (row.status === 'cancelled') return { glyph: minimal ? '×' : '🔴', label: t('subagent-status-cancelled'), color: minimal ? undefined : 'error' }
-  return { glyph: minimal ? '·' : '🟡', label: t('subagent-status-running'), color: minimal ? undefined : 'warning' }
+  if (row.status === 'completed') return { glyph: '✓', label: t('subagent-status-completed'), color: minimal ? undefined : 'success' }
+  if (row.status === 'failed') return { glyph: '×', label: t('subagent-status-failed'), color: minimal ? undefined : 'error' }
+  if (row.status === 'cancelled') return { glyph: '×', label: t('subagent-status-cancelled'), color: minimal ? undefined : 'error' }
+  return { glyph: minimal ? '·' : '◐', label: t('subagent-status-running'), color: minimal ? undefined : 'warning' }
 }
 /** Hard single-line clip by display width — a wrapped waterfall row would
  * break the constant-height window. */
@@ -96,7 +96,7 @@ export function SubagentMessage({ subagent, marginTopOnTurn, activityFrames, onC
     onMouseLeave={clickable ? () => setHovered(false) : undefined}
   >
     <Box flexDirection="row" gap={1}>
-      <Text color={hovered && clickable ? 'accent' : info.color}>{settled ? info.glyph : ` ${runningGlyph}`}</Text>
+      <Text color={hovered && clickable ? 'accent' : info.color}>{settled ? (isMinimalMode() ? info.glyph : ` ${info.glyph}`) : ` ${runningGlyph}`}</Text>
       <Text bold color={hovered && clickable ? 'accent' : undefined}>{`${t('subagent-card-prefix')}${subagent.description}`}</Text>
       <Text dimColor>·</Text><Text>{subagent.model ?? subagent.provider ?? 'default'}</Text>
       {subagent.effort && <><Text dimColor>·</Text><Text dimColor>{subagent.effort}</Text></>}

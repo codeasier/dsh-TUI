@@ -30,10 +30,10 @@ export function SubagentCard({ subagent, focused, onClick }: SubagentCardProps):
   // feedback: hover must never change layout). The hover tint stays.
   const liveLine = running ? subagent.output[subagent.output.length - 1] : undefined
   const minimal = isMinimalMode()
-  const glyph = running ? (minimal ? '·' : '🟡')
-    : subagent.status === 'unknown' ? (minimal ? '·' : '⚪')
-    : subagent.status === 'failed' || subagent.status === 'cancelled' ? (minimal ? '×' : '🔴')
-    : (minimal ? '✓' : '🟢')
+  const glyph = running ? (minimal ? '·' : '◐')
+    : subagent.status === 'unknown' ? (minimal ? '·' : '○')
+    : subagent.status === 'failed' || subagent.status === 'cancelled' ? '×'
+    : '✓'
   const glyphColor = minimal ? undefined
     : running ? 'warning' as const
     : subagent.status === 'unknown' ? 'subtle' as const

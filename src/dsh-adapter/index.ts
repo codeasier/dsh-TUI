@@ -76,7 +76,7 @@ export interface Config {
   /** Working-activity indicator preset (`moon8`/`moon`/`comet`/`dots`/…
    *  or `random`; see activityFrames.ts). When absent, the `/activity`
    *  choice persisted in `~/.dsh-tui/working-activity.json` wins, then the
-   *  `moon8` default. */
+   *  `moon` default. */
   activityFrames?: string
   /** Show the segmented context bar (the band under the input with the
    *  `ctx used/window` readout) in the status footer; off hides that row
