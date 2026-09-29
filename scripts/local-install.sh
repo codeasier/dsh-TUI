@@ -60,12 +60,19 @@ case "$branch" in
 esac
 
 echo "==> 1/3 编译 src/ → lib/"
-(cd "$REPO" && corepack pnpm compile)
+# verify-deps-before-run=false：pnpm 的运行前依赖检查按 **lockfile 的 mtime+size**
+# 判断是否需要重装，而 git 切换分支必定重写 pnpm-lock.yaml —— 于是每次切完分支
+# 首次跑本脚本，都会撞上它触发的 `pnpm install`，并在无 TTY 时以
+# ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY 中止（内容其实一模一样）。脚本只负责
+# 构建当前工作树，不管依赖管理；真缺依赖时 tsc 会报得比这清楚。依赖确实变了的话，
+# 自己先跑 `CI=true pnpm install --frozen-lockfile`。
+(cd "$REPO" && corepack pnpm --config.verify-deps-before-run=false compile)
 
 echo
 echo "==> 2/3 打 tarball（发布形状 manifest）"
 mkdir -p "$PACK_DIR"
-rm -f "$PACK_DIR"/*.tgz
+# 不在这里清旧 tgz：profile 的 package.json 正用 file: 指着上一次的产物，
+# 先删再 pack 的话，pack 一失败就把可引导的产物删没了。清理挪到装完之后。
 (cd "$REPO" && node scripts/with-publish-manifest.mjs \
   npm pack --ignore-scripts --pack-destination "$PACK_DIR" >/dev/null)
 TARBALL="$(ls -t "$PACK_DIR"/*.tgz | head -1)"
@@ -74,6 +81,12 @@ echo "    $TARBALL"
 echo
 echo "==> 3/3 装进 profile"
 dsh plugin --profile "$PROFILE" add "file:$TARBALL"
+
+# 装成功了才清旧包：此刻 profile 的 package.json 已指向 $TARBALL，其余都是死重量。
+for old in "$PACK_DIR"/*.tgz; do
+  [ "$old" = "$TARBALL" ] && continue
+  rm -f "$old"
+done
 
 echo
 echo "完成。在 TUI 里 /restart 生效（或重开 dst）。"
