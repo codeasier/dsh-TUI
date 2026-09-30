@@ -12,6 +12,7 @@ import {
 } from '../../terminal-utils/figures.js'
 import { BRAND, ICE } from '../shimmer.js'
 import { interpolateColor } from '../Spinner/spinnerUtils.js'
+import { MachineRail } from './MachineRail.js'
 import { isMinimalUiMode } from '../../minimalUiMode.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
 
@@ -144,12 +145,11 @@ export function AssistantThinkingMessage({
       (_, i) => visible[i] ?? ' ',
     )
     return (
-      <Box
-        flexDirection="column"
+      <RailedRow
         marginTop={marginTopOnTurn ? 1 : 0}
-        backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
+        isSelected={isSelected}
         onClick={onClick}
-        {...hoverProps}
+        hoverProps={hoverProps}
       >
         {header}
         <Box
@@ -177,32 +177,30 @@ export function AssistantThinkingMessage({
             </Box>
           ))}
         </Box>
-      </Box>
+      </RailedRow>
     )
   }
 
   if (!verbose) {
     return (
-      <Box
+      <RailedRow
         marginTop={marginTopOnTurn ? 1 : 0}
-        backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
+        isSelected={isSelected}
         onClick={onClick}
-        {...hoverProps}
+        hoverProps={hoverProps}
       >
         {header}
-      </Box>
+      </RailedRow>
     )
   }
 
   return (
-    <Box
-      flexDirection="column"
-      gap={1}
+    <RailedRow
       marginTop={marginTopOnTurn ? 1 : 0}
-      width="100%"
-      backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
+      isSelected={isSelected}
       onClick={onClick}
-      {...hoverProps}
+      hoverProps={hoverProps}
+      gap={1}
     >
       {header}
       <Box paddingLeft={2}>
@@ -210,6 +208,48 @@ export function AssistantThinkingMessage({
           incremental stable-prefix + tail budget keeps the per-frame layout
           cost at O(new content) instead of re-laying out the whole block. */}
         <StreamingMarkdown dimColor>{thinking}</StreamingMarkdown>
+      </Box>
+    </RailedRow>
+  )
+}
+
+/**
+ * Reasoning-row shell: the machine rail plus a content column that absorbs
+ * whatever width the rail leaves. One place for the margin / selection fill /
+ * click and hover wiring the three view modes share, so the rail can never
+ * drift out of alignment with the header it prefixes.
+ *
+ * `flexGrow` rather than `width="100%"` on the column: the rail is a sibling
+ * inside the same row, and a percentage width would resolve against the row's
+ * full width and overflow by exactly the rail's two columns.
+ */
+function RailedRow({
+  marginTop,
+  isSelected,
+  onClick,
+  hoverProps,
+  gap = 0,
+  children,
+}: {
+  marginTop: number
+  isSelected: boolean
+  onClick?: ((event: ClickEvent) => void) | undefined
+  hoverProps: { onMouseEnter?: () => void; onMouseLeave?: () => void }
+  /** Blank rows between the header and the body (verbose view). */
+  gap?: number
+  children: React.ReactNode
+}): React.ReactNode {
+  return (
+    <Box
+      flexDirection="row"
+      marginTop={marginTop}
+      backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
+      onClick={onClick}
+      {...hoverProps}
+    >
+      <MachineRail />
+      <Box flexDirection="column" flexGrow={1} flexShrink={1} gap={gap}>
+        {children}
       </Box>
     </Box>
   )

@@ -1,0 +1,244 @@
+#!/usr/bin/env node
+/**
+ * Transcript block hierarchy regression (compiled lib).
+ *
+ * The transcript stacks four visual layers, and they must stay distinguishable
+ * at a glance — the wall-of-grey failure mode is: prose, tool cards, thinking
+ * and prompts all wearing the same leading dot at the same indentation, with a
+ * blank line between everything (user report, 2026-09-30).
+ *
+ * Contract under test:
+ *   1. USER TURN — a full-width band (`userPromptBackground`) whose left edge
+ *      is `▌ ❯` at the page-margin column, the turn anchor for scrolling back.
+ *   2. ASSISTANT PROSE — col 0 (page margin only), NO prefix marker.
+ *   3. MACHINE ACTIVITY (tool cards, thinking, subagent/job cards) — col 2,
+ *      prefixed by the dim `│ ` rail, body gutter shifted by the same two
+ *      columns.
+ *   4. Vertical rhythm — consecutive machine rows are TIGHT (one step's tool
+ *      calls read as one cluster); every other pair keeps its blank line.
+ *
+ * Run after build: `node scripts/verify-transcript-blocks.mjs`
+ */
+process.env.FORCE_COLOR = '3'
+process.env.DSH_TUI_THEME = 'dark'
+process.env.DSH_TUI_LANG = 'zh'
+delete process.env.TERM_PROGRAM
+delete process.env.TMUX
+
+// Dynamic imports on purpose: FORCE_COLOR must be set before chalk evaluates
+// (static imports are hoisted above the assignments above), or every cell
+// reports the default colour and the band check silently passes on nothing.
+const [{ Writable, PassThrough }, React, xtermHeadless, { render, ThemeProvider, AlternateScreen }, { PageMargin }, { Chat }, { settled }] = await Promise.all([
+  import('node:stream'),
+  import('react'),
+  import('@xterm/headless'),
+  import('../lib/types/ui.js'),
+  import('../lib/types/components/PageMargin.js'),
+  import('../lib/types/screens/Chat.js'),
+  import('./lib/term-test.mjs'),
+])
+
+const { Terminal: XTerm } = xtermHeadless.default ?? xtermHeadless
+
+const COLS = 100
+const ROWS = 40
+/** PageMargin's left inset — every transcript row starts here at the latest. */
+const MARGIN = 2
+const RAIL = '│ '
+
+let failed = 0
+function check(name, ok, extra = '') {
+  console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${ok || extra === '' ? '' : `  (${extra})`}`)
+  if (!ok) failed += 1
+}
+
+const HANDOFF = '/tmp/handoff.md'
+const row = (id, kind, extra) => ({ id, kind, text: '', seq: id, fresh: false, ...extra })
+const toolRow = (id, name, title, status = 'ok') => row(id, 'tool', {
+  tool: {
+    callId: `call-${id}`,
+    name,
+    argsText: '{}',
+    status,
+    startedAt: Date.now() - 1_000,
+    durationMs: 12,
+    callView: { card: 'generic', title },
+  },
+})
+
+const rows = [
+  row(0, 'user', { text: '清幽灵行' }),
+  toolRow(1, 'edit', `Edit ${HANDOFF}`),
+  toolRow(2, 'read', `Read ${HANDOFF} (63 - 82)`),
+  row(3, 'assistant', { text: '编号从 3 跳到 5。补上 4。' }),
+  row(4, 'reasoning', { text: '先核对编号，再看 remaining work。', durationMs: 4_200 }),
+  toolRow(5, 'bash', 'Bash(ls -la)'),
+  row(6, 'user', { text: '记录下来' }),
+  row(7, 'assistant', { text: '记忆已写入。', streaming: false }),
+]
+
+function makeChannel() {
+  const listeners = new Set()
+  const channel = {
+    version: 0,
+    rows,
+    status: 'idle',
+    sessionTitle: 'blocks',
+    agentId: 'blocks',
+    model: 'deepseek-v4-flash',
+    provider: 'deepseek',
+    tokens: { input: 0, output: 0 },
+    cwd: '/tmp',
+    displayCwd: '/tmp',
+    gitBranch: 'main',
+    working: false,
+    spinnerMode: 'requesting',
+    responseChars: 0,
+    activeToolCount: 0,
+    turnStart: 0,
+    lastUserText: '',
+    pending: [],
+    notifications: [],
+    contextWindow: 500_000,
+    reasoningEffort: 'medium',
+    activityEnabled: false,
+    contextBarEnabled: false,
+    statusBar: {},
+    agentPreset: 'standard',
+    goal: undefined,
+    todos: [],
+    mode: { id: 'default', plan: false, sandbox: 'workspace-write', approval: 'ask' },
+    modeIndex: 0,
+    cycleMode() {},
+    commandList: [],
+    commandCompletions: () => [],
+    contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },
+    notify() {},
+    pushLocal() {},
+    subscribe(l) { listeners.add(l); return () => listeners.delete(l) },
+    emit() { channel.version += 1; for (const l of listeners) l() },
+    submit() {},
+    steer() {},
+    removePending: () => true,
+    cancel() {},
+    interruptAndDeliver: () => 0,
+    clear() {},
+    loadOlder: () => 0,
+    listModels: async () => [],
+    listFiles: async () => [],
+    listSessions: async () => [],
+    setResumeTarget() {},
+    setActivityFrames: () => true,
+    activityFrames: 'claude',
+    runExternalCommand: async () => '',
+    mcpStatus: () => [],
+    exportSession: () => null,
+    initWorkspace: () => null,
+    doctorInfo: () => [],
+    listSubagents: async () => [],
+    listPresets: async () => [],
+    switchPreset: async () => false,
+    switchModel: async () => false,
+    rewindTo: async () => null,
+    resumeTo: async () => ({ ok: false, reason: 'unavailable' }),
+    newSession: async () => false,
+    compact() {},
+  }
+  return channel
+}
+
+const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+const stdout = new Writable({ write(chunk, _enc, cb) { term.write(String(chunk), cb) } })
+stdout.columns = COLS
+stdout.rows = ROWS
+stdout.isTTY = true
+const stderr = new Writable({ write(_c, _e, cb) { cb() } })
+stderr.isTTY = true
+const stdin = new PassThrough()
+stdin.isTTY = true
+stdin.setRawMode = () => stdin
+stdin.setEncoding = () => stdin
+stdin.ref = () => stdin
+stdin.unref = () => stdin
+
+const chat = React.createElement(Chat, {
+  channel: makeChannel(),
+  questionStore: { subscribe: () => () => {}, getSnapshot: () => null, answerCurrent() {}, arm() {}, disarm() {} },
+  fullscreen: true,
+  onExit() {},
+})
+const tree = React.createElement(ThemeProvider, {
+  children: React.createElement(AlternateScreen, null, React.createElement(PageMargin, null, chat)),
+})
+const instance = await render(tree, { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false })
+
+/** Viewport text, trailing blanks stripped (trailing-only differences are chrome). */
+const lines = () => Array.from(
+  { length: ROWS },
+  (_, y) => term.buffer.active.getLine(term.buffer.active.baseY + y)?.translateToString(true) ?? '',
+)
+/** First viewport row whose text contains `needle`, or -1. */
+const rowOf = needle => lines().findIndex(line => line.includes(needle))
+/** Cells on `y` whose background is not the terminal default. */
+function bandCells(y) {
+  const line = term.buffer.active.getLine(term.buffer.active.baseY + y)
+  let filled = 0
+  for (let x = 0; x < COLS; x += 1) {
+    const cell = line?.getCell(x)
+    if (cell !== undefined && cell.getChars() !== '' && !cell.isBgDefault()) filled += 1
+  }
+  return filled
+}
+
+// ── 1. the user turn: band + `▌ ❯` at the page margin ─────────────────────
+check('user turn paints', await settled(() => rowOf('清幽灵行') >= 0))
+const promptIdx = rowOf('清幽灵行')
+const promptLine = lines()[promptIdx] ?? ''
+check('user turn leads with the `▌ ❯` bar at the page margin',
+  promptLine.startsWith(`${' '.repeat(MARGIN)}▌ ${'❯'} `), JSON.stringify(promptLine.slice(0, 12)))
+check('user turn band fills the content width', bandCells(promptIdx) > COLS - MARGIN - 8,
+  `cells=${bandCells(promptIdx)}`)
+
+// ── 2. assistant prose: col 0, no marker ─────────────────────────────────
+const proseIdx = rowOf('编号从 3 跳到 5。补上 4。')
+check('prose renders', proseIdx >= 0)
+const proseLine = lines()[proseIdx] ?? ''
+check('prose is flush left with no prefix marker',
+  proseLine.startsWith(`${' '.repeat(MARGIN)}编号从 3 跳到 5。补上 4。`),
+  JSON.stringify(proseLine.slice(0, 16)))
+check('prose carries no transcript band', bandCells(proseIdx) === 0, `cells=${bandCells(proseIdx)}`)
+
+// ── 3. machine activity: the rail, indented two columns ──────────────────
+const editIdx = rowOf('Edit /tmp/handoff.md')
+const thinkIdx = rowOf('思考 · 4s')
+const bashIdx = rowOf('Bash(ls -la)')
+check('tool card renders', editIdx >= 0)
+check('thinking row renders', thinkIdx >= 0)
+check('tool card and thinking rows carry the machine rail',
+  (lines()[editIdx] ?? '').startsWith(`${' '.repeat(MARGIN)}${RAIL}`)
+  && (lines()[thinkIdx] ?? '').startsWith(`${' '.repeat(MARGIN)}${RAIL}`),
+  JSON.stringify((lines()[editIdx] ?? '').slice(0, 12)))
+check('the railed content sits two columns right of prose',
+  (lines()[editIdx] ?? '').indexOf('Edit') === MARGIN + RAIL.length + 2,
+  `col=${(lines()[editIdx] ?? '').indexOf('Edit')}`)
+
+// ── 4. vertical rhythm ───────────────────────────────────────────────────
+const readIdx = rowOf('Read /tmp/handoff.md (63 - 82)')
+check('consecutive tool cards sit tight (no blank line between them)',
+  readIdx === editIdx + 1, `edit=${editIdx} read=${readIdx}`)
+check('the reasoning row under a tool card is tight too', thinkIdx === bashIdx - 1,
+  `think=${thinkIdx} bash=${bashIdx}`)
+check('a prose row keeps its blank line above', proseIdx === readIdx + 2,
+  `read=${readIdx} prose=${proseIdx}`)
+check('a second user turn keeps its blank line above',
+  rowOf('记录下来') === rowOf('Bash(ls -la)') + 2, `bash=${bashIdx}`)
+
+await instance.unmount()
+term.dispose()
+
+console.log('')
+if (failed > 0) {
+  console.error(`verify-transcript-blocks: ${failed} FAILURE(S)`)
+  process.exit(1)
+}
+console.log('verify-transcript-blocks: all checks passed')

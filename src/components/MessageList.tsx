@@ -11,6 +11,7 @@ import { UserPromptMessage } from './messages/UserPromptMessage.js'
 import { AssistantTextMessage } from './messages/AssistantTextMessage.js'
 import { AssistantThinkingMessage } from './messages/AssistantThinkingMessage.js'
 import { AssistantToolUseMessage } from './messages/AssistantToolUseMessage.js'
+import { MachineRail } from './messages/MachineRail.js'
 import { SubagentMessage } from './Chat/SubagentMessage.js'
 import { JobCard } from './Chat/JobCard.js'
 import { isMinimalUiMode } from '../minimalUiMode.js'
@@ -279,6 +280,39 @@ function signatureParts(
   return signatureScratch
 }
 
+/**
+ * Visual layer of a transcript row — what the block-gap pre-pass groups by.
+ *
+ * Only a run of MACHINE rows loses the blank line between its members, which
+ * is how a step's five tool calls become one readable cluster instead of five
+ * equally-spaced lines. Layers are not kinds: `tool`, `reasoning`, `subagent`,
+ * `job` and the `!` shell rows are all one machine layer because they are the
+ * same thing to a reader — the agent doing work, not talking.
+ */
+type BlockLayer = 'user' | 'prose' | 'machine' | 'notice' | 'interrupt' | 'compact'
+
+function blockLayer(kind: ChatRow['kind']): BlockLayer {
+  switch (kind) {
+    case 'user':
+      return 'user'
+    case 'assistant':
+      return 'prose'
+    case 'tool':
+    case 'reasoning':
+    case 'subagent':
+    case 'job':
+    case 'local':
+    case 'local-output':
+      return 'machine'
+    case 'notice':
+      return 'notice'
+    case 'interrupt':
+      return 'interrupt'
+    case 'compact':
+      return 'compact'
+  }
+}
+
 export function MessageList({
   rows,
   expanded,
@@ -497,15 +531,20 @@ export function MessageList({
       : thinkingVisible
         ? sliced
         : sliced.filter(row => row.kind !== 'reasoning')
-    // Every rendered block gets a 1-row top margin except the
-    // first. Pre-pass over the FULL list so a windowed row keeps the exact
-    // spacing it would have in a fully-mounted list.
+    // Blank line BETWEEN blocks, none inside a machine run. A step's tool
+    // calls, reasoning rows, subagent and job cards are one unit to a reader —
+    // the agent working, not talking — so consecutive machine rows lose the
+    // separating blank line and read as one cluster. Every other pair keeps
+    // the blank line it always had (prose included: each assistant message
+    // stays its own block). Pre-pass over the FULL list so a windowed row
+    // keeps the exact spacing it would have in a fully-mounted list.
     const margins = new Map<number, boolean>()
     {
-      let prev: ChatRow['kind'] | undefined
+      let prev: BlockLayer | undefined
       for (const row of out) {
-        margins.set(row.id, prev !== undefined)
-        prev = row.kind
+        const layer = blockLayer(row.kind)
+        margins.set(row.id, prev !== undefined && !(prev === 'machine' && layer === 'machine'))
+        prev = layer
       }
     }
     const streamBits = new Uint8Array(rows.length)
@@ -1523,24 +1562,19 @@ function TranscriptRow({
     case 'assistant':
       return streaming ? (
         <Box
-          alignItems="flex-start"
-          flexDirection="row"
+          flexDirection="column"
           marginTop={marginTopOnTurn ? 1 : 0}
           width="100%"
           backgroundColor={background}
           ref={ref}
           onClick={foldClickable ? foldOnClick : undefined}
         >
-          <Box minWidth={2}>
-            <Text color="text">●</Text>
-          </Box>
-          <Box flexDirection="column">
-            {/* The ⏵ self-narration line (working-activity narrate contract)
-              is stripped here: the live working line on the status bar
-              already shows it. */}
-            <StreamingMarkdown>{stripNarration(displayText)}</StreamingMarkdown>
-            {images !== undefined && <TranscriptImages images={images} indent={0} onPreview={onPreviewImage} suppressGraphics={suppressImageGraphics} />}
-          </Box>
+          {/* The ⏵ self-narration line (working-activity narrate contract)
+            is stripped here: the live working line on the status bar
+            already shows it. No leading bullet: prose is the unmarked,
+            flush-left layer of the transcript (machine rows are railed). */}
+          <StreamingMarkdown>{stripNarration(displayText)}</StreamingMarkdown>
+          {images !== undefined && <TranscriptImages images={images} indent={0} onPreview={onPreviewImage} suppressGraphics={suppressImageGraphics} />}
         </Box>
       ) : (
         <Box
@@ -1653,16 +1687,28 @@ function TranscriptRow({
         </Box>
       )
     case 'local':
-      // `!` mode command echo.
+      // `!` mode command echo — machine layer, railed like every other
+      // machine row, so its output lines below stay tight under it and the
+      // block gap comes from the pre-pass like every other row's (a
+      // hardcoded margin here would desync the measured offsets the scroll
+      // math derives from the same map).
       return (
-        <Box marginTop={1} backgroundColor={background} ref={ref} onClick={foldClickable ? foldOnClick : undefined}>
-          <Text color="bashBorder">!{executionTarget ? ` [${executionTarget}]` : ''} {displayText}</Text>
+        <Box flexDirection="row" marginTop={marginTopOnTurn ? 1 : 0} backgroundColor={background} ref={ref} onClick={foldClickable ? foldOnClick : undefined}>
+          <MachineRail />
+          <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+            <Text color="bashBorder">!{executionTarget ? ` [${executionTarget}]` : ''} {displayText}</Text>
+          </Box>
         </Box>
       )
     case 'local-output':
+      // No extra left padding: the rail is the indent (its `│ ` puts the
+      // output one column in, matching the echo's own content column).
       return (
-        <Box paddingLeft={2} backgroundColor={background} ref={ref} onClick={foldClickable ? foldOnClick : undefined}>
-          <Text dimColor>{displayText}</Text>
+        <Box flexDirection="row" marginTop={marginTopOnTurn ? 1 : 0} backgroundColor={background} ref={ref} onClick={foldClickable ? foldOnClick : undefined}>
+          <MachineRail />
+          <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+            <Text dimColor>{displayText}</Text>
+          </Box>
         </Box>
       )
     case 'compact':

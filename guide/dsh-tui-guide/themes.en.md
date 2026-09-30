@@ -105,7 +105,7 @@ Available color keys by purpose:
 - Diff syntax highlighting: `syntaxKeyword`, `syntaxString`, `syntaxComment`, `syntaxNumber`, `syntaxFunction`, `syntaxType`
 - Diff syntax highlighting (cont.): `syntaxVariable`, `syntaxOperator`, `syntaxPunctuation`, `syntaxConstant`
 - Badges/accents: `mascotBody`, `inputBackground`, `professionalBlue`, `chromeYellow`
-- Messages & input: `userMessageBackground`, `userMessageBackgroundHover`, `messageActionsBackground`, `selectionBg`, `bashMessageBackgroundColor`
+- Messages & input: `userMessageBackground`, `userMessageBackgroundHover`, `userPromptBackground`, `messageActionsBackground`, `selectionBg`, `bashMessageBackgroundColor`
 - Messages & input (cont.): `memoryBackgroundColor`, `rate_limit_fill`, `rate_limit_empty`, `fastMode`, `fastModeShimmer`, `userPromptLabel`
 - Subagent messages: `subagentBullet`, `subagentDescription`, `subagentModel`, `subagentElapsed`, `subagentToolName`, `subagentStatusRunning`
 - Subagent messages (cont.): `subagentStatusCompleted`, `subagentStatusFailed`

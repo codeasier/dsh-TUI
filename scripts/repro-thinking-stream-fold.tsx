@@ -113,8 +113,11 @@ const lines = () => {
 }
 const bodyLines = (ls: string[]) => ls.filter(l => l.includes('推理第')).length
 // Match the whole streaming header, not a startup tip that mentions thinking.
+// 思考行现在带机器活动竖线（`│ ⠋ 思考…`），比对前先剥掉它；启动提示行没有
+// 竖线，剥不剥都不会被误认成折叠头（下面第一条断言守这一点）。
+const RAIL = /^│\s*/u
 const thinkingHeaders = new Set(THINKING_SPINNER_FRAMES.map(frame => `${frame} ${t('thinking-label')}…`.trim()))
-const headerRow = (ls: string[]) => ls.findIndex(line => thinkingHeaders.has(line.trim()))
+const headerRow = (ls: string[]) => ls.findIndex(line => thinkingHeaders.has(line.trim().replace(RAIL, '')))
 // 点击后的重绘在高负载（CI、并行回归）下可能晚于任何固定等待：按结果轮询，
 // 超时才判失败（term-test 的 settled 就是这条语义）。
 const waitFor = (pred: () => boolean, ms = 3000): Promise<boolean> => settled(pred, { timeoutMs: ms })

@@ -89,6 +89,11 @@ export type Theme = {
   inputBackground: string
   userMessageBackground: string
   userMessageBackgroundHover: string
+  /** User-turn band fill in the transcript — the anchor the eye lands on when
+   *  scanning back through turns. `''` = no fill (the `▌` bar and the gold
+   *  label carry the turn alone). Distinct from `userMessageBackground`,
+   *  which the trajectory scene pairs with assistant rows. */
+  userPromptBackground: string
   messageActionsBackground: string
   selectionBg: string
   bashMessageBackgroundColor: string
@@ -293,6 +298,7 @@ const darkTheme: Theme = {
   inputBackground: rgb('#000000'),
   userMessageBackground: '', // user turn: no fill, gold bold text only (Kimi style)
   userMessageBackgroundHover: rgb('#3B5BDB'), // hover/expand: blue block with gold text
+  userPromptBackground: rgb('#252B37'), // user-turn band: one step off the terminal black
   messageActionsBackground: rgb('#2E333D'),
   selectionBg: rgb('#3B4A66'), // Mist-blue tint on dark
   bashMessageBackgroundColor: rgb('#2C3038'),
@@ -375,6 +381,7 @@ const lightTheme: Theme = {
   inputBackground: rgb('#F6F3ED'),
   userMessageBackground: '', // user turn: no fill in light mode, gold text only
   userMessageBackgroundHover: rgb('#DCE4FB'), // subtle blue tint on hover/expand
+  userPromptBackground: rgb('#EFF2F9'), // user-turn band: cool white, one step off the page
   messageActionsBackground: rgb('#E4D9E5'),
   selectionBg: rgb('#D5DEF2'), // Mist-blue tint on warm white
   bashMessageBackgroundColor: rgb('#EAE1D3'),
@@ -460,6 +467,9 @@ const darkAnsiTheme: Theme = {
   inputBackground: 'ansi:black',
   userMessageBackground: '',
   userMessageBackgroundHover: 'ansi:blue',
+  // 16-color terminals have no subtle band: the `▌` bar and the gold label
+  // carry the turn, exactly like `bashMessageBackgroundColor`.
+  userPromptBackground: '',
   messageActionsBackground: 'ansi:blackBright',
   selectionBg: 'ansi:blue',
   bashMessageBackgroundColor: 'ansi:black',

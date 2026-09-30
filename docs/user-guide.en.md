@@ -433,10 +433,20 @@ An empty session shows the whale logo area at the top (scrolls away with the con
 - Pixel whale art and idle behavior ported from [dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale) (author
   [@lhh010](https://github.com/lhh010)), with thanks.
 
+**Transcript block hierarchy**
+
+- **User turn**: a full-width band (`userPromptBackground`) with a `▌` bar on the left and the prompt in
+  bold gold after `❯` — the anchor your eye lands on first when scrolling back through a long session.
+- **Assistant prose**: column 0, normal brightness, **no prefix marker at all**.
+- **Machine activity** (tool cards / thinking / subagents / background jobs / `!` shell rows) indents two
+  columns under a dim rail, as in `│ • Bash(ls -la)`; consecutive tool calls inside one step lose the
+  blank line between them and read as one cluster. Blank lines separate clusters from prose, and prose
+  from the next user turn.
+
 **One-line summaries** (default on)
 
-- Thinking blocks and tool cards each take **a single line**: thinking is `+ 思考 · 7s`; a tool card is its
-  header row (`• Bash(ls -la)`) carrying the tool name, argument or path, status dot and elapsed clock.
+- Thinking blocks and tool cards each take **a single line**: thinking is `│ + 思考 · 7s`; a tool card is
+  its header row (`│ • Bash(ls -la)`) carrying the tool name, argument or path, status dot and elapsed clock.
 - Open/close: **click the row**, or press `Ctrl+O` to toggle detail for the whole transcript. A thinking
   block's `+` becomes `-` while it is open.
 - Expanded, thinking shows its full text and a tool card its complete output (uncapped); a failed card

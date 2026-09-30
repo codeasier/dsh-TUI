@@ -26,6 +26,7 @@
 
 - **Pixel whale pet** — three startup intros, click to wake; freezes after the first task.
 - **Terminal-native UI** — streaming Markdown, tool cards, `/` and `@` completion, `#L12-14` ranges, history search, zh/en UI.
+- **Transcript hierarchy** — the user turn is a banded anchor with a `▌` bar; assistant prose is flush left and unmarked; tool calls and thinking sit under a dim `│` rail, tight within one step.
 - **Images** — Kitty/Sixel thumbnails, centered preview with zoom and pan, paste-time fitting, text fallback.
 - **Mermaid diagrams** — ````mermaid ```` fences drawn as Unicode diagrams.
 - **LaTeX math** — `$…$` and `$$…$$` formulas as Unicode text, fractions and limits stacked in display blocks; `mathRendering: image` typesets block and one-row inline formulas as terminal images on graphics terminals.

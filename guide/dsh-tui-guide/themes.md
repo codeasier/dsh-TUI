@@ -104,7 +104,7 @@ DSH_TUI_THEME
 - diff 语法高亮（续）：`syntaxFunction`、`syntaxType`、`syntaxVariable`、`syntaxOperator`
 - diff 语法高亮（续）：`syntaxPunctuation`、`syntaxConstant`
 - 徽标/强调：`mascotBody`、`inputBackground`、`professionalBlue`、`chromeYellow`
-- 消息/输入：`userMessageBackground`、`userMessageBackgroundHover`
+- 消息/输入：`userMessageBackground`、`userMessageBackgroundHover`、`userPromptBackground`
 - 消息/输入（续）：`messageActionsBackground`、`selectionBg`、`bashMessageBackgroundColor`
 - 消息/输入（续）：`memoryBackgroundColor`、`rate_limit_fill`、`rate_limit_empty`
 - 消息/输入（续）：`fastMode`、`fastModeShimmer`、`userPromptLabel`

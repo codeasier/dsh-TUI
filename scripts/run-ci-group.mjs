@@ -67,6 +67,10 @@ const GROUPS = {
     ['verify-text-paint-budget', ['node', '--import', 'tsx/esm', 'scripts/verify-text-paint-budget.tsx']],
     ['verify-text-viewport-paint', ['node', '--import', 'tsx/esm', 'scripts/verify-text-viewport-paint.ts']],
     ['verify-tool-history-window', ['node', '--import', 'tsx/esm', 'scripts/verify-tool-history-window.tsx']],
+// 转录块层级回归：用户回合的底色 + 左竖条、助手正文贴左无标记、机器活动
+// （工具卡/思考）挂在 `│ ` 竖线下，以及「机器行之间不留空行、其余照旧」
+// 的块间距规则。
+    ['verify-transcript-blocks', ['node', 'scripts/verify-transcript-blocks.mjs']],
 // 流式平滑揭示回归（dsh-tui.smoothStreaming）：调度器步进/游标生命周期
 // （追加保游标、替换 snap、追平不再重打）+ MessageList 集成（流式行/
 // 非流式 fresh 行渐进揭示、回放行直出、开关关闭直出）+ 组件契约

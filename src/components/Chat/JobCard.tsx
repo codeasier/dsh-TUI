@@ -8,10 +8,11 @@ import { t } from '../../i18n.js'
 import { stringWidth } from '../../ink/stringWidth.js'
 import { isMinimalUiMode } from '../../minimalUiMode.js'
 import { ProgressBar } from '../design-system/ProgressBar.js'
+import { MachineRail, RAIL_WIDTH } from '../messages/MachineRail.js'
 
 /** The waterfall window mirrors the subagent card: a constant-height region. */
 const WATERFALL_ROWS = 3
-/** Card left padding + the `│ ` gutter prefix. */
+/** The waterfall's own `  │ ` gutter prefix (the machine rail is separate). */
 const WATERFALL_GUTTER = 4
 
 /** Static status marker — deliberately NOT the animated activity-indicator
@@ -102,7 +103,9 @@ export function JobCard({ job, marginTopOnTurn, onClick }: {
   const info = statusInfo(job.status)
   const [hovered, setHovered] = React.useState(false)
   const clickable = onClick !== undefined
-  const rowWidth = Math.max(20, (columns ?? 80) - WATERFALL_GUTTER)
+  // 内容列已让出竖线的两格，瀑布裁剪预算同步减掉，避免宽度对不上时由
+  // ink 的 truncate 兜底（长行会多截两个字符）。
+  const rowWidth = Math.max(20, (columns ?? 80) - WATERFALL_GUTTER - RAIL_WIDTH)
   // Waterfall entries: gap banners interleave as their own rows, then the
   // window keeps the LAST WATERFALL_ROWS entries so a banner never pushes a
   // fresher line out — the card stays constant-height.
@@ -122,63 +125,65 @@ export function JobCard({ job, marginTopOnTurn, onClick }: {
   const liveProgress = settled || job.progress === undefined || job.progress === '' ? undefined : job.progress
 
   // 点击打开 /jobs 面板；hover 不刷整行背景（转录视觉保持安静），只把
-  // 状态 glyph 提亮为品牌色作为可点指示。无外层缩进：任务卡是上方工具
-  // 调用（run_in_background 卡）的延续，与工具卡通栏左对齐；子代理卡才
-  // 是嵌套子实体、保留缩进。瀑布的 `  │ ` 槽自带两格，正好与工具卡正文
-  // 的 `  ⎿ ` 槽位一致。
+  // 状态 glyph 提亮为品牌色作为可点指示。缩进由机器活动竖线承担：任务卡
+  // 是上方工具调用（run_in_background 卡）的延续，与工具卡同栏。瀑布的
+  // `│ ` 槽与工具卡正文的 `⎿` 槽位对齐。
   return <Box
-    flexDirection="column"
+    flexDirection="row"
     marginTop={marginTopOnTurn ? 1 : 0}
     ref={viewportRef}
     onClick={onClick}
     onMouseEnter={clickable ? () => setHovered(true) : undefined}
     onMouseLeave={clickable ? () => setHovered(false) : undefined}
   >
-    {/* Fixed columns around ONE flexible label: the label truncates instead
-      * of wrapping, so the header grid holds at any width and with or without
-      * the progress chip (the old header reserved a hand-counted width and
-      * overflowed by exactly the chip's width). */}
-    <Box flexDirection="row" gap={1}>
-      <Text color={hovered && clickable ? 'accent' : info.color}>{info.glyph}</Text>
-      <Box flexShrink={0}>
-        <Text bold color={hovered && clickable ? 'accent' : undefined}>
-          {headerName}
-        </Text>
-      </Box>
-      <Box flexShrink={0}><Text dimColor>{job.kind}</Text></Box>
-      <Box flexGrow={1} flexShrink={1}>
-        <Text wrap="truncate-end">{job.label}</Text>
-      </Box>
-      {liveProgress !== undefined && (
-        <Box width={12} flexShrink={0}>
-          <JobProgress progress={liveProgress} />
+    <MachineRail />
+    <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+      {/* Fixed columns around ONE flexible label: the label truncates instead
+        * of wrapping, so the header grid holds at any width and with or without
+        * the progress chip (the old header reserved a hand-counted width and
+        * overflowed by exactly the chip's width). */}
+      <Box flexDirection="row" gap={1}>
+        <Text color={hovered && clickable ? 'accent' : info.color}>{info.glyph}</Text>
+        <Box flexShrink={0}>
+          <Text bold color={hovered && clickable ? 'accent' : undefined}>
+            {headerName}
+          </Text>
         </Box>
+        <Box flexShrink={0}><Text dimColor>{job.kind}</Text></Box>
+        <Box flexGrow={1} flexShrink={1}>
+          <Text wrap="truncate-end">{job.label}</Text>
+        </Box>
+        {liveProgress !== undefined && (
+          <Box width={12} flexShrink={0}>
+            <JobProgress progress={liveProgress} />
+          </Box>
+        )}
+        <Box flexShrink={0}><Text dimColor>{duration}</Text></Box>
+        {headerDetail !== undefined && <Box flexShrink={0}><Text dimColor wrap="truncate-end">{headerDetail}</Text></Box>}
+        <Box flexShrink={0}><Text color={info.color}>{info.label}</Text></Box>
+      </Box>
+      {!settled && activity.length > 0 && activity.map((entry, index) => (
+        // key 不含 time（同 SubagentMessage 的约定）：内容更新走 in-place
+        // diff，避免每个 tick 都 unmount+mount。瀑布只在有镜像输出时出现
+        // （后台任务静默是常态——无输出时卡片就是头行，不摆空 gutter）。
+        entry.kind === 'gap' ? (
+          <Text key={`${job.id}-wf-gap-${index}`} dimColor italic wrap="truncate">
+            {`  · ${clipLine(t('jobs-output-gap'), rowWidth)}`}
+          </Text>
+        ) : (
+          <Text
+            key={`${job.id}-wf-${index}`}
+            color={entry.line.channel === 'stderr' ? 'error' : undefined}
+            dimColor={entry.line.channel !== 'stderr'}
+            wrap="truncate"
+          >
+            {`  │ ${clipLine(entry.line.text, rowWidth)}`}
+          </Text>
+        )
+      ))}
+      {settled && job.status !== 'completed' && headerDetail !== undefined && (
+        <Text dimColor wrap="truncate">{`  └ ${clipLine(headerDetail, rowWidth)}`}</Text>
       )}
-      <Box flexShrink={0}><Text dimColor>{duration}</Text></Box>
-      {headerDetail !== undefined && <Box flexShrink={0}><Text dimColor wrap="truncate-end">{headerDetail}</Text></Box>}
-      <Box flexShrink={0}><Text color={info.color}>{info.label}</Text></Box>
     </Box>
-    {!settled && activity.length > 0 && activity.map((entry, index) => (
-      // key 不含 time（同 SubagentMessage 的约定）：内容更新走 in-place
-      // diff，避免每个 tick 都 unmount+mount。瀑布只在有镜像输出时出现
-      // （后台任务静默是常态——无输出时卡片就是头行，不摆空 gutter）。
-      entry.kind === 'gap' ? (
-        <Text key={`${job.id}-wf-gap-${index}`} dimColor italic wrap="truncate">
-          {`  · ${clipLine(t('jobs-output-gap'), rowWidth)}`}
-        </Text>
-      ) : (
-        <Text
-          key={`${job.id}-wf-${index}`}
-          color={entry.line.channel === 'stderr' ? 'error' : undefined}
-          dimColor={entry.line.channel !== 'stderr'}
-          wrap="truncate"
-        >
-          {`  │ ${clipLine(entry.line.text, rowWidth)}`}
-        </Text>
-      )
-    ))}
-    {settled && job.status !== 'completed' && headerDetail !== undefined && (
-      <Text dimColor wrap="truncate">{`  └ ${clipLine(headerDetail, rowWidth)}`}</Text>
-    )}
   </Box>
 }

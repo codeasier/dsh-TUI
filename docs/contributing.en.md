@@ -366,6 +366,7 @@ change, also run the closest focused script:
 | Change area | Focused verification |
 | --- | --- |
 | General headless screen composition | `pnpm smoke` |
+| Transcript block hierarchy (user-turn band/bar, flush-left unmarked prose, machine rail and block gaps) | `node scripts/verify-transcript-blocks.mjs` |
 | Channel submit/steer/pending behavior | `node scripts/verify-submit.mjs` |
 | Rewind/edit/resend and historical inbox cancellation | `pnpm verify:rewind-edit` |
 | Prompt queue behavior | `node scripts/verify-queue.mjs` |

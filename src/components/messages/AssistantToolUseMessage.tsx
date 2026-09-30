@@ -18,6 +18,7 @@ import type { ClickEvent } from '../../ink/events/click-event.js'
 import { revealLinesOf, snapReveal } from '../smoothReveal.js'
 import { useRevealVersion } from '../../hooks/useRevealVersion.js'
 import { primaryComboString } from '../../utils/keymap.js'
+import { MachineRail, RAIL_WIDTH } from './MachineRail.js'
 
 type Props = {
   tool: ToolRow
@@ -603,15 +604,16 @@ export function AssistantToolUseMessage({
   const interactive = onClick !== undefined
   // Header-row budget for the title Text. useTerminalSize() already reports
   // the margin-adjusted content width, so this is the fixed chrome of the
-  // line only: loader dot 2 + hover ▾ indicator 2 (interactive rows, present
-  // while the pointer dwells) + the settled elapsed chip. Calibrated against
-  // the renderer (probe-tooltip-truncation): a truncate-end title whose
-  // width exceeds columns − loader − ▾ − chip is really cut on screen at
-  // tooltip time; anything at or under the budget fits fully and must NOT
-  // pop a tooltip. No extra slack, and the tool name is NOT deducted — a
-  // non-terminal title carries its own first word, so double-counting name
-  // pushed the gate ~10 cols too tight and floated fully visible titles.
-  const headerTextBudget = Math.max(0, columns - 2 - (interactive ? 2 : 0)
+  // line only: machine rail 2 + loader dot 2 + hover ▾ indicator 2
+  // (interactive rows, present while the pointer dwells) + the settled
+  // elapsed chip. Calibrated against the renderer (probe-tooltip-truncation):
+  // a truncate-end title whose width exceeds columns − rail − loader − ▾ −
+  // chip is really cut on screen at tooltip time; anything at or under the
+  // budget fits fully and must NOT pop a tooltip. No extra slack, and the
+  // tool name is NOT deducted — a non-terminal title carries its own first
+  // word, so double-counting name pushed the gate ~10 cols too tight and
+  // floated fully visible titles.
+  const headerTextBudget = Math.max(0, columns - RAIL_WIDTH - 2 - (interactive ? 2 : 0)
     - (!isRunning && elapsedText !== '' ? stringWidth(elapsedText) : 0))
   const useSplitDiff = !isError && view?.card === 'diff' &&
     (diffLayout === 'split' || (diffLayout !== 'unified' && columns >= SPLIT_DIFF_MIN_COLS))
@@ -690,6 +692,7 @@ export function AssistantToolUseMessage({
       onMouseEnter={interactive ? () => setHovered(true) : undefined}
       onMouseLeave={interactive ? () => setHovered(false) : undefined}
     >
+      <MachineRail />
       <Box flexDirection="column" flexGrow={1}>
         <Box flexDirection="row" flexWrap="nowrap" minWidth={minWidth}>
           <ToolUseLoader
@@ -700,8 +703,12 @@ export function AssistantToolUseMessage({
           />
           <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} folded={foldedHeader} displayArgs={displayArgs} argsLanguage={argsLanguage} nameColor={toolNameColor(tool.name)} filePath={filePath} onOpenFile={onOpenFile} metaTooltip={() => toolCardMetaTooltip(tool, isRunning, isError)} headerTextBudget={headerTextBudget} />
           {!isRunning && (
-            <Box flexWrap="nowrap">
-              <Text dimColor={!hovered}>{elapsedText}</Text>
+            // flexShrink={0}: the elapsed chip is two cells of chrome and must
+            // never be the thing that yields. Without it a long title pushed
+            // the chip past the row and `· 0s` wrapped onto a second line,
+            // orphaning a bare `·` at the right edge.
+            <Box flexWrap="nowrap" flexShrink={0}>
+              <Text dimColor={!hovered} wrap="truncate">{elapsedText}</Text>
             </Box>
           )}
           {hovered && (
@@ -720,7 +727,7 @@ export function AssistantToolUseMessage({
             </Box>
             <SplitDiffView
               diffs={view.diffs}
-              width={columns - 4}
+              width={columns - RAIL_WIDTH - 4}
               maxRows={DIFF_BODY_MAX_LINES}
               verbose={verbose}
               toolBackground={ordinaryToolBackground}

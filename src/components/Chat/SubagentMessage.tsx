@@ -5,13 +5,14 @@ import type { Theme } from '../../theme.js'
 import { t } from '../../i18n.js'
 import { resolvePreset } from '../activityFrames.js'
 import { toolNameColor } from '../messages/AssistantToolUseMessage.js'
+import { MachineRail, RAIL_WIDTH } from '../messages/MachineRail.js'
 import { stringWidth } from '../../ink/stringWidth.js'
 import { isMinimalUiMode } from '../../minimalUiMode.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
 
 /** The waterfall window is a Kimi Code style constant-height region. */
 const WATERFALL_ROWS = 3
-/** Card left padding + the `│ ` gutter prefix. */
+/** The waterfall's own `  │ ` gutter prefix (the machine rail is separate). */
 const WATERFALL_GUTTER = 4
 
 function duration(ms = 0): string {
@@ -82,73 +83,79 @@ export function SubagentMessage({ subagent, marginTopOnTurn, activityFrames, onC
   const preset = React.useMemo(() => resolvePreset(activityFrames), [activityFrames])
   const activity = settled ? [] : subagent.outputLines.slice(-WATERFALL_ROWS)
   const runningGlyph = preset.frames[Math.floor(time / preset.intervalMs) % preset.frames.length] ?? '·'
-  const rowWidth = Math.max(20, (columns ?? 80) - WATERFALL_GUTTER)
+  // 卡内容列已经让出竖线的两格，瀑布的裁剪预算也要跟着减，否则末两列
+  // 交给 ink 的 truncate 兜底（宽度对不上，长输出多截两个字符）。
+  const rowWidth = Math.max(20, (columns ?? 80) - WATERFALL_GUTTER - RAIL_WIDTH)
 
   // 点击打开详情场景；hover 不刷整行背景（转录视觉保持安静），只把状态
   // glyph 提亮为品牌色作为可点指示。
+  // 机器活动竖线承担缩进：卡片自己再 paddingLeft 会把内容推到第 4 列，
+  // 与工具卡的第 2 列错开（同一个机器层的行必须同栏）。
   return <Box
-    flexDirection="column"
+    flexDirection="row"
     marginTop={marginTopOnTurn ? 1 : 0}
-    paddingLeft={2}
     ref={viewportRef}
     onClick={onClick}
     onMouseEnter={clickable ? () => setHovered(true) : undefined}
     onMouseLeave={clickable ? () => setHovered(false) : undefined}
   >
-    <Box flexDirection="row" gap={1}>
-      <Text color={hovered && clickable ? 'accent' : info.color}>{settled ? (isMinimalUiMode() ? info.glyph : ` ${info.glyph}`) : ` ${runningGlyph}`}</Text>
-      <Text bold color={hovered && clickable ? 'accent' : undefined}>{`${t('subagent-card-prefix')}${subagent.description}`}</Text>
-      <Text dimColor>·</Text><Text>{subagent.model ?? subagent.provider ?? 'default'}</Text>
-      {subagent.effort && <><Text dimColor>·</Text><Text dimColor>{subagent.effort}</Text></>}
-      <Text dimColor>·</Text><Text dimColor>{duration(elapsed)}</Text>
-      <Text dimColor>·</Text><Text dimColor>{tokens(subagent)}</Text>
-      <Text dimColor>·</Text><Text dimColor>{subagent.toolCalls.length} tools</Text>
-      <Text dimColor>·</Text><Text color={info.color}>{info.label}</Text>
-    </Box>
-    {!settled && (lastRunning ?? previousDone) !== undefined && (
-      <Text wrap="truncate">
-        {lastRunning !== undefined ? (
-          <>
-            {previousDone !== undefined && (
+    <MachineRail />
+    <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+      <Box flexDirection="row" gap={1}>
+        <Text color={hovered && clickable ? 'accent' : info.color}>{settled ? info.glyph : runningGlyph}</Text>
+        <Text bold color={hovered && clickable ? 'accent' : undefined}>{`${t('subagent-card-prefix')}${subagent.description}`}</Text>
+        <Text dimColor>·</Text><Text>{subagent.model ?? subagent.provider ?? 'default'}</Text>
+        {subagent.effort && <><Text dimColor>·</Text><Text dimColor>{subagent.effort}</Text></>}
+        <Text dimColor>·</Text><Text dimColor>{duration(elapsed)}</Text>
+        <Text dimColor>·</Text><Text dimColor>{tokens(subagent)}</Text>
+        <Text dimColor>·</Text><Text dimColor>{subagent.toolCalls.length} tools</Text>
+        <Text dimColor>·</Text><Text color={info.color}>{info.label}</Text>
+      </Box>
+      {!settled && (lastRunning ?? previousDone) !== undefined && (
+        <Text wrap="truncate">
+          {lastRunning !== undefined ? (
+            <>
+              {previousDone !== undefined && (
+                <>
+                  <Text dimColor>{'  · '}</Text>
+                  <Text color="success">✓</Text>
+                  <Text color={toolNameColor(previousDone.name)}>{previousDone.name}</Text>
+                  <Text dimColor>{' · '}</Text>
+                </>
+              )}
+              {lastRunning.argsPreview === undefined && (
+                <Text color={toolNameColor(lastRunning.name)}>{lastRunning.name}</Text>
+              )}
+              {lastRunning.argsPreview !== undefined && (
+                <>
+                  <Text color={toolNameColor(lastRunning.name)}>{lastRunning.name}</Text>
+                  <Text dimColor>{` (${clipLine(lastRunning.argsPreview.replace(/\s+/g, ' ').trim(), Math.max(10, rowWidth - lastRunning.name.length - 6))})`}</Text>
+                </>
+              )}
+            </>
+          ) : (
+            previousDone !== undefined && (
               <>
                 <Text dimColor>{'  · '}</Text>
                 <Text color="success">✓</Text>
                 <Text color={toolNameColor(previousDone.name)}>{previousDone.name}</Text>
-                <Text dimColor>{' · '}</Text>
+                {previousDone.argsPreview !== undefined && (
+                  <Text dimColor>{` (${clipLine(previousDone.argsPreview.replace(/\s+/g, ' ').trim(), Math.max(10, rowWidth - previousDone.name.length - 6))})`}</Text>
+                )}
               </>
-            )}
-            {lastRunning.argsPreview === undefined && (
-              <Text color={toolNameColor(lastRunning.name)}>{lastRunning.name}</Text>
-            )}
-            {lastRunning.argsPreview !== undefined && (
-              <>
-                <Text color={toolNameColor(lastRunning.name)}>{lastRunning.name}</Text>
-                <Text dimColor>{` (${clipLine(lastRunning.argsPreview.replace(/\s+/g, ' ').trim(), Math.max(10, rowWidth - lastRunning.name.length - 6))})`}</Text>
-              </>
-            )}
-          </>
-        ) : (
-          previousDone !== undefined && (
-            <>
-              <Text dimColor>{'  · '}</Text>
-              <Text color="success">✓</Text>
-              <Text color={toolNameColor(previousDone.name)}>{previousDone.name}</Text>
-              {previousDone.argsPreview !== undefined && (
-                <Text dimColor>{` (${clipLine(previousDone.argsPreview.replace(/\s+/g, ' ').trim(), Math.max(10, rowWidth - previousDone.name.length - 6))})`}</Text>
-              )}
-            </>
-          )
-        )}
-      </Text>
-    )}
-    {!settled && Array.from({ length: WATERFALL_ROWS }, (_, index) => (
-      // key 不含 time：含 time 的 key 让每个 animation tick 都变成
-      // unmount+mount，DOMElement/Yoga node churn 且 nodeCache 失配扩大
-      // terminal damage。内容更新走 in-place diff。
-      <Text key={`${subagent.agentId}-wf-${index}`} dimColor wrap="truncate">{`  │ ${clipLine(activity[index] ?? '', rowWidth)}`}</Text>
-    ))}
-    {settled && subagent.status === 'failed' && subagent.error && (
-      <Text color="error" wrap="truncate">{`  └ ${clipLine(subagent.error, rowWidth)}`}</Text>
-    )}
+            )
+          )}
+        </Text>
+      )}
+      {!settled && Array.from({ length: WATERFALL_ROWS }, (_, index) => (
+        // key 不含 time：含 time 的 key 让每个 animation tick 都变成
+        // unmount+mount，DOMElement/Yoga node churn 且 nodeCache 失配扩大
+        // terminal damage。内容更新走 in-place diff。
+        <Text key={`${subagent.agentId}-wf-${index}`} dimColor wrap="truncate">{`  │ ${clipLine(activity[index] ?? '', rowWidth)}`}</Text>
+      ))}
+      {settled && subagent.status === 'failed' && subagent.error && (
+        <Text color="error" wrap="truncate">{`  └ ${clipLine(subagent.error, rowWidth)}`}</Text>
+      )}
+    </Box>
   </Box>
 }

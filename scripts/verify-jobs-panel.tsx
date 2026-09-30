@@ -626,8 +626,10 @@ await withTerminal(
     const text = screen()
     check(
       'C1 无输出时卡片仅头行（无空瀑布 gutter）',
-      text.includes('gh run watch 42') && !text.includes('│'),
-      text.split('\n').slice(0, 3).join('|'),
+      // 头行本身就带机器活动竖线（`│ ● job: …`），「只有头行」不能再写成
+      // 「不含 │」——按非空行数断言：整张卡占一行。
+      text.includes('gh run watch 42') && text.split('\n').filter(line => line.trim() !== '').length === 1,
+      text.split('\n').filter(line => line.trim() !== '').join('|'),
     )
   },
 )

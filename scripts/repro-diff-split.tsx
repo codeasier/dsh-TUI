@@ -51,8 +51,15 @@ const editTool = {
   },
 }
 
+/**
+ * 卡面左侧的机器活动竖线占 2 列，正文槽（` ⎿ `/`   `）再占 3 列：双栏正文
+ * 从第 5 列开始。下面所有按列取色/取字的断言都从这里推导，排版再动一次
+ * 也只改这个常量。
+ */
+const BODY_LEFT = 5
+
 /** Boot one headless terminal at the given width and render the card. */
-async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none') {
+async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none', verbose = true) {
   const rows = 30
   const term = new XTerm({ cols, rows, scrollback: 0, allowProposedApi: true })
   class FakeStdout extends Writable {
@@ -61,8 +68,10 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
     isTTY = true
     _write(chunk, _e, cb) { term.write(String(chunk), cb) }
   }
+  // verbose：这些场景测的是 diff 的呈现（双栏/统一式、底色、词色），而
+  // 折叠卡现在只画头行（零正文行），非 verbose 下整屏只有一个标题。
   const app = await render(
-    React.createElement(AssistantToolUseMessage, { tool, marginTopOnTurn: false, verbose: false, diffLayout, toolBackground }),
+    React.createElement(AssistantToolUseMessage, { tool, marginTopOnTurn: false, verbose, diffLayout, toolBackground }),
     { stdout: new FakeStdout(), debug: true, exitOnCtrlC: false },
   )
   // 固定窗:pacing cli-highlight 首次使用才懒加载，其后的补色重绘没有
@@ -84,7 +93,8 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
   check('宽屏不出现统一式 - /+ 行', !lines.some(line => line.startsWith(' ⎿ - ') || line.startsWith(' ⎿ + ')))
   const pairRow = lines.findIndex(line => line.includes('def shout(text):') && line.includes('def shout(text, mark="!"):'))
   check('改动对在同行双栏呈现', pairRow >= 0)
-  check('双栏以 │ 分隔', pairRow >= 0 && lines[pairRow]!.includes('│'))
+  // 竖线要落在正文槽右侧才算是分栏符：第 0 列的 `│` 是机器活动竖线。
+  check('双栏以 │ 分隔', pairRow >= 0 && (lines[pairRow]!.indexOf('│', BODY_LEFT) ?? -1) > BODY_LEFT)
   const ctxRow = lines.findIndex(line => line.includes('# tail'))
   check('上下文行双栏都有内容', ctxRow >= 0 && lines[ctxRow]!.split('│').length === 2)
   if (pairRow >= 0) {
@@ -123,7 +133,10 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
   const s = screen()
   check('窄屏回退统一式 - 行', s.includes('- def shout(text):'))
   check('窄屏回退统一式 + 行', s.includes('+ def shout(text, mark="!"):'))
-  check('窄屏不出现 │ 分隔', !s.includes('│'))
+  // 唯一允许的 `│` 是卡面左侧的机器活动竖线；正文槽里不能再出现分栏符。
+  const pipes = (s.match(/│/gu) ?? []).length
+  const railPipes = (s.match(/^│ |^ {2}│ /gmu) ?? []).length
+  check('窄屏不出现 │ 分隔', pipes === railPipes, `pipes=${pipes} rail=${railPipes}`)
   const bodyRow = lines.findIndex(line => line.includes('# tail'))
   if (bodyRow >= 0) {
     check('默认 none 档：统一式卡体无底色（文本处）', bgAt(lines[bodyRow]!.indexOf('# tail'), bodyRow) === 0xffffff,

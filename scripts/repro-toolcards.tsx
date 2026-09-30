@@ -91,6 +91,14 @@ function card(key: string, tool: Record<string, unknown>, verbose = true, foldTe
   })
 }
 
+/**
+ * 工具卡正文槽：卡面 head 行带机器活动竖线（`│ • Name …`），正文列整体右移
+ * 两列，所以首行是「空 rail 列 + ` ⎿ `」，续行是 5 个空格。断言只用这两个
+ * 常量拼，排版再动一次也只改这里。
+ */
+const BODY = '   ⎿ '
+const BODY_CONT = '     '
+
 const editTool = {
   name: 'edit',
   callView: {
@@ -120,8 +128,8 @@ function show(key: string, tool: Record<string, unknown>, verbose = true, foldTe
 
 // 1. Settled Edit: diff body, red `- ` / green `+ ` lines under the ⎿ gutter.
 check('编辑卡片标题为「Edit /tmp/a.ts」（非 JSON args）', await settled(() => screen().includes('Edit /tmp/a.ts') && !screen().includes('{"file_path"')))
-check('删除行带 ⎿ 缩进', await settled(() => { const r = rowOf('- const a = 1'); return r >= 0 && lines()[r]!.startsWith(' ⎿ - const a = 1') }))
-check('新增行延续缩进', await settled(() => { const r = rowOf('+ const a = 2'); return r >= 0 && lines()[r]!.startsWith('   + const a = 2') }))
+check('删除行带 ⎿ 缩进', await settled(() => { const r = rowOf('- const a = 1'); return r >= 0 && lines()[r]!.startsWith(`${BODY}- const a = 1`) }))
+check('新增行延续缩进', await settled(() => { const r = rowOf('+ const a = 2'); return r >= 0 && lines()[r]!.startsWith(`${BODY_CONT}+ const a = 2`) }))
 check('删除行为红色系', await settled(() => { const r = rowOf('- const a = 1'); return r >= 0 && fgAt(7, r) === 0xb26671 }))
 check('新增行为绿色系', await settled(() => { const r = rowOf('+ const a = 2'); return r >= 0 && fgAt(7, r) === 0x57956b }))
 
@@ -146,7 +154,7 @@ show('bash', {
   resultFull: 'total 8\nfile1\nfile2',
 })
 check('终端卡标题为「Bash(ls -la)」', await settled(() => screen().includes('Bash(ls -la)')))
-check('终端输出带 ⎿ 缩进', await settled(() => { const r = rowOf('total 8'); return r >= 0 && lines()[r]!.startsWith(' ⎿ total 8') }))
+check('终端输出带 ⎿ 缩进', await settled(() => { const r = rowOf('total 8'); return r >= 0 && lines()[r]!.startsWith(`${BODY}total 8`) }))
 
 // 4. Bash 非零退出：追加 Exit code 行。
 show('bash-err', {
@@ -169,7 +177,7 @@ show('read', {
   resultFull: '<path>/tmp/x.ts</path>\n<content>\nline one\nline two\n</content>',
 })
 check('Read 正文无信封标签', await settled(() => screen().includes('line one') && !screen().includes('<content>') && !screen().includes('<path>')))
-check('Read 正文带 ⎿ 缩进', await settled(() => { const r = rowOf('line one'); return r >= 0 && lines()[r]!.startsWith(' ⎿ line one') }))
+check('Read 正文带 ⎿ 缩进', await settled(() => { const r = rowOf('line one'); return r >= 0 && lines()[r]!.startsWith(`${BODY}line one`) }))
 
 // 6. 无 presenter 的工具：回退到 Name(args) + 原始结果（仍然缩进）。
 show('fallback', {
@@ -177,7 +185,7 @@ show('fallback', {
   resultFull: 'raw output here',
 })
 check('无视图时回退 Name(args) 标题', await settled(() => screen().includes('Read({"file_path":"/tmp/a.ts"})')))
-check('无视图时结果仍缩进', await settled(() => { const r = rowOf('raw output here'); return r >= 0 && lines()[r]!.startsWith(' ⎿ raw output here') }))
+check('无视图时结果仍缩进', await settled(() => { const r = rowOf('raw output here'); return r >= 0 && lines()[r]!.startsWith(`${BODY}raw output here`) }))
 
 // 7. 折叠上限：默认一张卡只占标题行，正文零行；Ctrl+O（verbose）展开全文。
 const seqTool = {
@@ -198,7 +206,7 @@ show('error', {
   status: 'error',
   errorText: 'Error: ENOENT',
 })
-check('错误行带 ⎿ 缩进', await settled(() => { const r = rowOf('Error: ENOENT'); return r >= 0 && lines()[r]!.startsWith(' ⎿ Error: ENOENT') }))
+check('错误行带 ⎿ 缩进', await settled(() => { const r = rowOf('Error: ENOENT'); return r >= 0 && lines()[r]!.startsWith(`${BODY}Error: ENOENT`) }))
 check('错误行有颜色', await settled(() => { const r = rowOf('Error: ENOENT'); return r >= 0 && fgAt(7, r) !== 0 }))
 
 // 9. 运行中的 Edit：挂起期间就展示待定 diff。

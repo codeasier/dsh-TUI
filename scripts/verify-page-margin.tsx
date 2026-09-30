@@ -236,14 +236,16 @@ function cellAtC(y: number, col: number): string {
 function linesC(): string[] {
   return Array.from({ length: CHAT_ROWS }, (_, y) => termC.buffer.active.getLine(termC.buffer.active.baseY + y)?.translateToString(true) ?? '')
 }
-await settle(() => linesC().some(l => l.trimStart().startsWith('❯')))
+await settle(() => linesC().some(l => l.includes('▌ ❯')))
 // 固定窗:待迁移 等整帧（含滚动轨）画完；同一个窗口服务下面 4 条断言与
 // railRows 快照，拆成单条 settled 会改语义
 await sleep(250)
 const railRows = Array.from({ length: CHAT_ROWS }, (_, y) => cellAtC(y, 98) !== '' || cellAtC(y, 99) !== '')
-const promptRow = linesC().findIndex(l => l.trimStart().startsWith('❯'))
-const promptCol = promptRow >= 0 ? linesC()[promptRow]!.indexOf('❯') : -1
-check('Chat：提示符 ❯ 在第 2 列', promptCol === 2, `col=${promptCol}`)
+// 转录里的用户回合是 `▌ ❯ …`（只有机器活动缩进），左边距的锚点就是那条
+// 竖条：它必须落在第 2 列——输入框的 `❯` 前面还有 `⌸ `，不是边距信号。
+const promptRow = linesC().findIndex(l => l.includes('▌ ❯'))
+const promptCol = promptRow >= 0 ? linesC()[promptRow]!.indexOf('▌') : -1
+check('Chat：用户回合竖条在第 2 列（内容不越左缘）', promptCol === 2, `col=${promptCol}`)
 check('Chat：滚动轨在 98/99 列（贴终端右缘）', railRows.some(Boolean))
 check('Chat：右缘 98/99 列只有滚动轨占用（无其他内容越界）',
   Array.from({ length: CHAT_ROWS }, (_, y) => (cellAtC(y, 98) === '' && cellAtC(y, 99) === '') || railRows[y]!).every(Boolean))

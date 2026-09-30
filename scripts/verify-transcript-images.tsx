@@ -492,7 +492,10 @@ await withTerminal(
       true,
       'an image-only assistant is not filtered',
     )
-    assert.match(screen(), /[●⏺]/u, 'the isolated image-only assistant keeps its marker')
+    // Assistant prose carries no leading bullet any more (it is the flush-left,
+    // unmarked layer; machine rows take the rail), so an image-only row must
+    // draw the image and nothing else — no orphan `●` above the thumbnail.
+    assert.doesNotMatch(screen(), /[●⏺]/u, 'the image-only assistant adds no prose bullet')
   },
 )
 

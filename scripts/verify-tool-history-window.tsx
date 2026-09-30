@@ -89,7 +89,11 @@ for (const fullscreen of [true, false]) {
       revision++
       app.rerender(<Harness />)
     }
-    assert.ok(await settled(() => latestFrame.includes(120) && latestFrame.length < 30),
+    // 上界按「行预算」而不是「卡数」理解：挂载窗口是一段行区间，而机器
+    // 活动行之间不再留空行（工具卡的连续调用收紧成一簇），同样的视口因此
+    // 装得下约两倍的单行卡。60（= 120 的一半）仍然只在「整列全挂」时才
+    // 触发——那才是这条断言要防的回归。
+    assert.ok(await settled(() => latestFrame.includes(120) && latestFrame.length < 60),
       `${fullscreen ? 'fullscreen' : 'inline'}: historical failure pinned ${latestFrame.length} tool cards`)
     assert.ok(!latestFrame.includes(1), 'an offscreen footnote is not a force-mount request')
     if (!fullscreen) continue // Inline history uses the terminal's native scrollback.
