@@ -355,11 +355,10 @@ function renderBlockquote(token: Tokens.Blockquote, state: RenderState): string 
 }
 
 function renderCodeBlock(token: Tokens.Code, state: RenderState): string {
-  // Kimi Code style: a muted ```lang opening line (language tag + boundary
-  // for unhighlighted blocks) + 2-space indent; no closing fence (syntax
-  // colors or the indent already mark the end, it only cost vertical space).
+  // Tagged blocks use the original fence info as a muted caption. Untagged
+  // blocks keep a fence cue; neither needs a closing fence or another node.
   const theme = renderTheme(state)
-  const openFence = colorize('```' + (token.lang ?? ''), theme.subtle, 'foreground')
+  const caption = colorize(token.lang?.trim() ? token.lang : '```', theme.subtle, 'foreground')
   const indent = '  '
   const renderBody = (): string => {
     if (!state.highlight) {
@@ -381,10 +380,10 @@ function renderCodeBlock(token: Tokens.Code, state: RenderState): string {
   // stray blank line at the end of the block.
   const body = renderBody().replace(/\n+$/, '')
   if (body === '') {
-    return `${openFence}${EOL}`
+    return `${caption}${EOL}`
   }
   return (
-    openFence +
+    caption +
     EOL +
     body
       .split(EOL)

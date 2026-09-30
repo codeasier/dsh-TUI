@@ -62,6 +62,8 @@ dsh-tui
 
 Headings leave one blank line before the next block. Headings, strong text, emphasis, inline code, quotes, list markers/numbering and rules have dedicated [theme colors](themes.en.md). Soft-wrapped list lines align with the body; display-only padding is excluded from copied text. Thinking headers and streaming previews use the warning color at normal brightness. `Ctrl+O` expands the full text with Markdown colors rather than dimming the whole block. Minimal UI does not force these thinking colors.
 
+Code blocks with language/info text show that text verbatim as the header (for example, `ts title=demo`), without the opening ```` ``` ````. Untagged blocks keep the ```` ``` ```` cue. Existing syntax highlighting and indentation are unchanged; no code-block background is added. Selecting the header also copies its label. Soft-wrapped rows still join into logical lines, but display indentation and expanded tabs can differ from the original source; copying is not guaranteed to round-trip the original code or Markdown fences.
+
 Areas too narrow for both the marker and body fall back to ordinary wrapping. If the performance budget clips an exceptionally long streaming tail past its list context, that tail temporarily renders as ordinary text; the settled message restores the complete list layout.
 
 ## 2. Keymap quick reference

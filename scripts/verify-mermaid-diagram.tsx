@@ -109,7 +109,7 @@ assert.ok(wide.every(line => stringWidth(line) <= 100), 'the diagram stays insid
 assert.ok(wide.every(line => line === '' || line.startsWith('  ')), 'art rows carry the code-block indent')
 
 const narrow = renderDiagram(FLOWCHART, 40)
-assert.equal(narrow[0], '```mermaid', 'the source fallback is a real code block, fence line included')
+assert.equal(narrow[0], 'mermaid', 'the source fallback keeps its language caption without a fence marker')
 assert.ok(narrow.some(line => line.includes('flowchart LR')), 'a too-wide diagram falls back to the fenced source')
 assert.ok(!narrow.some(line => BOX_DRAWING.test(line)), 'no box art leaks into the fallback')
 assert.ok(

@@ -386,6 +386,7 @@ change, also run the closest focused script:
 | Markdown list markers, task items, nested blocks, image descriptions, strikethrough and rules | `node scripts/verify-markdown-blocks.mjs` |
 | Markdown hanging indentation, soft-wrap copying and long-list scrolling | `node --import tsx/esm scripts/verify-hanging-wrap.tsx`, `node --import tsx/esm scripts/verify-markdown-hanging.tsx` |
 | Markdown semantic colors, legacy palette fallback/cache, heading spacing and thinking colors | `node scripts/verify-markdown-palette.mjs` |
+| Markdown code-block captions (original info labels, untagged fence cues and copy boundaries) | `node scripts/verify-code-block-caption.mjs` |
 | Standalone Markdown nodes (tables, mermaid diagrams) and streaming block spacing | `pnpm verify:table-layout`, `pnpm verify:mermaid-diagram`, `node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx` |
 | Cross-process session mount ledger (failure behavior, strict reads, lock recovery, reservations) | `pnpm verify:session-mounts` |
 | Unsent-draft handoff across screens (snapshot, cursor, image bindings, ownership) | `pnpm verify:composer-draft-handoff`; end-to-end screen switching also `node scripts/verify-session-browser.mjs` |

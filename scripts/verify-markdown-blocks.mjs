@@ -57,7 +57,7 @@ for (const [label, source, first, minimum] of [
   const rendered = plain(source)
   const lines = rendered.split('\n')
   check(`${label} first marker occurs once`, lines.filter(line => line === first).length === 1, JSON.stringify(rendered))
-  check(`${label} paragraphs/fence/code keep marker-width indentation`, ['continuation bold', 'next line', '```txt', 'code one', 'code two', 'after code'].every(content => {
+  check(`${label} paragraphs/caption/code keep marker-width indentation`, ['continuation bold', 'next line', 'txt', 'code one', 'code two', 'after code'].every(content => {
     const line = lines.find(candidate => candidate.trim() === content)
     return line !== undefined && /^ */.exec(line)[0].length >= minimum
   }), JSON.stringify(rendered))
