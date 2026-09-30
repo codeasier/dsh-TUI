@@ -211,6 +211,7 @@ Bracketed paste（右键或终端原生粘贴）保留普通文本与换行。
 
 - 发送后，用户图片从持久化会话事件重新投影到 transcript；助手/工具结果含图片块也走同一预览路径。
 - 有 Kitty graphics 或 Sixel 时显示缩略图；否则（inline、辅助功能、多路复用器或读取失败）显示文字回退。
+- 少数客户端把图片当单元格内容来画（xterm.js 系，如 Orca Remote）：**只要它也支持 Sixel 就优先走 Sixel** —— 这类终端的 kitty 层负 `z` 不画、同 id 的 `a=p` 只新增不替换、`d=i` 连光栅数据一起删，图片既不能移动也不能休眠，而 Sixel 正是「画进单元格」的模型。仅在没有 Sixel 时才退回 kitty，并把 placement 抬到 `z ≥ 0`；代价是面板只遮住图片一部分时图片会透出来。
 - 切换或恢复会话不依赖原始本地路径。
 
 ### 缩放、平移与翻页
@@ -690,7 +691,7 @@ dsh-TUI 不预装通用技能；技能内容与发现规则由 DSH 及当前组�
   `layer`、`flip`、`aesthetic`、`hamburger`、`moon`、`moon8`、`whale-spout`、
   `whale-spin`、`whale-bubbles`、`clock`、`traffic_lights`、`comet`、`breathe`、
   `dots`、`arrow`、`spark`、`bar`、`braille`、`arc`、`circle`、`grow`、`noise`、
-  `bounce`、`rainbow`、`bar2`、`dqpb`、`toggle`，默认 `moon8`）。旧本地配置值
+  `bounce`、`rainbow`、`bar2`、`dqpb`、`toggle`，默认 `moon`）。旧本地配置值
   `claude` 读取时映射为 `moon8`，选择器不显示该旧预设；
   `/activity status` 查看当前选择。
 - `/preset <id>` 与 `/preset status` 见配置文档。

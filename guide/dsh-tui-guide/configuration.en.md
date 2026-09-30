@@ -46,7 +46,7 @@ A complete common override looks like this:
     # (that pins the workspace to the launch subdirectory, issue #96).
     effort: max
     activity: true
-    activityFrames: moon8
+    activityFrames: moon
     contextBar: true
     fullscreen: false
     terminalImages: true
@@ -69,7 +69,7 @@ A complete common override looks like this:
 | `minimal` | `false` | Minimal UI (极简界面): reduce header decoration and colors. **A display switch only** — a different thing from the kernel's `minimal` agent preset under `preset` below (that one decides which tools the model can use) |
 | `modes` | built-in trio | Shift+Tab session-mode cycle (plan/sandbox/approval atom bundles); defaults to default → plan → full-access |
 | `activity` | `true` | Show the live activity row |
-| `activityFrames` | `moon8` | Activity animation preset; `/activity` changes it at runtime. A legacy saved value of `claude` is read as `moon8`, and the picker no longer offers that legacy preset |
+| `activityFrames` | `moon` | Activity animation preset; an explicit setting or a saved `/activity` choice takes precedence. A legacy saved value of `claude` still reads as `moon8`, and the picker no longer offers that legacy preset |
 | `contextBar` | `true` | Segmented context-usage bar below the input box; `false` hides the row. Both this and `/settings → statusBar.contextBar` (also on by default) must be on for it to render |
 | `fullscreen` | `true` (factory default since 0.9.0) | `true` uses the alternate screen, app scrolling, and mouse selection; `false` uses inline mode |
 | `terminalImages` | `true` | Allow previews in supported terminals; `false` keeps text metadata and skips image probing and preview decoding. Restart to apply changes |

@@ -270,7 +270,7 @@ The command menu = built-in commands (50) + DSH registry commands (`/plan` `/goa
 | `/effort` | `status` / `<id>` | reasoning effort: no-arg slider (`←/→` adjust); `status` current level; `<id>` set directly. Persisted to `~/.dsh-tui/effort.json`; new-session start level follows /settings `effortDefault` (§5.3) |
 | `/thinking` | none | extended-thinking display toggle (thinking expands item by item while streaming) |
 | `/tokens` | none | token usage + context percentage |
-| `/activity` | `frames <名>` / `status` | working-status animation: no-arg selector, `frames <名>` sets directly (includes `random`), default `moon8`. Persisted to `~/.dsh-tui/working-activity.json` |
+| `/activity` | `frames <名>` / `status` | working-status animation: no-arg selector, `frames <名>` sets directly (includes `random`), default `moon` (text semicircles); existing saved selections stay unchanged. Persisted to `~/.dsh-tui/working-activity.json` |
 | `/preset` | `<id>` / `status` | agent preset: `standard` / `ptc` (old 0.1.1 name `code`) / `minimal` / `cordis` / **Liangshen mode `liangshen`**; **cannot switch an already-started session**. Persisted to `~/.dsh-tui/agent-preset.json` |
 | `/theme` | `<名字>` / `status` | theme: no-arg selector; `<名字>` switch directly; `status` current theme (auto appends the OSC 11 result). Persisted to `~/.dsh-tui/theme.json` |
 | `/color` | no-arg / `<名>` / `status` / `reset` | session accent color: no-arg opens the palette (`↑/↓` pick, `Enter` apply); `<名>` set directly; `reset` back to default. Colors `red/orange/yellow/green/blue/purple/pink/cyan`, saved per session |
@@ -433,6 +433,15 @@ An empty session shows the whale logo area at the top (scrolls away with the con
 - Pixel whale art and idle behavior ported from [dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale) (author
   [@lhh010](https://github.com/lhh010)), with thanks.
 
+**One-line summaries** (default on)
+
+- Thinking blocks and tool cards each take **a single line**: thinking is `+ 思考 · 7s`; a tool card is its
+  header row (`• Bash(ls -la)`) carrying the tool name, argument or path, status dot and elapsed clock.
+- Open/close: **click the row**, or press `Ctrl+O` to toggle detail for the whole transcript. A thinking
+  block's `+` becomes `-` while it is open.
+- Expanded, thinking shows its full text and a tool card its complete output (uncapped); a failed card
+  collapses to its `✗` header row plus the failure hint.
+
 **Long single-line fold** (default on)
 
 - Text with **a single line over 1000 chars** folds into
@@ -487,7 +496,7 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | splashFont | big-text face on the header splash: Daily rotation (default, changes with the local date) / bold / square / bevel / wide / dot matrix / stencil / thin (classic) / slab. Picking a face pins it; picking Daily rotation restores the rotation. Applies immediately |
 | whaleGirl | maid portrait (default off): swaps the header's pixel whale for the author-drawn maid as a **real raster** (Kitty/Sixel); falls back to the pixel whale without graphics support |
 | diffLayout | Edit/Write diff layout: auto (two columns ≥110 cols) / split / unified |
-| thinkingFold | thinking block: preview (2-3 line preview + folded when settled) / full (expanded to end of turn) |
+| thinkingFold | thinking block: preview (2-3 line live preview, folded to a single `+ 思考 · Ns` row when settled, the mark flipping to `-` while open) / full (expanded to end of turn) |
 | effortDefault | default reasoning effort: auto / off / low / high / max. Start level for new sessions (details below) |
 | smoothStreaming | smooth streaming output (default on): replies/thinking/tool-card text reveal at ~30fps; replay/history always direct |
 | toolBackground | tool-card background emphasis: none / subtle / strong |
@@ -554,7 +563,7 @@ When dsh exits unexpectedly, safe mode gives a **read-only** environment diagnos
 | Theme | `/theme` | `auto` (OSC 11 follows terminal background) / `light` / `dark` / `dark-ansi`; `/theme <名>` direct; `/theme status` for the result |
 | Custom theme | manual | `~/.dsh-tui/themes/<名>.json`, `{base, colors}` format, hot-swap on select; naming it `auto` gets shadowed by the built-in |
 | Language | `/lang` | `en` / `zh` hot switch; priority `DSH_TUI_LANG` > profile config (legacy: settings.yaml user layer > cordis.yml) > persisted |
-| Status animation | `/activity` | selector or `/activity frames <名>`; default `moon8`, `random` randomizes |
+| Status animation | `/activity` | selector or `/activity frames <名>`; default `moon`, `random` randomizes |
 
 **Theme priority**: `DSH_TUI_THEME` > `~/.dsh-tui/theme.json` > OSC 11 terminal-background detection > dark fallback.
 

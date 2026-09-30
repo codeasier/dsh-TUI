@@ -192,6 +192,7 @@ Click a staged `[Image #N]` token or a transcript thumbnail to open one shared, 
 - The prompt, status rows and sticky header stay visible.
 - Open original opens the unchanged bytes in the system viewer and preserves colors and animation.
 - Without Kitty/Sixel graphics, the preview falls back to a metadata-only card; narrow terminals get the same.
+- A few clients paint images as cell content (the xterm.js family, e.g. Orca Remote): **Sixel wins there whenever it is available**, because their Kitty layer never paints a negative placement, adds a placement per `a=p` instead of replacing the one with the same id, and frees the raster when a placement is deleted — an image could neither move nor be parked. Without Sixel they fall back to Kitty with placements at `z >= 0`, where a panel covering part of an image lets it show through.
 
 ### Zoom, pan, and switching
 
@@ -631,7 +632,7 @@ Additional forms:
   `triangle`, `box`, `box2`, `corners`, `point`, `layer`, `flip`, `aesthetic`,
   `hamburger`, `moon`, `moon8`, `whale-spout`, `whale-spin`, `whale-bubbles`, `clock`,
   `traffic_lights`, `comet`, `breathe`, `dots`, `arrow`, `spark`, `bar`, `braille`, `arc`,
-  `circle`, `grow`, `noise`, `bounce`, `rainbow`, `bar2`, `dqpb`, `toggle`; default `moon8`.
+  `circle`, `grow`, `noise`, `bounce`, `rainbow`, `bar2`, `dqpb`, `toggle`; default `moon`.
 - A legacy local `claude` setting is read as `moon8`, and the picker does not show that legacy preset.
 - `/activity status` reports the current choice.
 - `/preset <id>` and `/preset status` are described in the configuration guide.

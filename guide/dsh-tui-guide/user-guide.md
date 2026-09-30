@@ -259,7 +259,7 @@ dsh-tui
 | `/effort` | `status` / `<id>` | 推理强度：无参滑杆（`←/→` 实时调整）；`status` 当前档位；`<id>` 直接设定。持久化 `~/.dsh-tui/effort.json`；新会话起始档看 /settings 的 `effortDefault`（§5.3） |
 | `/thinking` | 无 | 扩展思考显示开关（流式时思考逐条展开） |
 | `/tokens` | 无 | token 用量 + 上下文百分比 |
-| `/activity` | `frames <名>` / `status` | 工作状态行动画：无参选择器浏览，`frames <名>` 直接设置（含 `random`），默认 `moon8`。持久化 `~/.dsh-tui/working-activity.json` |
+| `/activity` | `frames <名>` / `status` | 工作状态行动画：无参选择器浏览，`frames <名>` 直接设置（含 `random`），默认 `moon`（文字半圆动画），已有持久化选择不变。持久化 `~/.dsh-tui/working-activity.json` |
 | `/preset` | `<id>` / `status` | Agent 预设切换：`standard` / `ptc`（旧 0.1.1 名 `code`）/ `minimal` / `cordis` / **梁神模式 `liangshen`**；**已开始的会话不可切换**。持久化 `~/.dsh-tui/agent-preset.json` |
 | `/theme` | `<名字>` / `status` | 主题：无参选择器；`<名字>` 直接切换；`status` 当前主题（auto 时附 OSC 11 解析结果）。持久化 `~/.dsh-tui/theme.json` |
 | `/color` | 无参 / `<名>` / `status` / `reset` | 会话强调色：无参打开调色板（`↑/↓` 选、`Enter` 应用）；`<名>` 直设；`reset` 恢复默认。颜色 `red/orange/yellow/green/blue/purple/pink/cyan`，按会话保存 |
@@ -415,6 +415,13 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 - 像素鲸鱼原图与闲置行为移植自 [dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale)（作者
   [@lhh010](https://github.com/lhh010)），特此致谢。
 
+**一行摘要**（默认开）
+
+- 思考块与工具卡默认都只占**一行**：思考是 `+ 思考 · 7s`，工具卡是 `• Bash(ls -la)` 这样的标题行
+  （工具名、参数或路径、状态点、耗时都在标题行上）。
+- 展开/收起：**点这一行**，或键盘 `Ctrl+O` 切换整段转录的详情。思考块的 `+` 展开后变成 `-`。
+- 展开后思考显示全文、工具卡显示完整输出（不截断）；失败的卡折叠时只剩 `✗` 标题行加失败提示。
+
 **超长单行折叠**（默认开）
 
 - **单行超过 1000 字符**的文本折叠为 `… 已折叠 N 字符（点击或 ctrl+o 展开）` 标记。
@@ -467,7 +474,7 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 | splashFont | 开屏大字字体：按天轮换（默认，随本地日期换款）/ 加粗 / 方角实心 / 半立体 / 宽体 / 点阵灰度 / 镂空模板 / 细笔 / 方板。选某一款即固定那一款，选回「按天轮换」恢复。立即生效 |
 | whaleGirl | 女仆娘立绘（默认关）：标题像素鲸鱼换成作者绘制的女仆娘**真图**（Kitty/Sixel 图像协议）；不支持时回落像素鲸鱼 |
 | diffLayout | Edit/Write diff 布局：auto（≥110 列双栏）/ split / unified |
-| thinkingFold | 思考块：preview（流式 2-3 行预览 + 落定折叠）/ full（展开到轮末） |
+| thinkingFold | 思考块：preview（流式 2-3 行预览，落定后收成一行 `+ 思考 · Ns`，展开时前置标记变 `-`）/ full（展开到轮末） |
 | effortDefault | 默认推理强度：auto / off / low / high / max。新会话的起始档位（细节见下） |
 | smoothStreaming | 流式平滑输出（默认开）：回复/思考/工具卡正文按 ~30fps 匀速揭示；回放/历史完整直出 |
 | toolBackground | 工具卡背景强调：none / subtle / strong |
@@ -533,7 +540,7 @@ dsh 意外退出时，安全模式给出**只读**的环境诊断、profile 插�
 | 主题 | `/theme` | `auto`（OSC 11 跟随终端背景）/ `light` / `dark` / `dark-ansi`；`/theme <名>` 直接切；`/theme status` 看解析结果 |
 | 自定义主题 | 手动 | `~/.dsh-tui/themes/<名>.json`，`{base, colors}` 格式，选中即热切换；命名为 `auto` 会被内置遮蔽 |
 | 语言 | `/lang` | `en` / `zh` 热切换；优先级 `DSH_TUI_LANG` > profile 配置（旧版 settings.yaml 用户层 > cordis.yml）> 持久化 |
-| 状态行动画 | `/activity` | 选择器或 `/activity frames <名>`；默认 `moon8`，`random` 随机 |
+| 状态行动画 | `/activity` | 选择器或 `/activity frames <名>`；默认 `moon`，`random` 随机 |
 
 **主题优先级**：`DSH_TUI_THEME` > `~/.dsh-tui/theme.json` > OSC 11 终端背景检测 > dark 回退。
 
