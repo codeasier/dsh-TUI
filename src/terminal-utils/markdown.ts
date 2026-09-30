@@ -75,10 +75,9 @@ export function stripPromptXMLTags(content: string): string {
 let markedInitialized = false
 
 /**
- * Configure the shared `marked` instance once. Strikethrough parsing is
- * disabled so that `~100` renders literally instead of as deleted text —
- * models use `~` far more often for "approximate" than for real
- * strikethrough. LaTeX math becomes `math`/`mathBlock` tokens (see
+ * Configure the shared `marked` instance once. Only double-tilde deletion
+ * syntax is enabled: single tildes used for approximate values stay literal.
+ * LaTeX math becomes `math`/`mathBlock` tokens (see
  * math.ts). Every lexer caller — Markdown and StreamingMarkdown's boundary
  * lex — must run this first so both agree on block boundaries.
  */
@@ -88,8 +87,8 @@ export function configureMarked(): void {
 
   marked.use({
     tokenizer: {
-      del() {
-        return undefined
+      del(src) {
+        return src.startsWith('~~') ? false : undefined
       },
     },
     extensions: [...MATH_MARKDOWN_EXTENSIONS],
@@ -235,8 +234,14 @@ function dispatch(token: Token, state: RenderState): string {
   if (isToken(token, 'em')) return renderEmphasis(token, state)
   if (isToken(token, 'strong')) return renderStrong(token, state)
   if (isToken(token, 'heading')) return renderHeading(token, state)
-  if (isToken(token, 'hr')) return '---'
-  if (isToken(token, 'image')) return token.href
+  if (isToken(token, 'del')) {
+    return chalk.strikethrough(token.tokens.map(child => dispatch(child, inlineChildren(state))).join(''))
+  }
+  if (isToken(token, 'hr')) return chalk.dim('\u2500'.repeat(16)) + EOL
+  if (isToken(token, 'image')) {
+    const target = state.parent?.type === 'link' ? token.href : createHyperlink(token.href)
+    return token.text ? `${token.text} (${target})` : target
+  }
   if (isToken(token, 'link')) return renderLink(token, state)
   if (isToken(token, 'list')) return renderList(token, state)
   if (isToken(token, 'list_item')) return renderListItem(token, state)
@@ -249,8 +254,8 @@ function dispatch(token: Token, state: RenderState): string {
   // Top-level math blocks are standalone MathBlock nodes; this path only
   // sees blocks nested in list items / blockquotes (or formatToken callers).
   if (isMathBlockToken(token)) return renderNestedMathBlock(token)
-  if (isToken(token, 'def') || isToken(token, 'del') || isToken(token, 'html')) {
-    // Link definitions, strikethrough, and raw HTML carry no ANSI
+  if (isToken(token, 'def') || isToken(token, 'html')) {
+    // Link definitions and raw HTML carry no ANSI
     // representation.
     return ''
   }
@@ -379,11 +384,36 @@ function renderList(token: Tokens.List, state: RenderState): string {
 
 function renderListItem(token: Tokens.ListItem, state: RenderState): string {
   const indent = '  '.repeat(state.listDepth)
-  const childState = withParent(
-    { ...state, listDepth: state.listDepth + 1 },
-    token,
-  )
-  return token.tokens.map(child => indent + dispatch(child, childState)).join('')
+  const depth = state.listDepth + 1
+  const bullet = state.ordinal === null ? '-' : `${formatListMarker(depth, state.ordinal)}.`
+  const theme = getActiveTheme()
+  const marker = colorize(bullet, theme.permission, 'foreground')
+  const checkbox = token.task
+    ? colorize(token.checked ? '[\u2713]' : '[ ]', token.checked ? theme.success : theme.subtle, 'foreground') + ' '
+    : ''
+  const prefix = `${indent}${marker} ${checkbox}`
+  const continuation = indent + ' '.repeat(stringWidth(bullet + ' ' + stripAnsi(checkbox)))
+  const childState = withParent({ ...state, listDepth: depth }, token)
+  let first = true
+  const body = token.tokens.map(child => {
+    let body = dispatch(child, childState).replace(/\n+$/, '')
+    // Newer marked versions include a checkbox token; the prefix owns it.
+    if (!body) return child.type === 'space' ? EOL : ''
+    if (child.type === 'list') {
+      // Nested lists already carry their own absolute depth indentation.
+      const nestedIndent = '  '.repeat(depth)
+      body = body.split(EOL)
+        .map(line => line.startsWith(nestedIndent) ? line.slice(nestedIndent.length) : line)
+        .join(EOL)
+    }
+    return body.split(EOL).map(line => {
+      if (!stripAnsi(line).trim()) return ''
+      const lead = first ? prefix : continuation
+      first = false
+      return lead + line
+    }).join(EOL) + EOL
+  }).join('')
+  return first ? prefix + EOL + body : body
 }
 
 function renderParagraph(token: Tokens.Paragraph, state: RenderState): string {
@@ -391,26 +421,11 @@ function renderParagraph(token: Tokens.Paragraph, state: RenderState): string {
 }
 
 function renderText(token: Tokens.Text, state: RenderState): string {
-  const { parent, listDepth, ordinal } = state
-
-  if (parent?.type === 'link') {
-    // Already inside a link: the link handler wraps everything in one OSC 8
-    // sequence, and a nested one would override the real href. Stay plain.
-    return token.text
-  }
-
-  if (parent?.type === 'list_item') {
-    const bullet = ordinal === null ? '-' : `${formatListMarker(listDepth, ordinal)}.`
-    const body = token.tokens
-      ? token.tokens.map(child => dispatch(child, withParent(state, token))).join('')
-      : linkifyText(token.text)
-    // Blue bullet marker: list structure gets a tint without loading the
-    // whole item (kimi-style `•` in the accent color).
-    const tinted = colorize(bullet, getActiveTheme().permission, 'foreground')
-    return `${tinted} ${body}${EOL}`
-  }
-
-  return linkifyText(token.text)
+  if (state.parent?.type === 'link') return token.text
+  const body = token.tokens
+    ? token.tokens.map(child => dispatch(child, withParent(state, token))).join('')
+    : linkifyText(token.text)
+  return body + (state.parent?.type === 'list_item' ? EOL : '')
 }
 
 function renderTable(token: Tokens.Table, state: RenderState): string {

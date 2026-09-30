@@ -145,6 +145,8 @@ CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一�
 
 **VS Code**：用集成终端，或用 `dsh-tui-vscode` 扩展。见 [VS Code 使用指南](docs/vscode.md)。**Herdr**：在 [Herdr](https://herdr.dev) 窗格运行 `dsh-tui`，经其本地集成 API 报告 `idle` / `working` / `blocked`。
 
+Markdown 的紧凑、松散、有序与嵌套列表保留标记；任务项显示 `[ ]` / `[✓]`，后续段落和代码保持在标记之后缩进。图片显示 alt 文本与可见 URL。双波浪 `~~文本~~` 显示终端删除线，`~100` 等单波浪近似值保持字面文本；水平分隔线独占一行，长度为 16 个字符。
+
 ## 快捷键与鼠标
 
 `Enter` 发送 · `Tab` 补全 · `Ctrl+Enter` 打断并发送 · `Alt+Up` 取回上一条 · `Esc` 逐层关闭，空输入双击回溯 · `Ctrl+O` 详情 · `Ctrl+R` 搜历史 · `Ctrl+V` 粘贴 · `Ctrl+Shift+E` 全屏草稿编辑器 · `?` 快捷键 · `←` 转后台。

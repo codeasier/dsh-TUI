@@ -167,6 +167,8 @@ Full guide: [Session migration](docs/migrate.en.md).
 
 **VS Code**: use the integrated terminal or the `dsh-tui-vscode` extension. See [VS Code guide](docs/vscode.en.md). **Herdr**: run `dsh-tui` in a [Herdr](https://herdr.dev) pane; `idle` / `working` / `blocked` are reported through its local integration API.
 
+Markdown keeps markers in tight, loose, ordered and nested lists; task items show `[ ]` / `[✓]`, and continuation paragraphs and code stay indented behind the marker. Images show alt text and a visible URL. Double-tilde `~~text~~` uses terminal strikethrough; single-tilde approximations such as `~100` stay literal. Horizontal rules render as a separate 16-cell line.
+
 ## Keybindings & Mouse
 
 `Enter` send · `Tab` complete · `Ctrl+Enter` interrupt and send · `Alt+Up` recall the last message · `Esc` dismiss, double-`Esc` rewinds · `Ctrl+O` details · `Ctrl+R` history · `Ctrl+V` paste · `Ctrl+Shift+E` fullscreen draft editor · `?` shortcuts · `←` background the session.
