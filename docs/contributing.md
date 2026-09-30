@@ -290,7 +290,10 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | Sixel 编码、worker 缓存、缩略图/预览生命周期 | `node --import tsx/esm scripts/verify-terminal-images-sixel.tsx`、`node --import tsx/esm scripts/verify-sixel-transcript.tsx`；耗时对比 `node --import tsx/esm scripts/bench-sixel-encode.tsx` |
 | Markdown 列表标记、任务项、列表内块、图片描述、删除线与分割线 | `node scripts/verify-markdown-blocks.mjs` |
 | Markdown 悬挂缩进、软换行复制与超长列表滚动 | `node --import tsx/esm scripts/verify-hanging-wrap.tsx`、`node --import tsx/esm scripts/verify-markdown-hanging.tsx` |
-| Markdown 语义主题色、旧 palette 回退/缓存、标题间距与思考颜色 | `node scripts/verify-markdown-palette.mjs` |
+| Markdown 语义主题色/链接、旧 palette 回退/缓存、标题间距与思考颜色 | `node scripts/verify-markdown-palette.mjs` |
+| Markdown 块间距、流式/落定与长块分片一致性 | `node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx`、`node --import tsx/esm scripts/verify-streaming-markdown-blocks.tsx` |
+| 单行工具摘要、展开与截断悬停提示 | `node --import tsx/esm scripts/repro-toolcards.tsx`、`node --import tsx/esm scripts/verify-tool-tooltip-gating.tsx` |
+| 默认/自定义页边距、内容宽度与出血边栏 | `node --import tsx/esm scripts/verify-page-margin.tsx` |
 | Markdown 代码块标题（原始 info 标签、无标签围栏提示与复制边界） | `node scripts/verify-code-block-caption.mjs` |
 | Markdown 独立节点（表格、mermaid 图、公式块）、LaTeX 公式与流式分块间距 | `pnpm verify:table-layout`、`pnpm verify:mermaid-diagram`、`pnpm verify:latex-math`、`node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx` |
 | 跨进程会话占用账本（失败行为、严格读、锁回收、预约） | `pnpm verify:session-mounts` |

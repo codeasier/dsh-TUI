@@ -54,6 +54,7 @@ export type Theme = {
   markdownStrong: string
   markdownEmph: string
   markdownCode: string
+  markdownLink: string
   markdownBlockQuote: string
   markdownListItem: string
   markdownListEnumeration: string
@@ -278,14 +279,15 @@ const darkTheme: Theme = {
   warning: rgb('#D8B270'), // Soft amber
   merged: rgb('#B3A0D4'), // Soft violet (matches autoAccept)
   warningShimmer: rgb('#E4C78E'),
-  markdownHeading: rgb('#7DA1DE'),
-  markdownStrong: rgb('#E5C07B'),
+  markdownHeading: rgb('#B3A0D4'),
+  markdownStrong: rgb('#F5B35D'),
   markdownEmph: rgb('#D8B270'),
-  markdownCode: rgb('#ABC2EC'),
-  markdownBlockQuote: rgb('#D8B270'),
-  markdownListItem: rgb('#ABC2EC'),
-  markdownListEnumeration: rgb('#5E88CC'),
-  markdownHorizontalRule: rgb('#8D95A6'),
+  markdownCode: rgb('#8DCB9A'),
+  markdownLink: rgb('#68C6CF'),
+  markdownBlockQuote: rgb('#B8B1A6'),
+  markdownListItem: rgb('#C7AA85'),
+  markdownListEnumeration: rgb('#68C6CF'),
+  markdownHorizontalRule: rgb('#74808D'),
   diffAdded: rgb('#27392C'),
   diffRemoved: rgb('#3E2A2C'),
   diffAddedDimmed: rgb('#2B352C'),
@@ -369,13 +371,14 @@ const lightTheme: Theme = {
   warning: rgb('#C08A3E'), // Muted amber
   merged: rgb('#9B86B8'), // Muted violet (matches autoAccept)
   warningShimmer: rgb('#D0A050'),
-  markdownHeading: rgb('#3F6CC4'),
+  markdownHeading: rgb('#7953AA'),
   markdownStrong: rgb('#8A6A00'),
   markdownEmph: rgb('#8A6A00'),
-  markdownCode: rgb('#3F6CC4'),
-  markdownBlockQuote: rgb('#8A6A00'),
-  markdownListItem: rgb('#3F6CC4'),
-  markdownListEnumeration: rgb('#3F6CC4'),
+  markdownCode: rgb('#276941'),
+  markdownLink: rgb('#087C8A'),
+  markdownBlockQuote: rgb('#766A55'),
+  markdownListItem: rgb('#85613B'),
+  markdownListEnumeration: rgb('#087C8A'),
   markdownHorizontalRule: rgb('#8991A0'),
   diffAdded: rgb('#DCEBDD'),
   diffRemoved: rgb('#F2DEDE'),
@@ -463,12 +466,13 @@ const darkAnsiTheme: Theme = {
   warning: 'ansi:yellowBright',
   merged: 'ansi:magentaBright',
   warningShimmer: 'ansi:yellowBright',
-  markdownHeading: 'ansi:blueBright',
+  markdownHeading: 'ansi:magentaBright',
   markdownStrong: 'ansi:yellowBright',
   markdownEmph: 'ansi:yellowBright',
-  markdownCode: 'ansi:blueBright',
-  markdownBlockQuote: 'ansi:yellowBright',
-  markdownListItem: 'ansi:blueBright',
+  markdownCode: 'ansi:greenBright',
+  markdownLink: 'ansi:cyanBright',
+  markdownBlockQuote: 'ansi:white',
+  markdownListItem: 'ansi:yellow',
   markdownListEnumeration: 'ansi:cyanBright',
   markdownHorizontalRule: 'ansi:white',
   diffAdded: 'ansi:green',
@@ -527,6 +531,7 @@ export const MARKDOWN_THEME_FALLBACKS = Object.freeze({
   markdownStrong: 'toolNameMutate',
   markdownEmph: 'warning',
   markdownCode: 'permission',
+  markdownLink: 'ide',
   markdownBlockQuote: 'warning',
   markdownListItem: 'permission',
   markdownListEnumeration: 'ide',

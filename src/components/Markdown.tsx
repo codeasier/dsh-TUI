@@ -2,7 +2,7 @@ import React from 'react'
 import { marked, type Token, type Tokens } from 'marked'
 import { Box, Text, useTheme } from '../ui.js'
 import { getTheme, type Theme } from '../theme.js'
-import { configureMarked, formatTokenWithLayout, joinFormattedMarkdown, trimFormattedMarkdown, stripPromptXMLTags, type FormattedMarkdown } from '../terminal-utils/markdown.js'
+import { configureMarked, formatMarkdownBlockWithLayout, markdownBlocks, joinFormattedMarkdown, trimFormattedMarkdown, stripPromptXMLTags, type FormattedMarkdown } from '../terminal-utils/markdown.js'
 import { getCliHighlightPromise, type CliHighlight } from '../terminal-utils/cliHighlight.js'
 import { isMermaidLang } from '../terminal-utils/mermaid.js'
 import { isMathBlockToken, isMathToken } from '../terminal-utils/math.js'
@@ -146,13 +146,13 @@ function renderTokensToNodes(
   const nodes: React.ReactNode[] = []
   let ansiText: FormattedMarkdown = { text: '', continuationIndent: [0] }
   let textParts: FormattedMarkdown[] = []
-  let afterOwnNode = false
+  let textGap = 0
 
   const flushAnsiText = (): void => {
     if (!ansiText.text && textParts.length === 0) return
     if (textParts.length === 0) {
       const part = trimFormattedMarkdown(ansiText, true, true)
-      nodes.push(<Text key={nodes.length} dimColor={dimColor} continuationIndent={part.continuationIndent.some(indent => indent > 0) ? part.continuationIndent : undefined}>{part.text}</Text>)
+      nodes.push(<Box key={nodes.length} marginTop={textGap}><Text dimColor={dimColor} continuationIndent={part.continuationIndent.some(indent => indent > 0) ? part.continuationIndent : undefined}>{part.text}</Text></Box>)
     } else {
       textParts.push(ansiText)
       let first = 0
@@ -164,7 +164,7 @@ function renderTokensToNodes(
       // Each internal boundary replaces exactly one source newline with a
       // column-child boundary. Only the whole text span trims outer space.
       nodes.push(
-        <Box key={nodes.length} flexDirection="column">
+        <Box key={nodes.length} flexDirection="column" marginTop={textGap}>
           {textParts.slice(first, last + 1).map((part, index) => {
             const internal = index + first < last
             const text = internal ? part.text.slice(0, -1) : part.text
@@ -178,41 +178,35 @@ function renderTokensToNodes(
     textParts = []
   }
 
-  for (const token of tokens) {
-    const ownNodeBefore = afterOwnNode
-    afterOwnNode = false
+  for (const { token, gap } of markdownBlocks(tokens)) {
     if (token.type === 'table') {
       flushAnsiText()
       nodes.push(
-        <MarkdownTable
-          key={nodes.length}
-          token={token as Tokens.Table}
-          highlight={highlight}
-        />,
+        <Box key={nodes.length} marginTop={gap}>
+          <MarkdownTable token={token as Tokens.Table} highlight={highlight} />
+        </Box>,
       )
     } else if (inlineMathImages && token.type === 'paragraph' && hasInlineMath(token)) {
       flushAnsiText()
-      nodes.push(<InlineMathParagraph key={nodes.length} token={token as Tokens.Paragraph} highlight={highlight} />)
-      afterOwnNode = true
-    } else if (ownNodeBefore && token.type === 'space') {
-      // The blank line after a paragraph that became its own node is the
-      // column gap now; as text it would flush as an empty node (an extra
-      // gap row). In a text run the same newline is trimmed at the flush.
+      nodes.push(<Box key={nodes.length} marginTop={gap}><InlineMathParagraph token={token as Tokens.Paragraph} highlight={highlight} /></Box>)
     } else if (isMathBlockToken(token)) {
       flushAnsiText()
-      nodes.push(<MathBlock key={nodes.length} token={token} dimColor={dimColor} />)
+      nodes.push(<Box key={nodes.length} marginTop={gap}><MathBlock token={token} dimColor={dimColor} /></Box>)
     } else if (isMermaidToken(token)) {
       flushAnsiText()
       nodes.push(
-        <MermaidDiagram
-          key={nodes.length}
-          token={token}
-          highlight={highlight}
-          dimColor={dimColor}
-        />,
+        <Box key={nodes.length} marginTop={gap}>
+          <MermaidDiagram token={token} highlight={highlight} dimColor={dimColor} />
+        </Box>,
       )
     } else {
-      ansiText = joinFormattedMarkdown([ansiText, formatTokenWithLayout(token, highlight, palette)])
+      if (ansiText.text === '' && textParts.length === 0) textGap = gap
+      const separator: FormattedMarkdown = { text: '\n'.repeat(gap), continuationIndent: Array(gap + 1).fill(0) }
+      ansiText = joinFormattedMarkdown([
+        ansiText,
+        ...(ansiText.text !== '' || textParts.length > 0 ? [separator] : []),
+        formatMarkdownBlockWithLayout(token, highlight, palette),
+      ])
       // A top-level token boundary keeps inline formatting and code fences
       // intact while letting the painter cull finished offscreen text blocks.
       if (ansiText.text.length >= TEXT_BLOCK_BUDGET && ansiText.text.endsWith('\n')) {
@@ -270,7 +264,7 @@ function MarkdownImpl({ children, dimColor = false, cacheTokens = true, inlineMa
   }, [children, dimColor, highlight, cacheTokens, mathRendering, inlineMathImages, palette])
 
   return (
-    <Box flexDirection="column" gap={1}>
+    <Box flexDirection="column">
       {renderedNodes}
     </Box>
   )

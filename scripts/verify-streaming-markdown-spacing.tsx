@@ -3,8 +3,8 @@
  *
  * The incremental renderer splits completed Markdown blocks from the growing
  * tail. Its two halves must have the same display-row spacing as one ordinary
- * Markdown render: real paragraph gaps stay, but a fenced code block followed
- * directly by prose must not gain an invented blank row.
+ * Markdown render: paragraph source separation stays, and structural block
+ * boundaries always receive exactly one blank row, even without source gaps.
  *
  * Run: node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx
  */
@@ -88,13 +88,21 @@ const cases: readonly {
   name: string
   source: string
   stages?: readonly string[]
+  expected?: readonly string[]
 }[] = [
-  { name: 'paragraph gap', source: 'alpha\n\nbeta' },
-  { name: 'heading gap', source: '## alpha\nbeta' },
+  { name: 'paragraph gap', source: 'alpha\n\nbeta', expected: ['alpha', '', 'beta'] },
+  { name: 'paragraph soft newline', source: 'alpha\nbeta', expected: ['alpha', 'beta'] },
+  { name: 'extra source blanks normalize once', source: 'alpha\n\n\n\nbeta', expected: ['alpha', '', 'beta'] },
+  { name: 'heading gap', source: '## alpha\nbeta', expected: ['alpha', '', 'beta'] },
+  { name: 'heading to heading', source: '## alpha\n### beta', expected: ['alpha', '', 'beta'] },
+  { name: 'compact paragraph to list', source: 'alpha\n- beta\n- gamma', expected: ['alpha', '', '- beta', '- gamma'] },
+  { name: 'compact paragraph to quote', source: 'alpha\n> beta', expected: ['alpha', '', '▎ beta'] },
+  { name: 'compact rule to paragraph', source: '***\nbeta', expected: ['─'.repeat(16), '', 'beta'] },
   {
     name: 'incremental code-to-prose adjacency',
     source: '```\nconst value = 1\n```\nbeta',
     stages: ['```\nconst value = 1\n```', '```\nconst value = 1\n```\nbeta'],
+    expected: ['```', '  const value = 1', '', 'beta'],
   },
   { name: 'list paragraph gap', source: '- alpha\n- beta\n\ngamma' },
   { name: 'table paragraph gap', source: '| a | b |\n| - | - |\n| 1 | 2 |\n\ntail' },
@@ -145,8 +153,11 @@ const cases: readonly {
   },
 ]
 
-for (const { name, source, stages } of cases) {
+for (const { name, source, stages, expected: golden } of cases) {
   const expected = await renderRows(source, false)
+  if (golden && JSON.stringify(expected) !== JSON.stringify(golden)) {
+    throw new Error(`${name}: block policy mismatch\nexpected=${JSON.stringify(golden)}\nactual=${JSON.stringify(expected)}`)
+  }
   const actual = await renderRows(stages ?? source, true)
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(

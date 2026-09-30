@@ -455,6 +455,7 @@ An empty session shows the whale logo area at the top (scrolls away with the con
 
 - Thinking blocks and tool cards each take **a single line**: thinking is `│ + 思考 · 7s`; a tool card is
   its header row (`│ • Bash(ls -la)`) carrying the tool name, argument or path, status dot and elapsed clock.
+- Settled tool summaries are neutral and non-bold. Long commands and arguments truncate to the available width without continuation rows; hover reveals hidden content. Running, failed and hovered states remain distinct, and expanded cards retain category colors.
 - Open/close: **click the row**, or press `Ctrl+O` to toggle detail for the whole transcript. A thinking
   block's `+` becomes `-` while it is open.
 - Expanded, thinking shows its full text and a tool card its complete output (uncapped); a failed card
@@ -523,7 +524,7 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | mathImageScale | formula image size (default `auto`; same **Formula** subpage), used with LaTeX math → Image: `auto` matches the body text, `large` / `xlarge` set **display** formulas bigger. Terminal images are drawn one device pixel per pixel, so "bigger" literally means more pixels per stroke — the only sharpness lever there is. Inline formulas are unaffected (they must fit one row). Applies immediately |
 | scrollGutter | transcript gutter: timeline (turn timeline, default) / scrollbar (proportional) / hidden. Applies immediately |
 | pageMargin | page margin: inset from all four terminal edges. Presets none / slim / normal (default) / roomy, or custom `NxM` (details below). Applies immediately |
-| foldTerminalCommand | fold terminal commands (default off): multi-line commands on terminal cards (Bash/PowerShell) fold to first line + count; `Ctrl+O` or click to expand |
+| foldTerminalCommand | terminal command summary (default off): on keeps the first source line + count; off flattens multi-line commands into one summary row. Both truncate to width; `Ctrl+O` or click opens the complete command |
 | expandEditor | full-screen draft editor (default on): `⛶` at the input line end or `Ctrl+Shift+E` expands to a full-screen editor; `Ctrl+Enter` send, `Esc` collapse (draft kept); off hides both entries |
 | statusBar.* | all status-bar toggles above (compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory; statusBar.sessionId is the bottom-bar display toggle, unrelated to cordis startup sessionId) |
 
@@ -532,7 +533,7 @@ last `/effort` (effort.json) > model default.
 
 **scrollGutter**: the scrollbar track can be dragged directly; `Shift`/`Alt`/`Ctrl`+drag is still text selection.
 
-**pageMargin**: custom `NxM` = `N` columns left/right, `M` rows top/bottom (cap 8x4); only `N` means 1 row top/bottom.
+**pageMargin**: default `normal` is 3 columns per side and 1 row top/bottom. Custom `NxM` = `N` columns left/right, `M` rows top/bottom (cap 8x4); only `N` means 1 row top/bottom; `2x1` retains the previous inset.
 
 Namespaces not declared as TUI blocks are listed read-only; edit the profile config by hand (`~/.dsh/settings.yaml` on older hosts).
 These settings are **not in /settings**, edit `$DSH_HOME/profiles/dsh-tui/cordis.patch.yml`:

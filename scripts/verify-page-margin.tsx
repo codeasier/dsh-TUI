@@ -2,22 +2,22 @@
  * verify-page-margin — 根级页边距（PageMargin）契约：
  * 一些终端（Windows Terminal 的 PowerShell profile 等）自带内缩 padding，
  * 另一些（裸 WSL/tmux/SSH）完全没有——文字直接贴屏幕四边。PageMargin
- * 在根布局加一圈小边距（左右 2 列、上下 1 行），同时把 TerminalSize
+ * 在根布局加一圈小边距（左右 3 列、上下 1 行），同时把 TerminalSize
  * 收敛成内容区尺寸、经 PageInsetContext 报告内容区相对屏幕原点的偏移。
  *
  * 断言（headless xterm 40×12，fullscreen：AlternateScreen > PageMargin）：
- *   1. 内容区尺寸：useTerminalSize() 报告 36×10（40-2×2, 12-2×1）；
- *   2. inset：PageInsetContext 报告 {x:2, y:1}；
+ *   1. 内容区尺寸：useTerminalSize() 报告 34×10（40-2×3, 12-2×1）；
+ *   2. inset：PageInsetContext 报告 {x:3, y:1}；
  *   3. 顶/底边距：第 0 行与最后一行全空；
- *   4. 左边距：内容起始于第 2 列（两格前导空格）；
- *   5. 左右边距对称：E 行从第 2 列到第 37 列，第 38/39 列空白；
+ *   4. 左边距：内容起始于第 3 列（三格前导空格）；
+ *   5. 左右边距对称：E 行从第 3 列到第 36 列，第 37/38/39 列空白；
  *   6. 档位切换（模块级 store → useSyncExternalStore 即时重布局）：
  *      roomy 32x8/inset 4,2/上下各两行空，none 40x12/无内缩/END 贴底；
  *   7. 自定义规格：`NxM` 解析/边界/规范化单元检查，3x1 与单值 5（→5x1）
  *      实时重布局，非法值回退 normal；
  *   8. 出血契约：页面级分割线（bleed）自第 0 列画满整个终端、文本仍在
- *      第 2 列；Chat 冒烟里滚动轨贴 98/99 列（右缘），转录文本不越
- *      内容列（0/1 列恒空白）；
+ *      第 3 列；Chat 冒烟里滚动轨贴 98/99 列（右缘），转录文本不越
+ *      内容列（0/1/2 列恒空白）；
  *   9. 对照组（无 PageMargin）：内容仍全宽、inset=0 —— 既有 verify
  *      直接挂 Chat 的「全宽」契约不变。
  *
@@ -87,11 +87,11 @@ const inst = await render(
 )
 
 // 等首帧画出探针行再断言（渲染经节流 + xterm 异步解析）。
-await settle(() => screenLines().some(line => line.includes('size=36x10')))
+await settle(() => screenLines().some(line => line.includes('size=34x10')))
 
 const lines = screenLines()
-check('内容区尺寸报告 36x10（终端 40x12 扣除页边距）', lines.some(l => l.includes('size=36x10 inset=2,1')))
-check('inset 报告 {x:2, y:1}', lines.some(l => l.includes('inset=2,1')))
+check('内容区尺寸报告 34x10（终端 40x12 扣除页边距）', lines.some(l => l.includes('size=34x10 inset=3,1')))
+check('inset 报告 {x:3, y:1}', lines.some(l => l.includes('inset=3,1')))
 const topBlank = lines[0]?.trim() === ''
 const bottomBlank = lines[ROWS - 1]?.trim() === ''
 check('顶行空白（上行边距）', topBlank, JSON.stringify(lines[0]))
@@ -99,13 +99,13 @@ check('底行空白（下行边距）', bottomBlank, JSON.stringify(lines[ROWS -
 const sizeRow = lines.findIndex(l => l.includes('size='))
 const edgeRow = lines.findIndex(l => l.trimStart().startsWith('|'))
 const endRow = lines.findIndex(l => l.trimStart().startsWith('END'))
-check('size 行从第 2 列开始', sizeRow >= 0 && lines[sizeRow]!.startsWith('  '), JSON.stringify(lines[sizeRow]))
-check('边距内 E 行从第 2 列开始', edgeRow >= 0 && lines[edgeRow]!.startsWith('  |'), JSON.stringify(lines[edgeRow]))
-// E 行 = 2 空格 + 36 内容列。帧切换时渲染器会把旧行残留单元格清成
+check('size 行从第 3 列开始', sizeRow >= 0 && lines[sizeRow]!.startsWith('   size='), JSON.stringify(lines[sizeRow]))
+check('边距内 E 行从第 3 列开始', edgeRow >= 0 && lines[edgeRow]!.startsWith('   |'), JSON.stringify(lines[edgeRow]))
+// E 行 = 3 空格 + 34 内容列。帧切换时渲染器会把旧行残留单元格清成
 // 空格（xterm buffer 中显示为 " "，translateToString 不减），所以长度
 // 断言统一先 trimEnd 再量。
-check('右列对称：E 行止于第 37 列（38/39 列空白）', edgeRow >= 0 && lines[edgeRow]!.startsWith('  |') && lines[edgeRow]!.trimEnd().length === 38 && lines[edgeRow]!.trimEnd().endsWith('|'), `len=${lines[edgeRow]?.trimEnd().length}`)
-check('END 停在内容区底行（第 10 行，0-based）', endRow === ROWS - 2 && lines[endRow]!.startsWith('  '), JSON.stringify(lines[endRow]))
+check('右列对称：E 行止于第 36 列（37/38/39 列空白）', edgeRow >= 0 && lines[edgeRow]!.startsWith('   |') && lines[edgeRow]!.trimEnd().length === 37 && lines[edgeRow]!.trimEnd().endsWith('|'), `len=${lines[edgeRow]?.trimEnd().length}`)
+check('END 停在内容区底行（第 10 行，0-based）', endRow === ROWS - 2 && lines[endRow]!.startsWith('   '), JSON.stringify(lines[endRow]))
 
 // ── 档位切换：模块级 store 驱动 PageMargin 即时重布局（/settings 实机路径）──
 const { applyPageMargin } = await import('../src/tuiDisplayPrefs.js')
@@ -141,11 +141,11 @@ applyPageMargin('5')
 await settle(() => screenLines().some(l => l.includes('size=30x10 inset=5,1')))
 check('自定义 5（单值 → 5x1）：内容区 30x10', screenLines().some(l => l.includes('size=30x10 inset=5,1')))
 applyPageMargin('abc')
-await settle(() => screenLines().some(l => l.includes('size=36x10 inset=2,1')))
-check('自定义非法值回退正常档（36x10）', screenLines().some(l => l.includes('size=36x10 inset=2,1')))
+await settle(() => screenLines().some(l => l.includes('size=34x10 inset=3,1')))
+check('自定义非法值回退正常档（34x10）', screenLines().some(l => l.includes('size=34x10 inset=3,1')))
 applyPageMargin('normal')
-await settle(() => screenLines().some(l => l.includes('size=36x10 inset=2,1')))
-check('恢复 normal：内容区回到 36x10', screenLines().some(l => l.includes('size=36x10 inset=2,1')))
+await settle(() => screenLines().some(l => l.includes('size=34x10 inset=3,1')))
+check('恢复 normal：内容区回到 34x10', screenLines().some(l => l.includes('size=34x10 inset=3,1')))
 
 // ── 出血（full-bleed）契约：结构线直通终端边缘，文本留在内容列 ──
 // 页面级分割线从第 0 列画到最后一列；文本行仍从内容列开始。
@@ -182,7 +182,7 @@ function linesB(): string[] {
 await settle(() => linesB().some(l => l.trimStart() === '─'.repeat(COLS)))
 const linesBNow = linesB()
 check('分割线出血：─ 行自第 0 列画满 40 列', linesBNow.some(l => l.trimStart() === '─'.repeat(COLS) && l.trimEnd() === '─'.repeat(COLS)))
-check('分割线出血：文本行仍在第 2 列（内容留边距）', linesBNow.some(l => l.includes('line-content') && l.startsWith('  ')), JSON.stringify(linesBNow.find(l => l.includes('line-content'))))
+check('分割线出血：文本行仍在第 3 列（内容留边距）', linesBNow.some(l => l.includes('line-content') && l.startsWith('   line-content')), JSON.stringify(linesBNow.find(l => l.includes('line-content'))))
 check('分割线出血：行高仍占 1 行（flow 不塌）', linesBNow.filter(l => l.trimStart() === '─'.repeat(COLS)).length >= 1)
 
 // ── Chat 冒烟：滚动轨贴右缘（98/99 列），转录文本不越内容列 ──
@@ -242,15 +242,15 @@ await settle(() => linesC().some(l => l.includes('▌ ❯')))
 await sleep(250)
 const railRows = Array.from({ length: CHAT_ROWS }, (_, y) => cellAtC(y, 98) !== '' || cellAtC(y, 99) !== '')
 // 转录里的用户回合是 `▌ ❯ …`（只有机器活动缩进），左边距的锚点就是那条
-// 竖条：它必须落在第 2 列——输入框的 `❯` 前面还有 `⌸ `，不是边距信号。
+// 竖条：它必须落在第 3 列——输入框的 `❯` 前面还有 `⌸ `，不是边距信号。
 const promptRow = linesC().findIndex(l => l.includes('▌ ❯'))
 const promptCol = promptRow >= 0 ? linesC()[promptRow]!.indexOf('▌') : -1
-check('Chat：用户回合竖条在第 2 列（内容不越左缘）', promptCol === 2, `col=${promptCol}`)
+check('Chat：用户回合竖条在第 3 列（内容不越左缘）', promptCol === 3, `col=${promptCol}`)
 check('Chat：滚动轨在 98/99 列（贴终端右缘）', railRows.some(Boolean))
 check('Chat：右缘 98/99 列只有滚动轨占用（无其他内容越界）',
   Array.from({ length: CHAT_ROWS }, (_, y) => (cellAtC(y, 98) === '' && cellAtC(y, 99) === '') || railRows[y]!).every(Boolean))
-check('Chat：左缘 0/1 列恒空白（文本不越界）',
-  Array.from({ length: CHAT_ROWS }, (_, y) => cellAtC(y, 0) === '' && cellAtC(y, 1) === '').every(Boolean))
+check('Chat：左缘 0/1/2 列恒空白（文本不越界）',
+  Array.from({ length: CHAT_ROWS }, (_, y) => cellAtC(y, 0) === '' && cellAtC(y, 1) === '' && cellAtC(y, 2) === '').every(Boolean))
 
 // 对照组：无 PageMargin 的树 —— 尺寸不收敛、inset=0（verify 直挂契约不变）。
 // 先卸载带边距的应用再挂对照组：同一进程并存两个 Ink 实例时，第二个实例

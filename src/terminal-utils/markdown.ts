@@ -126,13 +126,19 @@ function renderCodeSpan(token: Tokens.Codespan, state: RenderState): string {
  * untouched (createHyperlink's URL fallback would show the raw encoded
  * `dsh-file:` payload — worse than plain text).
  */
-function linkifyText(text: string): string {
+function markdownHyperlink(url: string, label: string | undefined, state: RenderState): string {
+  // Paint after the shared link helper sanitizes both OSC targets and labels.
+  // This also colors the visible URL fallback on terminals without OSC 8.
+  return chalk.underline(colorize(createHyperlink(url, label, { style: text => text }), renderTheme(state).markdownLink, 'foreground'))
+}
+
+function linkifyText(text: string, state: RenderState): string {
   const withFiles = supportsHyperlinks()
     ? linkifyFilePaths(text, (path, display) =>
-        createHyperlink(fileLinkUrl(path), display),
+        markdownHyperlink(fileLinkUrl(path), display, state),
       )
     : text
-  return linkifyIssueReferences(withFiles)
+  return linkifyIssueReferences(withFiles, state)
 }
 
 /**
@@ -177,6 +183,45 @@ export interface FormattedMarkdown {
   readonly text: string
   /** Content column of each source logical line; zero means ordinary wrap. */
   readonly continuationIndent: readonly number[]
+}
+
+/** Whitespace and intentionally invisible top-level tokens do not make nodes. */
+export function isBlankMarkdownToken(type: string): boolean {
+  return type === 'space' || type === 'br' || type === 'def' || type === 'html'
+}
+
+/** Shared settled/streaming policy: structure gets one blank row; adjacent
+ * paragraphs get one only when the source separated them. No outer padding. */
+export function markdownBlockGap(previous: string | undefined, next: string | undefined, separated: boolean): number {
+  if (previous === undefined || next === undefined) return 0
+  return previous === 'paragraph' && next === 'paragraph' ? Number(separated) : 1
+}
+
+export function markdownBlocks(tokens: readonly Token[]): Array<{ token: Token; gap: number }> {
+  const blocks: Array<{ token: Token; gap: number }> = []
+  let previous: Token | undefined
+  let separated = false
+  for (const token of tokens) {
+    if (isBlankMarkdownToken(token.type)) {
+      separated ||= token.type === 'space' || token.type === 'br' || /\n\n$/.test(token.raw)
+      continue
+    }
+    blocks.push({ token, gap: markdownBlockGap(previous?.type, token.type, separated || /\n\n$/.test(previous?.raw ?? '')) })
+    previous = token
+    separated = false
+  }
+  return blocks
+}
+
+/** Top-level blocks end in exactly one LF; inter-block blank rows belong to
+ * markdownBlockGap. Nested list/quote formatting retains its own whitespace. */
+export function formatMarkdownBlockWithLayout(token: Token, highlight: CliHighlight | null = null, palette: Theme = getActiveTheme()): FormattedMarkdown {
+  const part = formatTokenWithLayout(token, highlight, palette)
+  const body = part.text.replace(/\n+$/, '')
+  return body === '' ? { text: '', continuationIndent: [0] } : {
+    text: body + EOL,
+    continuationIndent: [...part.continuationIndent.slice(0, body.split(EOL).length), 0],
+  }
 }
 
 export function joinFormattedMarkdown(parts: readonly FormattedMarkdown[]): FormattedMarkdown {
@@ -249,15 +294,8 @@ export function applyMarkdown(
   highlight: CliHighlight | null = null,
 ): string {
   configureMarked()
-  const rootState: RenderState = {
-    highlight,
-    parent: null,
-    listDepth: 0,
-    ordinal: null,
-  }
-  return marked
-    .lexer(stripPromptXMLTags(content))
-    .map(token => dispatch(token, rootState))
+  return markdownBlocks(marked.lexer(stripPromptXMLTags(content)))
+    .map(({ token, gap }) => EOL.repeat(gap) + formatMarkdownBlockWithLayout(token, highlight).text)
     .join('')
     // trimEnd only: the input is already trimmed, so leading whitespace in
     // the output is renderer-intended (e.g. the code block's 2-space indent
@@ -297,7 +335,7 @@ function renderToken(token: Token, state: RenderState): string {
   }
   if (isToken(token, 'hr')) return colorize('\u2500'.repeat(16), renderTheme(state).markdownHorizontalRule, 'foreground') + EOL
   if (isToken(token, 'image')) {
-    const target = state.parent?.type === 'link' ? token.href : createHyperlink(token.href)
+    const target = state.parent?.type === 'link' ? token.href : markdownHyperlink(token.href, undefined, state)
     return token.text ? `${token.text} (${target})` : target
   }
   if (isToken(token, 'link')) return renderLink(token, state)
@@ -421,9 +459,9 @@ function renderLink(token: Tokens.Link, state: RenderState): string {
   // Meaningful display text (different from the URL) becomes a clickable
   // hyperlink; otherwise just show the URL.
   if (plainLabel && plainLabel !== token.href) {
-    return createHyperlink(token.href, label)
+    return markdownHyperlink(token.href, label, state)
   }
-  return createHyperlink(token.href)
+  return markdownHyperlink(token.href, undefined, state)
 }
 
 function renderList(token: Tokens.List, state: RenderState): string {
@@ -495,7 +533,7 @@ function renderText(token: Tokens.Text, state: RenderState): string {
   if (state.parent?.type === 'link') return token.text
   const body = token.tokens
     ? token.tokens.map(child => dispatch(child, withParent(state, token))).join('')
-    : linkifyText(token.text)
+    : linkifyText(token.text, state)
   return body + (state.parent?.type === 'list_item' ? EOL : '')
 }
 
@@ -552,7 +590,7 @@ function renderTableRow(
  * Replace `owner/repo#123` references with clickable GitHub links.
  * No-op when the terminal lacks OSC 8 hyperlink support.
  */
-function linkifyIssueReferences(text: string): string {
+function linkifyIssueReferences(text: string, state: RenderState): string {
   if (!supportsHyperlinks()) {
     return text
   }
@@ -560,9 +598,10 @@ function linkifyIssueReferences(text: string): string {
     ISSUE_REFERENCE_PATTERN,
     (_match, prefix, repo, issueNumber) =>
       prefix +
-      createHyperlink(
+      markdownHyperlink(
         `https://github.com/${repo}/issues/${issueNumber}`,
         `${repo}#${issueNumber}`,
+        state,
       ),
   )
 }

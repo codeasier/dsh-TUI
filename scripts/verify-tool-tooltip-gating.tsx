@@ -10,8 +10,7 @@
  *     完整脚本；移开即消失（tooltip 基础设施契约不变）。
  *  C. title 缺失、args 超出头部显示预算（HEADER_ARGS_BUDGET=480）→
  *     头部裁剪；悬停弹出完整 args（含 480 字符之后才出现的标记）。
- *  D. 运行中卡片、标题完整可见 → 悬停**不弹**（wrap 完整显示，无隐藏
- *     内容；时长已在头部 chip 与 body Running… 行）。
+ *  D. 运行中卡片、短标题完整可见 → 悬停**不弹**元数据浮层。
  *  E. 单行长标题被布局宽度截断（truncate-end，非 480 预算）→ 悬停弹出
  *     完整标题 + 元数据附注（回归：这是 tooltip 的原始用途）。
  *  F. 折叠脚本 + 非零退出码 → 悬停弹出完整脚本，附注带「退出码 N」
@@ -108,7 +107,7 @@ const base = {
 
 /** Render one tool card as the whole tree (scenario swap via key). */
 function cardTree(key: string, tool: Record<string, unknown>, foldTerminalCommand = false,
-  onClick?: () => void): React.ReactElement {
+  onClick?: () => void, onOpenFile?: (path: string) => void): React.ReactElement {
   return (
     <AlternateScreen>
       <Box flexDirection="column">
@@ -120,6 +119,7 @@ function cardTree(key: string, tool: Record<string, unknown>, foldTerminalComman
           verbose={false}
           foldTerminalCommand={foldTerminalCommand}
           onClick={onClick}
+          onOpenFile={onOpenFile}
         />
         <tooltip.TooltipLayer />
       </Box>
@@ -185,7 +185,7 @@ try {
   instance.rerender(cardTree('huge', { name: 'read', argsText: hugeArgs }))
   // 就绪探针：卡片头部已渲染（超长 args 标题在旧代码上就以跨行 wrap
   // 呈现——此处只断言卡片已上屏；「头部裁剪」由下方标记不可见断言覆盖）。
-  check('场景 C 就绪：超预算 args 头部渲染', await settled(() => screenHas(term, '读取{')))
+  check('场景 C 就绪：超预算 args 头部渲染', await settled(() => screenHas(term, '读取(')))
   check('场景 C 就绪：480 字符后的标记未上屏', !screenHas(term, 'END-MARKER-98765'))
   hoverText(stdin, term, 'ppp')
   check('C 裁剪 args 悬停后弹出完整内容', await settled(() => screenHas(term, 'END-MARKER-98765')))
@@ -230,9 +230,8 @@ try {
   check('E 移开即隐藏工具提示', await settled(() => tooltip.getTooltipSnapshot() === null))
 
   // --- F. 折叠脚本 + 非零退出码：悬停弹完整脚本，附注带退出码 ----------
-  //     （元数据只在内容真隐藏的浮层里出现；完全可见时退出码由 body
-  //       的本地化 `退出码 N` 行本身呈现，不重复。正文与浮层的退出码在
-  //       zh 下同文，故浮层元数据以「结束时刻」探测、隐藏以脚本尾行探测。）
+   //     （折叠卡正文隐藏；退出码跟随隐藏脚本的元数据浮层。展开正文另由
+   //       repro-toolcards 覆盖，浮层元数据以「结束时刻」探测。）
   const scriptF = [
     '$items = Get-ChildItem -Recurse',
     '$items | Where-Object { $_.Length -gt 1kb }',
@@ -248,12 +247,38 @@ try {
   }, true))
   check('场景 F 就绪：折叠脚本首行可见', await settled(() => screenHas(term, 'Get-ChildItem -Recurse')))
   check('场景 F 就绪：折叠隐藏了其余行', !screenHas(term, 'Select-Object -First 10 Name'))
-  check('场景 F 就绪：body 直接呈现本地化退出码', await settled(() => screenHas(term, '退出码 7')))
+  check('场景 F 就绪：折叠正文不泄露退出码行', !screenHas(term, '退出码 7'))
   hoverText(stdin, term, '$items')
   check('F 折叠脚本悬停弹完整命令（含末行）', await settled(() => screenHas(term, 'Select-Object -First 10 Name')))
   check('F 浮层附注带元数据（结束时刻 + 退出码）', await settled(() => screenHas(term, '结束') && screenHas(term, '退出码 7')))
   hover(stdin, 1, 1)
   check('F 移开即隐藏工具提示（脚本尾行消失）', await settled(() => !screenHas(term, 'Select-Object -First 10 Name')))
+
+  // G. A single source line can also be width-truncated; its hidden tail
+  // must remain reachable without expanding the card.
+  const commandG = 'node WIDTH_SUMMARY ' + 'x'.repeat(140) + ' COMMAND-G-END'
+  instance.rerender(cardTree('long-terminal', {
+    name: 'bash', callView: { card: 'terminal', title: commandG },
+  }, false, () => {}))
+  check('G 单行命令摘要就绪', await settled(() => screenHas(term, 'WIDTH_SUMMARY') && !screenHas(term, 'COMMAND-G-END')))
+  hoverText(stdin, term, 'WIDTH_SUMMARY')
+  check('G 长单行命令悬停可见完整尾部', await settled(() => tooltip.getTooltipSnapshot()?.content.includes('COMMAND-G-END') ?? false))
+  hover(stdin, 1, 1)
+  check('G 移开即隐藏命令提示', await settled(() => tooltip.getTooltipSnapshot() === null))
+
+  // H. Truncation is display-only: clicking the visible path still opens
+  // the original full target and must not also toggle the card.
+  const pathH = '/tmp/' + 'very-long-name-'.repeat(25) + '完整文件.ts'
+  let openedPath: string | undefined
+  let rowClicks = 0
+  instance.rerender(cardTree('path-target', {
+    name: 'edit', callView: { card: 'diff', title: `Edit ${pathH}`, path: pathH, diffs: [] },
+  }, false, () => { rowClicks++ }, path => { openedPath = path }))
+  check('H 截断路径摘要就绪', await settled(() => screenHas(term, '/tmp/very-long-name-') && !screenHas(term, '完整文件.ts')))
+  const targetH = findText(term, '/tmp/')!
+  stdin.write(`\x1b[<0;${targetH.col + 1};${targetH.row + 1}M\x1b[<0;${targetH.col + 1};${targetH.row + 1}m`)
+  check('H 点击截断路径保留完整目标', await settled(() => openedPath === pathH))
+  check('H 路径点击不展开工具卡', rowClicks === 0)
 
   instance.unmount()
   await sleep(100) // 固定窗:pacing 收尾 flush 节奏，之后不再断言

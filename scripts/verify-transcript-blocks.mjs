@@ -43,7 +43,7 @@ const { Terminal: XTerm } = xtermHeadless.default ?? xtermHeadless
 const COLS = 100
 const ROWS = 40
 /** PageMargin's left inset — every transcript row starts here at the latest. */
-const MARGIN = 2
+const MARGIN = 3
 const RAIL = '│ '
 
 let failed = 0

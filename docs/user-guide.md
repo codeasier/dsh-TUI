@@ -436,6 +436,7 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 
 - 思考块与工具卡默认都只占**一行**：思考是 `│ + 思考 · 7s`，工具卡是 `│ • Bash(ls -la)` 这样的标题行
   （工具名、参数或路径、状态点、耗时都在标题行上）。
+- 已完成工具摘要为中性灰色、不加粗；长命令和参数按可用宽度截断，不产生续行。悬停可看被隐藏的完整内容；运行、失败和悬停状态保持可辨，展开后仍有工具分类色。
 - 展开/收起：**点这一行**，或键盘 `Ctrl+O` 切换整段转录的详情。思考块的 `+` 展开后变成 `-`。
 - 展开后思考显示全文、工具卡显示完整输出（不截断）；失败的卡折叠时只剩 `✗` 标题行加失败提示。
 
@@ -500,7 +501,7 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 | mathImageScale | 公式图片大小（默认 `auto`，与上一条同在**公式设置**子页）：配合 LaTeX 公式的「图片」使用——`auto` 与正文同尺寸，`large` / `xlarge` 把**块级**公式排得更大；终端图片是按设备像素 1:1 画的，所以"更大"就等于"每个笔画更多像素"，是唯一的清晰度杠杆。行内公式不受影响（只能占一行）。立即生效 |
 | scrollGutter | 转录边栏：timeline（轮次时间线，默认）/ scrollbar（比例滚动条）/ hidden。立即生效 |
 | pageMargin | 页边距：整屏相对终端四边向里缩。预设 none / slim / normal（默认）/ roomy，或自定义 `NxM`（细节见下）。立即生效 |
-| foldTerminalCommand | 折叠终端命令（默认关）：终端卡（Bash/PowerShell）多行命令折成首行 + 计数；`Ctrl+O` 或点击卡片展开 |
+| foldTerminalCommand | 终端命令摘要（默认关）：开启时多行命令取首行 + 行数，关闭时合成单行摘要；两者都按宽度截断，`Ctrl+O` 或点击展开完整命令 |
 | expandEditor | 全屏草稿编辑（默认开）：输入行尾 `⛶` 或 `Ctrl+Shift+E` 展开成整屏编辑器；`Ctrl+Enter` 发送、`Esc` 收起（草稿还在）；关掉后入口不显示 |
 | statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关） |
 
@@ -509,7 +510,7 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 
 **scrollGutter**：scrollbar 轨道可直接拖；`Shift`/`Alt`/`Ctrl`+拖动仍是文字选择。
 
-**pageMargin**：自定义 `NxM` = 左右 `N` 列、上下 `M` 行（上限 8x4）；只填 `N` 则上下 1 行。
+**pageMargin**：默认 `normal` 为左右各 3 列、上下各 1 行。自定义 `NxM` = 左右 `N` 列、上下 `M` 行（上限 8x4）；只填 `N` 则上下 1 行，`2x1` 可保留原边距。
 
 未声明 TUI 区块的命名空间以只读形式列出，需手工编辑 profile 配置（旧版为 `~/.dsh/settings.yaml`）。
 以下设置**不在 /settings 内**，改 `$DSH_HOME/profiles/dsh-tui/cordis.patch.yml`：

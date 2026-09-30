@@ -57,7 +57,7 @@ const GROUPS = {
     ["verify-code-block-tab-background", ['node', '--import', 'tsx/esm', 'scripts/verify-code-block-tab-background.tsx']],
 // 思考块流式视图回归：preview 固定三行且点击切全文/再点收回，full
 // 默认值反向但仍不进入 0 行正文；增量 Markdown 与整段渲染的块间距
-// 一致（真实段落空行保留，代码块后不凭空多一行）。
+// 一致（段落按源码分段，结构块之间统一一行空白）。
     ["verify-thinking-preview", ['node', '--import', 'tsx/esm', 'scripts/verify-thinking-preview.tsx']],
     ["repro-thinking-stream-fold", ['node', '--import', 'tsx/esm', 'scripts/repro-thinking-stream-fold.tsx']],
     ["verify-streaming-markdown-spacing", ['node', '--import', 'tsx/esm', 'scripts/verify-streaming-markdown-spacing.tsx']],
@@ -84,7 +84,7 @@ const GROUPS = {
 // result 落定即全显）。
     ["verify-smooth-reveal", ['node', '--import', 'tsx/esm', 'scripts/verify-smooth-reveal.tsx']],
 // 根级页边距（PageMargin）契约：无内缩终端（裸 WSL/tmux/SSH）下文字贴边。
-// 左右 2 列上下 1 行内缩 + TerminalSize 收敛成内容区尺寸 + inset 坐标
+// 左右 3 列上下 1 行内缩 + TerminalSize 收敛成内容区尺寸 + inset 坐标
 // 补偿，对照组保证无 PageMargin 时既有「全宽」契约不变。
     ["verify-page-margin", ['node', '--import', 'tsx/esm', 'scripts/verify-page-margin.tsx']],
 // 滚动/pill/内联模式回归：新消息 pill 计数递减、Ctrl+C 交互、

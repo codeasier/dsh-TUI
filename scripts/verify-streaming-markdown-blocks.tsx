@@ -11,7 +11,7 @@ import type { DOMNode, TextNode, DOMElement } from '../src/ink/dom.js'
 import type { Frame } from '../src/ink/frame.js'
 import type { Screen } from '../src/ink/screen.js'
 
-const [React, { marked }, { Box, Text }, { Markdown }, { StreamingMarkdown }, { MarkdownTable }, { configureMarked, formatTokenWithLayout, joinFormattedMarkdown, trimFormattedMarkdown }, { renderToScreen }, { cellAtIndex }] = await Promise.all([
+const [React, { marked }, { Box, Text }, { Markdown }, { StreamingMarkdown }, { MarkdownTable }, { configureMarked, formatMarkdownBlockWithLayout, markdownBlocks, joinFormattedMarkdown, trimFormattedMarkdown }, { renderToScreen }, { cellAtIndex }] = await Promise.all([
   import('react'), import('marked'), import('../src/ui.js'),
   import('../src/components/Markdown.js'), import('../src/components/StreamingMarkdown.js'),
   import('../src/components/MarkdownTable.js'), import('../src/terminal-utils/markdown.js'),
@@ -22,19 +22,24 @@ configureMarked()
 function unsplit(source: string): React.ReactElement {
   const nodes: React.ReactNode[] = []
   let part = { text: '', continuationIndent: [0] as readonly number[] }
+  let margin = 0
   const flush = () => {
     const trimmed = trimFormattedMarkdown(part, true, true)
-    if (trimmed.text) nodes.push(<Text key={nodes.length} continuationIndent={trimmed.continuationIndent.some(indent => indent > 0) ? trimmed.continuationIndent : undefined}>{trimmed.text}</Text>)
+    if (trimmed.text) nodes.push(<Box key={nodes.length} marginTop={margin}><Text continuationIndent={trimmed.continuationIndent.some(indent => indent > 0) ? trimmed.continuationIndent : undefined}>{trimmed.text}</Text></Box>)
     part = { text: '', continuationIndent: [0] }
   }
-  for (const token of marked.lexer(source.trim())) {
+  for (const { token, gap } of markdownBlocks(marked.lexer(source.trim()))) {
     if (token.type === 'table') {
       flush()
-      nodes.push(<MarkdownTable key={nodes.length} token={token as Tokens.Table} highlight={null} />)
-    } else part = joinFormattedMarkdown([part, formatTokenWithLayout(token)])
+      nodes.push(<Box key={nodes.length} marginTop={gap}><MarkdownTable token={token as Tokens.Table} highlight={null} /></Box>)
+    } else {
+      if (!part.text) margin = gap
+      const separator = { text: '\n'.repeat(gap), continuationIndent: Array(gap + 1).fill(0) }
+      part = joinFormattedMarkdown([part, ...(part.text ? [separator] : []), formatMarkdownBlockWithLayout(token)])
+    }
   }
   flush()
-  return <Box flexDirection="column" gap={1}>{nodes}</Box>
+  return <Box flexDirection="column">{nodes}</Box>
 }
 
 function screenSnapshot(screen: Screen, height = screen.height, styles = true) {
@@ -72,6 +77,7 @@ const cases = [
   prefix + '\u4e2d\u6587 e\u0301 \ud83d\ude00 final text',
   prefix.slice(0, 7600) + '\n\n| a | b |\n| - | - |\n' + '| long cell content | another cell |\n'.repeat(40) + '\ntail',
   '```\n' + 'a long code line\n'.repeat(600) + '```\n\ntail',
+  prefix + '## Compact heading\nparagraph\n- item\n> quote\n```txt\nbody\n```\nlast paragraph',
 ]
 
 for (const width of [55, 100]) {

@@ -115,7 +115,7 @@ When the file declares `name`, its filename remains a loading alias. See the
 
 ## Markdown semantic colors
 
-Eight color keys can be overridden independently of other UI accents:
+Nine color keys can be overridden independently of other UI accents:
 
 | Key | Purpose | Missing-key fallback for older palettes |
 | --- | --- | --- |
@@ -123,12 +123,13 @@ Eight color keys can be overridden independently of other UI accents:
 | `markdownStrong` | Strong text | `toolNameMutate` |
 | `markdownEmph` | Emphasis/italic text | `warning` |
 | `markdownCode` | Inline code | `permission` |
+| `markdownLink` | Links and visible URLs (underlined) | `ide` |
 | `markdownBlockQuote` | Blockquote body | `warning` |
 | `markdownListItem` | Unordered list markers | `permission` |
 | `markdownListEnumeration` | Ordered list numbering | `ide` |
 | `markdownHorizontalRule` | Horizontal rules | `inactive` |
 
-Built-in `dark` uses blue headings, warm-gold strong text, amber emphasis/quotes, permission-blue inline code/unordered markers, ide-blue numbering and inactive rules. `light` uses matching deep blues and golds; `dark-ansi` uses only the 16 ANSI colors.
+Built-in `dark` uses soft-purple headings, amber strong text, warm-gold emphasis, green inline code, cyan links/numbering, subdued warm-gray quotes, warm unordered markers and gray rules; brand blue remains the UI focus color. `light` uses matching deep purple, gold, green and cyan; `dark-ansi` uses only the 16 ANSI colors. Ordinary collapsed tool summaries use `inactive`, running/hovered headers use `text`, and failures use `error`; expanded cards retain category-colored tool names.
 
 JSON and `tuiThemes` descriptors still inherit unspecified keys from their declared `base`. When an older plugin or custom resolver returns a palette without the new keys, `normalizeThemePalette` uses that palette's own legacy keys in the table; only a missing legacy fallback uses the corresponding legacy key from `dark`. Explicit new keys win, and palettes with all new keys retain object identity. Normalization of older palettes is cached, but changes to the original object trigger recomputation so hot updates do not retain stale colors.
 

@@ -11,12 +11,11 @@
  * 断言：
  *  A. 纯函数单元：短文本零改动且保持引用（无分配快路径）、恰好等于预算
  *     不折、超 1 字符即折且字数准确、行边界不被改写、自定义预算生效。
- *  B. 转录渲染（真实 MessageList）：user 消息 / assistant 正文 / 工具卡
- *     （终端命令标题 + 终端输出）的超长单行都折叠——屏幕上出现折叠标记、
- *     行尾标记（1000 字符之后）不出现。
+ *  B. 转录渲染（真实 MessageList）：user 消息 / assistant 正文超长单行
+ *     显示折叠标记；工具卡保留一行宽度截断摘要、隐藏正文，尾部不泄露。
  *  C. Ctrl+O（expanded）是逃生门：同一行给出完整原文（行尾标记出现）。
- *  D. 工具卡独立渲染（AssistantToolUseMessage）：read 卡正文同样折叠，
- *     verbose 展开恢复；reasoning 行不折叠（自带三行预览，用户明确不做）。
+ *  D. 工具卡独立渲染（AssistantToolUseMessage）：read 卡默认仅标题，
+ *     verbose 展开恢复完整正文；reasoning 行不折叠（自带三行预览）。
  *
  * Run: `node --import tsx/esm scripts/verify-long-line-fold.tsx`
  */
@@ -292,12 +291,12 @@ console.log('--- B: transcript rows fold by default ---')
     () => <MessageList rows={[hugeToolRow]} {...listProps} />,
     async ({ screen }) => {
       const text = screen()
-      check('B5 tool card title (one 60k-char command): fold marker renders',
-        packed(text).includes(MARKER_PACKED), digest(text))
+      check('B5 tool card title (one 60k-char command): one physical summary row',
+        text.split('\n').filter(line => line.trim()).length === 1 && text.includes('Bash(') && text.includes('…'), digest(text))
       check('B6 tool card title: the clipped tail is gone',
         packed(text).includes(`${HEAD}-cmd-`) && !packed(text).includes(TAIL))
-      check('B7 tool card body (one 60k-char output line): the clipped tail is gone',
-        packed(text).includes(`${HEAD}-out-`) && !packed(text).includes(TAIL))
+      check('B7 tool card body (one 60k-char output line): detail stays hidden',
+        !packed(text).includes(`${HEAD}-out-`) && !packed(text).includes(TAIL))
     },
   )
 }
@@ -324,6 +323,16 @@ console.log('--- C: Ctrl+O is the escape hatch ---')
       check('C3 expanded tool card paints the raw command/output tail',
         packed(text).includes(TAIL), digest(text))
       check('C4 expanded tool card drops the fold marker', !packed(text).includes(MARKER_PACKED))
+    },
+  )
+}
+
+{
+  const commandOnly: Row = { ...hugeToolRow, tool: { ...hugeToolRow.tool!, resultView: { card: 'terminal', output: '', exitCode: 0 } } }
+  await withMessageList(
+    () => <MessageList rows={[commandOnly]} {...listProps} expanded />,
+    async ({ screen }) => {
+      check('C5 expanded command alone retains the full 60k tail', packed(screen()).includes(TAIL), digest(screen()))
     },
   )
 }
@@ -446,8 +455,9 @@ async function renderCard(verbose: boolean): Promise<string> {
 
 {
   const folded = await renderCard(false)
-  check('D2 read card body folds its over-long line',
-    packed(folded).includes(MARKER_PACKED) && !packed(folded).includes(TAIL), digest(folded))
+  check('D2 collapsed read card keeps one header and hides the body',
+    folded.includes('Read /tmp/huge.txt') && folded.split('\n').filter(line => line.trim()).length === 1
+      && !packed(folded).includes(`${HEAD}-read-`) && !packed(folded).includes(TAIL), digest(folded))
   const verbose = await renderCard(true)
   check('D3 verbose read card paints the raw line',
     packed(verbose).includes(TAIL) && !packed(verbose).includes(MARKER_PACKED), digest(verbose))

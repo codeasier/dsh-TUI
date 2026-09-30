@@ -117,7 +117,7 @@ DSH_TUI_THEME
 
 ## Markdown 语义颜色
 
-八个颜色键可独立覆盖，不改变其他 UI 强调色：
+九个颜色键可独立覆盖，不改变其他 UI 强调色：
 
 | 键 | 用途 | 旧 palette 缺键时回退 |
 | --- | --- | --- |
@@ -125,12 +125,13 @@ DSH_TUI_THEME
 | `markdownStrong` | 粗体 | `toolNameMutate` |
 | `markdownEmph` | 强调/斜体 | `warning` |
 | `markdownCode` | 行内代码 | `permission` |
+| `markdownLink` | 链接与可见 URL（下划线） | `ide` |
 | `markdownBlockQuote` | 引用正文 | `warning` |
 | `markdownListItem` | 无序列表标记 | `permission` |
 | `markdownListEnumeration` | 有序列表编号 | `ide` |
 | `markdownHorizontalRule` | 水平分隔线 | `inactive` |
 
-内置 `dark` 使用蓝色标题、暖金粗体、amber 强调/引用、permission 蓝行内代码/无序标记、ide 蓝编号与 inactive 分隔线；`light` 使用对应深蓝、深金，`dark-ansi` 只使用 ANSI 16 色。
+内置 `dark` 使用柔紫标题、琥珀粗体、暖金斜体、绿色行内代码、青色链接/编号、低强调暖灰引用、暖色无序标记与灰色分隔线；品牌蓝仍用于界面焦点。`light` 使用对应深紫、深金、深绿与深青，`dark-ansi` 只使用 ANSI 16 色。普通折叠工具摘要使用 `inactive`，运行/悬停时使用 `text`，失败时使用 `error`；展开卡片保留工具名分类色。
 
 JSON 与 `tuiThemes` 描述符仍从声明的 `base` 继承未覆盖键。旧插件或自定义 resolver 返回缺少新键的 palette 时，`normalizeThemePalette` 按上表使用该 palette 自身的旧键；旧回退键也缺失时才使用 `dark` 的对应旧键。显式新键优先，新键齐全的 palette 保持对象 identity。旧 palette 的规范化结果会缓存，但原对象变化时重新计算，避免热更新沿用旧颜色。
 

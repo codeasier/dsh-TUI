@@ -18,7 +18,7 @@ import {
  * （裸 WSL、tmux、SSH、部分嵌入宿主）完全没有——文字直接贴着屏幕四边，
  * 观感压抑。TUI 无法读取终端的 padding，所以在根布局自备一层小"页边距"。
  * 设置（`dsh-tui.pageMargin`）可以是预设名 none / slim / normal（默认，
- * 左右 2 列、上下 1 行）/ roomy，或自定义 `NxM`（左右各 N 列 × 上下各 M
+ * 左右 3 列、上下 1 行）/ roomy，或自定义 `NxM`（左右各 N 列 × 上下各 M
  * 行，如 3x1）——解析与几何见 tuiDisplayPrefs。
  *
  * 实现策略（三层）：

@@ -306,10 +306,19 @@ function foldBodyLines(lines: BodyLine[]): BodyLine[] {
  * header Text every frame was the dominant long-output stall (string-width
  * via wrap-ansi, 60%+ of CPU in profiles). */
 const HEADER_ARGS_BUDGET = 480
+const headerGraphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 
 function clipHeaderArgs(args: string): string {
   if (args.length <= HEADER_ARGS_BUDGET) return args
-  return `${args.slice(0, HEADER_ARGS_BUDGET)}…`
+  // A little lookahead identifies the last complete grapheme without walking
+  // a potentially huge streamed argument. An unfinished cluster is omitted.
+  let end = 0
+  for (const part of headerGraphemes.segment(args.slice(0, HEADER_ARGS_BUDGET + 64))) {
+    const next = part.index + part.segment.length
+    if (next > HEADER_ARGS_BUDGET) break
+    end = next
+  }
+  return `${args.slice(0, end)}…`
 }
 
 /** Terminal-card header folding shape: the line actually rendered, the source
@@ -384,7 +393,7 @@ function toolCardMetaTooltip(tool: ToolRow, isRunning: boolean, isError: boolean
   return parts.join(' · ')
 }
 
-function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguage, nameColor, filePath, onOpenFile, metaTooltip, headerTextBudget }: {
+function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguage, nameColor, filePath, onOpenFile, metaTooltip, headerTextBudget, compact, headerColor }: {
   name: string
   title: string | undefined
   isTerminal: boolean
@@ -405,16 +414,29 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
    *  nothing. A fully visible header pops no tooltip at all. */
   metaTooltip: () => string
   /**
-   * Column budget for the NON-terminal one-line title on the header line —
+   * Column budget for the header's title/summary —
    * `useTerminalSize().columns` (already margin-adjusted) minus the fixed
    * chrome of the row: loader dot 2 + hover ▾ indicator 2 (present while
    * the pointer dwells) + the settled elapsed chip + slack for the
-   * transcript gutter. Only this title renders in a truncate-end Text, so
-   * only it can be cut by layout width (terminal titles wrap; args are
-   * clipped by the 480-char budget) — this budget gates just that cut.
+   * transcript gutter. Every compact summary truncates to this row; expanded
+   * terminal titles wrap while expanded non-terminal titles still truncate.
    */
   headerTextBudget: number
+  compact: boolean
+  headerColor: keyof Theme
 }): React.ReactNode {
+  const compactTitle = React.useMemo(() => {
+    const source = title === undefined ? displayArgs : folded?.first ?? title.trim()
+    const clipped = clipHeaderArgs(source)
+    const text = clipped.replace(/[\r\n]+/g, ' ')
+    const label = title === undefined
+      ? `${name}${text ? `(${text})` : ''}`
+      : isTerminal ? `${name}(${text})` : text || name
+    const hint = folded && folded.hiddenLines > 0
+      ? ` ${t('lines-folded-expand', { n: folded.hiddenLines, key: primaryComboString('transcript') })}`
+      : ''
+    return { text: label + hint, hidden: clipped !== source || /[\r\n]/.test(clipped) || folded !== undefined }
+  }, [name, title, isTerminal, folded, displayArgs])
   // Hover tooltip rule: pop ONLY when the header genuinely hides content —
   // a folded terminal script, args clipped past the 480-char budget, or a
   // non-terminal one-line title cut by layout width (truncate-end). A header
@@ -424,9 +446,14 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
   const headerTooltip = useTooltip(() => {
     const meta = metaTooltip()
     const withMeta = (full: string): string => (meta === '' ? full : `${full}\n${meta}`)
+    if (compact) {
+      return compactTitle.hidden || stringWidth(compactTitle.text) > headerTextBudget
+        ? withMeta(title ?? displayArgs)
+        : ''
+    }
     if (folded !== undefined) return withMeta(title ?? '')
     if (title === undefined && clipHeaderArgs(displayArgs) !== displayArgs) return withMeta(displayArgs)
-    // Width truncation: only the non-terminal title Text is truncate-end —
+    // Expanded width truncation: the non-terminal title Text is truncate-end —
     // a long one-line title is really cut by layout when it overflows the
     // row. Terminal titles WRAP instead (default Text wrap, nothing hidden)
     // and args within the 480 budget wrap too; they never reach this gate.
@@ -436,6 +463,29 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
     // Header fully visible: nothing hidden, nothing to add — stay silent.
     return ''
   })
+  if (compact) {
+    const trimmed = title?.trim() ?? ''
+    const at = filePath && !isTerminal ? trimmed.indexOf(filePath) : -1
+    const clickable = onOpenFile !== undefined && filePath !== undefined && filePath !== '' && at >= 0
+    return (
+      <Box flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0} {...headerTooltip}>
+        {clickable ? (
+          <>
+            <Text color={headerColor} wrap="truncate-end">{clipHeaderArgs(trimmed.slice(0, at)).replace(/[\r\n]+/g, ' ')}</Text>
+            <Box flexGrow={1} flexShrink={1} minWidth={0} onClick={(event: ClickEvent) => {
+              event.stopImmediatePropagation()
+              onOpenFile(filePath)
+            }}>
+              <Text color={headerColor} underline wrap="truncate-end">{clipHeaderArgs(filePath).replace(/[\r\n]+/g, ' ')}</Text>
+            </Box>
+            <Text color={headerColor} wrap="truncate-end">{clipHeaderArgs(trimmed.slice(at + filePath.length)).replace(/[\r\n]+/g, ' ')}</Text>
+          </>
+        ) : (
+          <Text color={headerColor} wrap="truncate-end">{compactTitle.text}</Text>
+        )}
+      </Box>
+    )
+  }
   if (title === undefined) {
     return (
       <>
@@ -694,14 +744,14 @@ export function AssistantToolUseMessage({
     >
       <MachineRail />
       <Box flexDirection="column" flexGrow={1}>
-        <Box flexDirection="row" flexWrap="nowrap" minWidth={minWidth}>
+        <Box flexDirection="row" flexWrap="nowrap" minWidth={verbose ? minWidth : 0}>
           <ToolUseLoader
             shouldAnimate={isRunning}
             isUnresolved={isRunning}
             isError={isError}
             toolName={tool.name}
           />
-          <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} folded={foldedHeader} displayArgs={displayArgs} argsLanguage={argsLanguage} nameColor={toolNameColor(tool.name)} filePath={filePath} onOpenFile={onOpenFile} metaTooltip={() => toolCardMetaTooltip(tool, isRunning, isError)} headerTextBudget={headerTextBudget} />
+          <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} folded={foldedHeader} displayArgs={displayArgs} argsLanguage={argsLanguage} nameColor={toolNameColor(tool.name)} filePath={filePath} onOpenFile={onOpenFile} metaTooltip={() => toolCardMetaTooltip(tool, isRunning, isError)} headerTextBudget={headerTextBudget} compact={!verbose} headerColor={isError ? 'error' : isRunning || hovered ? 'text' : 'inactive'} />
           {!isRunning && (
             // flexShrink={0}: the elapsed chip is two cells of chrome and must
             // never be the thing that yields. Without it a long title pushed

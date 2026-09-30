@@ -320,6 +320,30 @@ await show('fold-single', {
 }, false, true)
 check('单行命令折叠开启时不加提示', await settled(() => screen().includes('Bash(seq 6)') && !screen().includes('… +1 lines')))
 
+// 17. The compact header is one physical row, including long single-line
+// commands, multi-line scripts with folding off, and unstructured args.
+const [{ Box }, { TerminalSizeContext }] = await Promise.all([
+  import('../src/ui.js'), import('../src/ink/components/TerminalSizeContext.js'),
+])
+const longCommand = 'node LONG_SUMMARY ' + '中文 e\u0301 👩‍💻 '.repeat(12) + 'COMMAND_END'
+for (const width of [20, 55, 90]) {
+  for (const [name, tool] of [
+    ['long command', { name: 'bash', callView: { card: 'terminal', title: longCommand } }],
+    ['multi-line command', { name: 'bash', callView: { card: 'terminal', title: 'node MULTI_SUMMARY\nprintf second\nprintf SCRIPT_END' } }],
+    ['raw args', { name: 'read', argsText: '{"SUMMARY_ARGS":"' + 'x'.repeat(600) + 'ARGS_END"}' }],
+  ] as const) {
+    app.rerender(<TerminalSizeContext.Provider value={{ columns: width, rows: ROWS }}><Box width={width}>{card(`summary-${width}-${name}`, tool, false)}</Box></TerminalSizeContext.Provider>)
+    const label = tool.name === 'bash' ? 'Bash(' : 'Read('
+    check(`${name} width=${width}: single physical summary row`, await settled(() => screen().includes(label) && lines().filter(line => line.trim()).length === 1))
+    check(`${name} width=${width}: tail remains detail`, !screen().includes('COMMAND_END') && !screen().includes('SCRIPT_END') && !screen().includes('ARGS_END'))
+    const row = rowOf(label)
+    const x = row < 0 ? -1 : lines()[row]!.indexOf(label)
+    check(`${name} width=${width}: neutral, non-bold header`, x >= 0 && fgAt(x, row) === 0x8d95a6 && !term.buffer.active.getLine(row)?.getCell(x)?.isBold())
+  }
+}
+show('long-command-open', { name: 'bash', callView: { card: 'terminal', title: longCommand } }, true)
+check('expanded command retains its full tail', await settled(() => screen().includes('COMMAND_END')))
+
 app.unmount()
 // 固定窗:pacing unmount 后输出 flush 无可观测条件。
 await sleep(100)

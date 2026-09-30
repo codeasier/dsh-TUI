@@ -1,7 +1,7 @@
 import React from 'react'
 import { marked, type Token } from 'marked'
 import Box from '../ink/components/Box.js'
-import { configureMarked, formatToken, stripPromptXMLTags } from '../terminal-utils/markdown.js'
+import { configureMarked, formatToken, isBlankMarkdownToken, markdownBlockGap, stripPromptXMLTags } from '../terminal-utils/markdown.js'
 import { t } from '../i18n.js'
 import { isMathBlockToken, mayBecomeCodeSpan } from '../terminal-utils/math.js'
 import { isStandaloneToken, Markdown } from './Markdown.js'
@@ -51,113 +51,41 @@ function clipSuffixTail(suffix: string, cut: { current: number }): string {
 }
 
 type StableBoundary = {
-  /** False when two Markdown components cannot reproduce an inline boundary. */
+  /** False when the candidate prefix has no visible block to seal. */
   safe: boolean
-  /** Empty display rows before a following text block. */
-  gap: number
-  /** Standalone nodes (tables, mermaid diagrams, math blocks) use Markdown's
-   *  fixed node gap instead of text newline spacing. */
-  endsWithNode: boolean
-  /** Whitespace after a standalone node becomes a zero-height node between two of them. */
-  trailingEmptyTextNode: boolean
+  type: string | undefined
+  separated: boolean
 }
 
 const UNSAFE_BOUNDARY: StableBoundary = {
   safe: false,
-  gap: 0,
-  endsWithNode: false,
-  trailingEmptyTextNode: false,
+  type: undefined,
+  separated: false,
 }
 
 /**
- * Token types whose formatted output is provably blank, taken from
- * the markdown dispatcher's table: `space`/`br` emit a single newline,
- * `def`/`html` emit nothing. Kept in step with `analyzeSuffixStart`,
- * which splits the same set into "newline" and "empty" halves.
- */
-function isBlankTokenType(type: string): boolean {
-  return type === 'space' || type === 'br' || type === 'def' || type === 'html'
-}
-
-/** Newlines contributed by a blank token: one for `space`/`br`, none otherwise. */
-function blankTokenNewlines(type: string): number {
-  return type === 'space' || type === 'br' ? 1 : 0
-}
-
-/**
- * Analyze the candidate stable tokens using the same formatter as Markdown.
- * Both split halves trim their outer whitespace, so the trailing newline count
- * determines the Yoga gap: one newline merely starts the next row; every
- * additional newline is one genuinely blank row. Standalone nodes are
- * separate layout nodes and therefore keep Markdown's fixed one-row node gap.
- *
- * Only the LAST token that can produce visible text decides the outcome, so
- * the region is walked backwards and formatted one token at a time instead of
- * concatenating (and syntax-highlighting) every settled block on each new
- * boundary. `formatToken` runs once for the common case.
+ * Only the last visible stable block and source separation matter. Inspect
+ * backwards so sealing a prefix never reformats all its historical blocks.
+ * Whitespace around standalone nodes is not another layout node.
  */
 function analyzeStableBoundary(tokens: readonly Token[], suffixIndex: number): StableBoundary {
-  // A standalone node resets the accumulated text, so only the segment after
-  // the last one matters; anything before it is already folded into the node branch.
-  let segmentStart = 0
-  let hasNode = false
+  let separated = false
   for (let i = suffixIndex - 1; i >= 0; i--) {
-    if (isStandaloneToken(tokens[i]!)) {
-      segmentStart = i + 1
-      hasNode = true
-      break
-    }
-  }
-
-  // Skip the trailing run of blank tokens, banking their newlines: they sit
-  // after the last visible text and therefore only extend its newline run.
-  let blankNewlines = 0
-  let cursor = suffixIndex - 1
-  while (cursor >= segmentStart && isBlankTokenType(tokens[cursor]!.type)) {
-    blankNewlines += blankTokenNewlines(tokens[cursor]!.type)
-    cursor--
-  }
-
-  // Format backwards until a token actually produces visible text. A token
-  // that formats to blank is folded into the newline run and skipped over.
-  for (let i = cursor; i >= segmentStart; i--) {
     const token = tokens[i]!
-    const ansiText = formatToken(token)
-    if (ansiText.trim() === '') {
-      blankNewlines += ansiText.match(/\n+$/)?.[0].length ?? 0
+    if (isBlankMarkdownToken(token.type)) {
+      separated ||= token.type === 'space' || token.type === 'br' || /\n\n$/.test(token.raw)
       continue
     }
-    const trailingNewlines = (ansiText.match(/\n+$/)?.[0].length ?? 0) + blankNewlines
-    // A zero-newline boundary (notably `hr` followed immediately by prose)
-    // belongs in one Markdown component; separate column children would force
-    // a line break that the whole-document formatter does not contain.
-    if (trailingNewlines === 0) return UNSAFE_BOUNDARY
-    return {
-      safe: true,
-      gap: Math.max(0, trailingNewlines - 1),
-      endsWithNode: false,
-      trailingEmptyTextNode: false,
+    if (isStandaloneToken(token) || formatToken(token).trim() !== '') {
+      return { safe: true, type: token.type, separated: separated || /\n\n$/.test(token.raw) }
     }
   }
-
-  if (hasNode) {
-    return {
-      safe: true,
-      gap: 1,
-      endsWithNode: true,
-      // Whitespace after the node still occupies a zero-height text node
-      // between two standalone nodes.
-      trailingEmptyTextNode: blankNewlines > 0,
-    }
-  }
-  // Definitions/raw HTML alone render nothing; advancing them buys no stable
-  // work and can lose whitespace that belongs to the next visible block.
   return UNSAFE_BOUNDARY
 }
 
 type SuffixStart = {
-  kind: 'text' | 'node' | undefined
-  leadingNewlines: number
+  type: string | undefined
+  separated: boolean
 }
 
 /** Find the first visible suffix node without formatting the growing token.
@@ -165,27 +93,21 @@ type SuffixStart = {
  * but gets trimmed at the start of the split suffix, so count it into the
  * boundary gap explicitly. */
 function analyzeSuffixStart(tokens: readonly Token[], startIndex: number): SuffixStart {
-  let leadingNewlines = 0
+  let separated = false
   for (let i = startIndex; i < tokens.length; i++) {
     const token = tokens[i]
     if (token === undefined) break
-    if (isStandaloneToken(token)) return { kind: 'node', leadingNewlines }
-    if (token.type === 'space' || token.type === 'br') {
-      leadingNewlines += 1
+    if (isBlankMarkdownToken(token.type)) {
+      separated ||= token.type === 'space' || token.type === 'br' || /\n\n$/.test(token.raw)
       continue
     }
-    if (token.type === 'def' || token.type === 'del' || token.type === 'html') continue
-    return { kind: 'text', leadingNewlines }
+    return { type: token.type, separated }
   }
-  return { kind: undefined, leadingNewlines }
+  return { type: undefined, separated }
 }
 
 function gapBetween(boundary: StableBoundary, start: SuffixStart): number {
-  if (start.kind === undefined) return 0
-  if (boundary.endsWithNode) {
-    return start.kind === 'node' && (boundary.trailingEmptyTextNode || start.leadingNewlines > 0) ? 2 : 1
-  }
-  return start.kind === 'node' ? 1 : boundary.gap + start.leadingNewlines
+  return markdownBlockGap(boundary.type, start.type, boundary.separated || start.separated)
 }
 
 type StableBlocks = {
@@ -213,10 +135,7 @@ export function StreamingMarkdown({
     boundary: undefined, definitions: false,
   })
   const cutRef = React.useRef(0)
-  const boundaryGapRef = React.useRef(0)
-  const prefixVisibleRef = React.useRef(false)
-  const prefixEndsWithNodeRef = React.useRef(false)
-  const prefixTrailingEmptyTextRef = React.useRef(false)
+  const prefixBoundaryRef = React.useRef(UNSAFE_BOUNDARY)
 
   // The boundary lex below must see the same tokenizer extensions (math
   // blocks) as the Markdown children, or the two disagree on block edges.
@@ -227,10 +146,7 @@ export function StreamingMarkdown({
   if (!stripped.startsWith(prefixRef.current)) {
     prefixRef.current = ''
     cutRef.current = 0
-    boundaryGapRef.current = 0
-    prefixVisibleRef.current = false
-    prefixEndsWithNodeRef.current = false
-    prefixTrailingEmptyTextRef.current = false
+    prefixBoundaryRef.current = UNSAFE_BOUNDARY
     blocksRef.current = {
       blocks: [], end: 0, tokens: [], tail: '', tailGap: 0,
       boundary: undefined, definitions: false,
@@ -301,10 +217,7 @@ export function StreamingMarkdown({
         blocks.tailGap = blocks.boundary === undefined ? 0 : gapBetween(blocks.boundary, analyzeSuffixStart(blocks.tokens, 0))
       }
       prefixRef.current = stripped.substring(0, boundary + advance)
-      boundaryGapRef.current = stableBoundary.gap
-      prefixVisibleRef.current = true
-      prefixEndsWithNodeRef.current = stableBoundary.endsWithNode
-      prefixTrailingEmptyTextRef.current = stableBoundary.trailingEmptyTextNode
+      prefixBoundaryRef.current = stableBoundary
       suffixTokenIndex = lastContentIdx
     }
   }
@@ -318,19 +231,9 @@ export function StreamingMarkdown({
   const suffixSource = stripped.substring(stablePrefix.length)
   const unstableSuffix = clipSuffixTail(suffixSource, cutRef)
   const suffixStart = cutRef.current > 0
-    ? { kind: 'text' as const, leadingNewlines: 0 }
+    ? { type: 'paragraph', separated: false }
     : analyzeSuffixStart(tokens, suffixTokenIndex)
-  const boundaryGap =
-    prefixVisibleRef.current && suffixStart.kind !== undefined
-      ? prefixEndsWithNodeRef.current
-        ? suffixStart.kind === 'node' &&
-          (prefixTrailingEmptyTextRef.current || suffixStart.leadingNewlines > 0)
-          ? 2
-          : 1
-        : suffixStart.kind === 'node'
-          ? 1
-          : boundaryGapRef.current + suffixStart.leadingNewlines
-      : 0
+  const boundaryGap = gapBetween(prefixBoundaryRef.current, suffixStart)
 
   // A lexer boundary must be strictly outside the stable prefix. If marked
   // reports a raw span that ends at the current cursor (possible around an

@@ -37,6 +37,7 @@ const fallbacks = {
   markdownStrong: 'toolNameMutate',
   markdownEmph: 'warning',
   markdownCode: 'permission',
+  markdownLink: 'ide',
   markdownBlockQuote: 'warning',
   markdownListItem: 'permission',
   markdownListEnumeration: 'ide',
@@ -89,6 +90,7 @@ const fixtures = [
   ['markdownStrong', '**STRONG**', 'STRONG', 'STRONG'],
   ['markdownEmph', '*EMPHASIS*', 'EMPHASIS', 'EMPHASIS'],
   ['markdownCode', '`INLINE_CODE`', 'INLINE_CODE', 'INLINE_CODE'],
+  ['markdownLink', '[LINK](https://example.invalid)', 'https://example.invalid', 'https://example.invalid'],
   ['markdownBlockQuote', '> QUOTED', 'QUOTED', '\u258e QUOTED'],
   ['markdownListItem', '- ITEM', '-', '- ITEM'],
   ['markdownListEnumeration', '9. NINE\n10. TEN', '10.', '9. NINE\n10. TEN'],
@@ -113,6 +115,7 @@ try {
   for (const name of ['dark', 'light', 'dark-ansi']) {
     const palette = theme.getTheme(name)
     verifyPalette(name, palette)
+    check(`${name}: heading, strong, code and link have distinct foregrounds`, new Set(['markdownHeading', 'markdownStrong', 'markdownCode', 'markdownLink'].map(key => expectedForeground(palette[key]))).size === 4)
     if (name === 'dark-ansi') check('dark-ansi: all Markdown keys use ANSI16', keys.every(key => /^ansi:(black|red|green|yellow|blue|magenta|cyan|white)(Bright)?$/.test(palette[key])))
   }
   theme.setActiveThemeName('dark')
