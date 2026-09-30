@@ -113,6 +113,25 @@ Available color keys by purpose:
 When the file declares `name`, its filename remains a loading alias. See the
 `Theme` type in [`src/theme.ts`](../src/theme.ts) for every color key.
 
+## Markdown semantic colors
+
+Eight color keys can be overridden independently of other UI accents:
+
+| Key | Purpose | Missing-key fallback for older palettes |
+| --- | --- | --- |
+| `markdownHeading` | Headings | `accent` |
+| `markdownStrong` | Strong text | `toolNameMutate` |
+| `markdownEmph` | Emphasis/italic text | `warning` |
+| `markdownCode` | Inline code | `permission` |
+| `markdownBlockQuote` | Blockquote body | `warning` |
+| `markdownListItem` | Unordered list markers | `permission` |
+| `markdownListEnumeration` | Ordered list numbering | `ide` |
+| `markdownHorizontalRule` | Horizontal rules | `inactive` |
+
+Built-in `dark` uses blue headings, warm-gold strong text, amber emphasis/quotes, permission-blue inline code/unordered markers, ide-blue numbering and inactive rules. `light` uses matching deep blues and golds; `dark-ansi` uses only the 16 ANSI colors.
+
+JSON and `tuiThemes` descriptors still inherit unspecified keys from their declared `base`. When an older plugin or custom resolver returns a palette without the new keys, `normalizeThemePalette` uses that palette's own legacy keys in the table; only a missing legacy fallback uses the corresponding legacy key from `dark`. Explicit new keys win, and palettes with all new keys retain object identity. Normalization of older palettes is cached, but changes to the original object trigger recomputation so hot updates do not retain stale colors.
+
 ## npm plugin themes
 
 An npm plugin registers a runtime theme through the `tuiThemes` service,

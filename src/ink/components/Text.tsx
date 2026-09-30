@@ -46,6 +46,8 @@ type BaseProps = {
    * If `truncate-*` is passed, Ink will truncate text instead, which will result in one line of text with the rest cut off.
    */
   readonly wrap?: Styles['textWrap'];
+  /** Content column in cells per source logical line; zero uses ordinary wrapping. */
+  readonly continuationIndent?: readonly number[];
   readonly children?: ReactNode;
 };
 
@@ -68,7 +70,7 @@ const wrapStyles = new Map<NonNullable<Styles['textWrap']>, Styles>()
 
 /** A text leaf. Empty children produce no layout node. */
 function Text({ children, ref, wrap = 'wrap', color, backgroundColor,
-  bold, dim, italic, underline, strikethrough, inverse,
+  bold, dim, italic, underline, strikethrough, inverse, continuationIndent,
 }: Props) {
   const textStyles = React.useMemo<TextStyles>(() => {
     const values = { color, backgroundColor, bold, dim, italic, underline, strikethrough, inverse }
@@ -80,7 +82,7 @@ function Text({ children, ref, wrap = 'wrap', color, backgroundColor,
     style = { flexDirection: 'row', flexGrow: 0, flexShrink: 1, textWrap: wrap }
     wrapStyles.set(wrap, style)
   }
-  return <ink-text ref={ref} style={style} textStyles={textStyles}>{children}</ink-text>
+  return <ink-text ref={ref} style={style} textStyles={textStyles} continuationIndent={continuationIndent}>{children}</ink-text>
 }
 
 export default React.memo(Text)

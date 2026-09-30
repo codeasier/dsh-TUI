@@ -11,7 +11,7 @@ import type { DOMNode, TextNode, DOMElement } from '../src/ink/dom.js'
 import type { Frame } from '../src/ink/frame.js'
 import type { Screen } from '../src/ink/screen.js'
 
-const [React, { marked }, { Box, Text }, { Markdown }, { StreamingMarkdown }, { MarkdownTable }, { configureMarked, formatToken }, { renderToScreen }, { cellAtIndex }] = await Promise.all([
+const [React, { marked }, { Box, Text }, { Markdown }, { StreamingMarkdown }, { MarkdownTable }, { configureMarked, formatTokenWithLayout, joinFormattedMarkdown, trimFormattedMarkdown }, { renderToScreen }, { cellAtIndex }] = await Promise.all([
   import('react'), import('marked'), import('../src/ui.js'),
   import('../src/components/Markdown.js'), import('../src/components/StreamingMarkdown.js'),
   import('../src/components/MarkdownTable.js'), import('../src/terminal-utils/markdown.js'),
@@ -21,16 +21,17 @@ configureMarked()
 
 function unsplit(source: string): React.ReactElement {
   const nodes: React.ReactNode[] = []
-  let text = ''
+  let part = { text: '', continuationIndent: [0] as readonly number[] }
   const flush = () => {
-    if (text) nodes.push(<Text key={nodes.length}>{text.trim()}</Text>)
-    text = ''
+    const trimmed = trimFormattedMarkdown(part, true, true)
+    if (trimmed.text) nodes.push(<Text key={nodes.length} continuationIndent={trimmed.continuationIndent.some(indent => indent > 0) ? trimmed.continuationIndent : undefined}>{trimmed.text}</Text>)
+    part = { text: '', continuationIndent: [0] }
   }
   for (const token of marked.lexer(source.trim())) {
     if (token.type === 'table') {
       flush()
       nodes.push(<MarkdownTable key={nodes.length} token={token as Tokens.Table} highlight={null} />)
-    } else text += formatToken(token)
+    } else part = joinFormattedMarkdown([part, formatTokenWithLayout(token)])
   }
   flush()
   return <Box flexDirection="column" gap={1}>{nodes}</Box>
@@ -60,6 +61,7 @@ const cases = [
   prefix + '\n\n\nlast paragraph\n',
   prefix + '```ts\nconst value = 1\n```\nprose after code\n\n',
   prefix + '- first item\n- second item\n\nnext paragraph',
+  prefix + '- [x] ' + '任务 e\u0301 😀 **bold** '.repeat(12) + '\n  - nested ' + 'words '.repeat(30) + '\n\nplain tail',
   prefix + '> a quoted paragraph\n> another line\n\ntail',
   prefix + '| a | b |\n| - | - |\n| 1 | 2 |\n\n| c |\n| - |\n| 3 |\n\ntail',
   '[link][target]\n\n' + prefix + '[target]: https://example.invalid\n\ntail',

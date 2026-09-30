@@ -115,6 +115,25 @@ DSH_TUI_THEME
 如果文件声明了 `name`，文件名仍可作为加载别名。完整颜色键见
 [`src/theme.ts`](../src/theme.ts) 中的 `Theme` 类型。
 
+## Markdown 语义颜色
+
+八个颜色键可独立覆盖，不改变其他 UI 强调色：
+
+| 键 | 用途 | 旧 palette 缺键时回退 |
+| --- | --- | --- |
+| `markdownHeading` | 标题 | `accent` |
+| `markdownStrong` | 粗体 | `toolNameMutate` |
+| `markdownEmph` | 强调/斜体 | `warning` |
+| `markdownCode` | 行内代码 | `permission` |
+| `markdownBlockQuote` | 引用正文 | `warning` |
+| `markdownListItem` | 无序列表标记 | `permission` |
+| `markdownListEnumeration` | 有序列表编号 | `ide` |
+| `markdownHorizontalRule` | 水平分隔线 | `inactive` |
+
+内置 `dark` 使用蓝色标题、暖金粗体、amber 强调/引用、permission 蓝行内代码/无序标记、ide 蓝编号与 inactive 分隔线；`light` 使用对应深蓝、深金，`dark-ansi` 只使用 ANSI 16 色。
+
+JSON 与 `tuiThemes` 描述符仍从声明的 `base` 继承未覆盖键。旧插件或自定义 resolver 返回缺少新键的 palette 时，`normalizeThemePalette` 按上表使用该 palette 自身的旧键；旧回退键也缺失时才使用 `dark` 的对应旧键。显式新键优先，新键齐全的 palette 保持对象 identity。旧 palette 的规范化结果会缓存，但原对象变化时重新计算，避免热更新沿用旧颜色。
+
 ## npm 插件主题
 
 npm 插件通过 `tuiThemes` 服务注册运行时主题，不必写入

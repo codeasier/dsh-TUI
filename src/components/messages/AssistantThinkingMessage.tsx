@@ -95,7 +95,7 @@ export function AssistantThinkingMessage({
   // Kimi Code style blue pulse: the streaming glyph breathes along the
   // header's brand→ice ladder, one sine period per ~7 frames (≈0.56s) —
   // lively without strobing. Minimal mode drops the color (plain glyph);
-  // settled always keeps the plain dim mark.
+  // settled labels use the theme's warning accent.
   //
   // No expand hint on the settled label: it rode every single thinking step,
   // so a long turn stacked a dozen identical `hint-expand-ctrl-o` tails —
@@ -110,7 +110,7 @@ export function AssistantThinkingMessage({
   const pulse = (Math.sin(frame * 0.9) + 1) / 2
   const pulseColor = interpolateColor(BRAND, ICE, pulse)
   const frameText = THINKING_SPINNER_FRAMES[frame % THINKING_SPINNER_FRAMES.length]!
-  // Hover 轻指示：可点击折叠时折叠头从 dim 提亮为正常色（不刷整行背景，
+  // Hover 轻指示：可点击折叠时折叠头从琥珀色切到正文色（不刷整行背景，
   // 转录视觉保持安静）。
   const [hovered, setHovered] = React.useState(false)
   const hoverProps = onClick !== undefined
@@ -121,14 +121,14 @@ export function AssistantThinkingMessage({
       <Box flexDirection="row">
         <Text>{minimalUi ? frameText : chalk.rgb(pulseColor.r, pulseColor.g, pulseColor.b).bold(frameText)}</Text>
         {/* 流式行同样可点击折叠（hover 提亮标签给出指示，与落定态一致） */}
-        <Text dimColor={!hovered} color={hovered ? 'text' : undefined} italic>{` ${label}`}</Text>
+        <Text color={minimalUi ? undefined : hovered ? 'text' : 'warning'} italic>{` ${label}`}</Text>
       </Box>
     ) : (
-      <Text italic dimColor={!hovered} color={hovered ? 'text' : undefined}>{`${minimalUi ? '*' : verbose ? THINKING_EXPANDED_MARKER : THINKING_SETTLED_MARKER} ${label}`}</Text>
+      <Text italic color={minimalUi ? undefined : hovered ? 'text' : 'warning'}>{`${minimalUi ? '*' : verbose ? THINKING_EXPANDED_MARKER : THINKING_SETTLED_MARKER} ${label}`}</Text>
     )
 
   if (preview) {
-    // Live ticker: the model's last few reasoning lines, dimmed, one Text
+    // Live ticker: the model's last few reasoning lines, accented, one Text
     // per row so each truncates to the width independently, padded to a
     // constant PREVIEW_ROWS-tall block that follows the stream. The folded
     // summary takes over when the step settles. The LAST row truncates
@@ -167,7 +167,7 @@ export function AssistantThinkingMessage({
               <Text dimColor italic>{'│ '}</Text>
               <Box flexDirection="row" flexGrow={1}>
                 <Text
-                  dimColor
+                  color={minimalUi ? undefined : 'warning'}
                   italic
                   wrap={i === rows.length - 1 ? 'truncate-start' : 'truncate'}
                 >
@@ -207,7 +207,7 @@ export function AssistantThinkingMessage({
         {/* StreamingMarkdown: the live thinking text grows per token — the
           incremental stable-prefix + tail budget keeps the per-frame layout
           cost at O(new content) instead of re-laying out the whole block. */}
-        <StreamingMarkdown dimColor>{thinking}</StreamingMarkdown>
+        <StreamingMarkdown>{thinking}</StreamingMarkdown>
       </Box>
     </RailedRow>
   )

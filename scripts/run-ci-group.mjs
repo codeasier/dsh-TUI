@@ -66,6 +66,9 @@ const GROUPS = {
     ['verify-streaming-markdown-blocks', ['node', '--import', 'tsx/esm', 'scripts/verify-streaming-markdown-blocks.tsx']],
 // Markdown P0: list markers/indentation, tasks, images, strike and hr boundaries.
     ['verify-markdown-blocks', ['node', 'scripts/verify-markdown-blocks.mjs']],
+    ['verify-markdown-palette', ['node', 'scripts/verify-markdown-palette.mjs']],
+    ['verify-hanging-wrap', ['node', '--import', 'tsx/esm', 'scripts/verify-hanging-wrap.tsx']],
+    ['verify-markdown-hanging', ['node', '--import', 'tsx/esm', 'scripts/verify-markdown-hanging.tsx']],
     ['verify-text-paint-budget', ['node', '--import', 'tsx/esm', 'scripts/verify-text-paint-budget.tsx']],
     ['verify-text-viewport-paint', ['node', '--import', 'tsx/esm', 'scripts/verify-text-viewport-paint.ts']],
     ['verify-tool-history-window', ['node', '--import', 'tsx/esm', 'scripts/verify-tool-history-window.tsx']],

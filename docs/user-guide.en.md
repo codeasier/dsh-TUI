@@ -58,6 +58,12 @@ dsh-tui
   type `/命令 ` first, then Tab).
 - Non-command input is a normal message. **Unknown commands are sent to the model as plain messages**.
 
+### 1.4 Reading Markdown and thinking
+
+Headings leave one blank line before the next block. Headings, strong text, emphasis, inline code, quotes, list markers/numbering and rules have dedicated [theme colors](themes.en.md). Soft-wrapped list lines align with the body; display-only padding is excluded from copied text. Thinking headers and streaming previews use the warning color at normal brightness. `Ctrl+O` expands the full text with Markdown colors rather than dimming the whole block. Minimal UI does not force these thinking colors.
+
+Areas too narrow for both the marker and body fall back to ordinary wrapping. If the performance budget clips an exceptionally long streaming tail past its list context, that tail temporarily renders as ordinary text; the settled message restores the complete list layout.
+
 ## 2. Keymap quick reference
 
 > In the tables, `Ctrl` on macOS can usually be swapped for `⌘` (`⌘V` `⌘O` `⌘R` `⌘T` `⌘L` `⌘Enter`);

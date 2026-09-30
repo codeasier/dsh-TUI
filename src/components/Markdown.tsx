@@ -1,7 +1,8 @@
 import React from 'react'
 import { marked, type Token, type Tokens } from 'marked'
-import { Box, Text } from '../ui.js'
-import { configureMarked, formatToken, stripPromptXMLTags } from '../terminal-utils/markdown.js'
+import { Box, Text, useTheme } from '../ui.js'
+import { getTheme, type Theme } from '../theme.js'
+import { configureMarked, formatTokenWithLayout, joinFormattedMarkdown, trimFormattedMarkdown, stripPromptXMLTags, type FormattedMarkdown } from '../terminal-utils/markdown.js'
 import { getCliHighlightPromise, type CliHighlight } from '../terminal-utils/cliHighlight.js'
 import { isMermaidLang } from '../terminal-utils/mermaid.js'
 import { isMathBlockToken, isMathToken } from '../terminal-utils/math.js'
@@ -140,35 +141,40 @@ function renderTokensToNodes(
   highlight: CliHighlight | null,
   dimColor: boolean,
   inlineMathImages: boolean,
+  palette: Theme,
 ): React.ReactNode[] {
   const nodes: React.ReactNode[] = []
-  let ansiText = ''
-  let textParts: string[] = []
+  let ansiText: FormattedMarkdown = { text: '', continuationIndent: [0] }
+  let textParts: FormattedMarkdown[] = []
   let afterOwnNode = false
 
   const flushAnsiText = (): void => {
-    if (!ansiText && textParts.length === 0) return
+    if (!ansiText.text && textParts.length === 0) return
     if (textParts.length === 0) {
-      nodes.push(<Text key={nodes.length} dimColor={dimColor}>{ansiText.trim()}</Text>)
+      const part = trimFormattedMarkdown(ansiText, true, true)
+      nodes.push(<Text key={nodes.length} dimColor={dimColor} continuationIndent={part.continuationIndent.some(indent => indent > 0) ? part.continuationIndent : undefined}>{part.text}</Text>)
     } else {
       textParts.push(ansiText)
       let first = 0
       let last = textParts.length - 1
-      while (first < last && textParts[first]!.trimStart() === '') first++
-      while (last > first && textParts[last]!.trimEnd() === '') last--
-      textParts[first] = textParts[first]!.trimStart()
-      textParts[last] = textParts[last]!.trimEnd()
+      while (first < last && textParts[first]!.text.trimStart() === '') first++
+      while (last > first && textParts[last]!.text.trimEnd() === '') last--
+      textParts[first] = trimFormattedMarkdown(textParts[first]!, true, false)
+      textParts[last] = trimFormattedMarkdown(textParts[last]!, false, true)
       // Each internal boundary replaces exactly one source newline with a
       // column-child boundary. Only the whole text span trims outer space.
       nodes.push(
         <Box key={nodes.length} flexDirection="column">
-          {textParts.slice(first, last + 1).map((part, index) => (
-            <Text key={index} dimColor={dimColor}>{index + first < last ? part.slice(0, -1) : part}</Text>
-          ))}
+          {textParts.slice(first, last + 1).map((part, index) => {
+            const internal = index + first < last
+            const text = internal ? part.text.slice(0, -1) : part.text
+            const indents = internal ? part.continuationIndent.slice(0, -1) : part.continuationIndent
+            return <Text key={index} dimColor={dimColor} continuationIndent={indents.some(indent => indent > 0) ? indents : undefined}>{text}</Text>
+          })}
         </Box>,
       )
     }
-    ansiText = ''
+    ansiText = { text: '', continuationIndent: [0] }
     textParts = []
   }
 
@@ -206,12 +212,12 @@ function renderTokensToNodes(
         />,
       )
     } else {
-      ansiText += formatToken(token, 0, null, null, highlight)
+      ansiText = joinFormattedMarkdown([ansiText, formatTokenWithLayout(token, highlight, palette)])
       // A top-level token boundary keeps inline formatting and code fences
       // intact while letting the painter cull finished offscreen text blocks.
-      if (ansiText.length >= TEXT_BLOCK_BUDGET && ansiText.endsWith('\n')) {
+      if (ansiText.text.length >= TEXT_BLOCK_BUDGET && ansiText.text.endsWith('\n')) {
         textParts.push(ansiText)
-        ansiText = ''
+        ansiText = { text: '', continuationIndent: [0] }
       }
     }
   }
@@ -232,6 +238,8 @@ function renderTokensToNodes(
  * of CPU in streaming profiles).
  */
 function MarkdownImpl({ children, dimColor = false, cacheTokens = true, inlineMathImages = true }: Props): React.ReactNode {
+  const [themeName] = useTheme()
+  const palette = getTheme(themeName)
   const [highlight, setHighlight] = React.useState<CliHighlight | null>(null)
   // Inline math is baked into the ANSI text, so the switch must invalidate
   // the memo below (MathBlock nodes subscribe on their own).
@@ -257,8 +265,9 @@ function MarkdownImpl({ children, dimColor = false, cacheTokens = true, inlineMa
       dimColor,
       // Dimmed text (thinking) cannot dim an image, so it keeps Unicode.
       inlineMathImages && mathRendering === 'image' && !dimColor,
+      palette,
     )
-  }, [children, dimColor, highlight, cacheTokens, mathRendering, inlineMathImages])
+  }, [children, dimColor, highlight, cacheTokens, mathRendering, inlineMathImages, palette])
 
   return (
     <Box flexDirection="column" gap={1}>

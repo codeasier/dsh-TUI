@@ -20,6 +20,13 @@ import { terminalImageSourceFromAttributes } from './terminal-image.js'
 import type { TerminalImagePlacement } from './terminal-image.js'
 import { widestLine } from './widest-line.js'
 import wrapText from './wrap-text.js'
+import { addSyntheticIndents, hangingWrap } from './hanging-wrap.js'
+
+const hangingPaintMetadata = new WeakMap<DOMElement, {
+  prepared: object
+  continuationIndent: readonly number[]
+  syntheticIndents: readonly number[]
+}>()
 
 // Matches detectXtermJsWheel() in ScrollKeybindingHandler.tsx — the curve
 // and drain must agree on terminal detection. TERM_PROGRAM check is the sync
@@ -958,12 +965,16 @@ function renderNodeToOutput(
       const paddingLeft = paddingNode?.getComputedLeft() ?? 0
       const paddingTop = paddingNode?.getComputedTop() ?? 0
       const prepared = textPaintCache.get(node)
+      const continuationIndent = node.attributes['continuationIndent'] as readonly number[] | undefined
+      const hangingPrepared = hangingPaintMetadata.get(node)
       if (
         prepared !== undefined &&
         prepared.maxWidth === maxWidth &&
         prepared.background === inheritedBackgroundColor &&
         prepared.paddingLeft === paddingLeft &&
-        prepared.paddingTop === paddingTop
+        prepared.paddingTop === paddingTop &&
+        (continuationIndent === undefined ||
+          (hangingPrepared?.prepared === prepared && hangingPrepared.continuationIndent === continuationIndent))
       ) {
         output.write(x, y, prepared.text, prepared.softWrap, prepared.lines)
       } else {
@@ -987,10 +998,12 @@ function renderNodeToOutput(
 
           let text: string
           let softWrap: boolean[] | undefined
+          const hanging = continuationIndent === undefined ? undefined
+            : hangingWrap(plainText, maxWidth, textWrap, continuationIndent)
           if (needsWrapping && segments.length === 1) {
             // Single segment: wrap plain text first, then apply styles to each line
             const segment = segments[0]!
-            const w = wrapWithSoftWrap(plainText, maxWidth, textWrap)
+            const w = hanging ?? wrapWithSoftWrap(plainText, maxWidth, textWrap)
             softWrap = w.softWrap
             text = w.wrapped
               .split('\n')
@@ -1010,7 +1023,7 @@ function renderNodeToOutput(
             // Multiple segments with wrapping: wrap plain text first, then re-apply
             // each segment's styles based on character positions. This preserves
             // per-segment styles even when text wraps across lines.
-            const w = wrapWithSoftWrap(plainText, maxWidth, textWrap)
+            const w = hanging ?? wrapWithSoftWrap(plainText, maxWidth, textWrap)
             softWrap = w.softWrap
             const charToSegment = buildCharToSegmentMap(segments)
             text = applyStylesToWrappedText(
@@ -1035,6 +1048,8 @@ function renderNodeToOutput(
               .join('')
           }
 
+          // Restore source-indexed styles before introducing non-source cells.
+          if (hanging) text = addSyntheticIndents(text, hanging.syntheticIndents)
           text = applyPaddingToText(node, text, softWrap)
 
           const lines = text.split('\n')
@@ -1042,7 +1057,24 @@ function renderNodeToOutput(
             maxWidth, background: inheritedBackgroundColor, paddingLeft, paddingTop,
             text, lines, softWrap,
           })
+          if (hanging && continuationIndent) {
+            hangingPaintMetadata.set(node, {
+              prepared: textPaintCache.get(node)!, continuationIndent,
+              syntheticIndents: hanging.syntheticIndents,
+            })
+          } else {
+            hangingPaintMetadata.delete(node)
+          }
           output.write(x, y, text, softWrap, lines)
+        }
+      }
+      const indents = hangingPaintMetadata.get(node)
+      if (continuationIndent && indents && indents.prepared === textPaintCache.get(node)) {
+        for (let row = 0; row < indents.syntheticIndents.length; row++) {
+          const indent = indents.syntheticIndents[row]!
+          if (indent > 0) output.noSelect({
+            x: x + paddingLeft, y: y + paddingTop + row, width: indent, height: 1,
+          })
         }
       }
     } else if (

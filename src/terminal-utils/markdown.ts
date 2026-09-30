@@ -18,7 +18,7 @@ import stripAnsi from 'strip-ansi'
 import { stringWidth } from '../ink/stringWidth.js'
 import { supportsHyperlinks } from '../ink/supports-hyperlinks.js'
 import { colorize } from '../ink/colorize.js'
-import { getActiveTheme } from '../theme.js'
+import { getActiveTheme, type Theme } from '../theme.js'
 import { buildSyntaxTheme } from './syntaxTheme.js'
 import type { CliHighlight } from './cliHighlight.js'
 import { logForDebugging } from '../utils/debug.js'
@@ -95,23 +95,23 @@ export function configureMarked(): void {
   })
 }
 
-/** Inline code is painted with the active theme's permission accent. */
-function paintInlineCode(text: string): string {
-  return colorize(text, getActiveTheme().permission, 'foreground')
+/** Inline code uses its own semantic slot, not the UI focus accent. */
+function paintInlineCode(text: string, state: RenderState): string {
+  return colorize(text, renderTheme(state).markdownCode, 'foreground')
 }
 
 /**
  * Inline code that reads as a file path becomes a clickable target (the
- * OSC 8 wrap keeps the code's permission color via the identity style —
+ * OSC 8 wrap keeps the code's semantic color via the identity style —
  * createHyperlink's default blue would otherwise override it). Terminals
  * without OSC 8 support keep the plain painted code span.
  */
-function renderCodeSpan(token: Tokens.Codespan): string {
-  // Paint via the style callback so the permission color is applied AFTER
+function renderCodeSpan(token: Tokens.Codespan, state: RenderState): string {
+  // Paint via the style callback so the semantic color is applied AFTER
   // createHyperlink's anti-smuggle content scrub: passing the painted
   // string as content would have its ESC bytes stripped, leaving
   // `[38;2;…m` parameter text on screen.
-  const paint = (text: string): string => paintInlineCode(text)
+  const paint = (text: string): string => paintInlineCode(text, state)
   if (!looksLikeFilePath(token.text)) return paint(token.text)
   if (!supportsHyperlinks()) return paint(token.text)
   return createHyperlink(fileLinkUrl(token.text), token.text, {
@@ -144,6 +144,8 @@ function linkifyText(text: string): string {
 interface RenderState {
   /** Syntax highlighter for code blocks; null renders them as plain text. */
   readonly highlight: CliHighlight | null
+  readonly palette?: Theme
+  readonly layout?: Map<Token, readonly number[]>
   /** The token whose children are being rendered (link / list_item). */
   readonly parent: Token | null
   /** Nesting depth of the enclosing list; drives indentation and numbering style. */
@@ -154,7 +156,7 @@ interface RenderState {
 
 /** A fresh context for block-level children: list state reset, no parent. */
 function fresh(state: RenderState): RenderState {
-  return { highlight: state.highlight, parent: null, listDepth: 0, ordinal: null }
+  return { highlight: state.highlight, palette: state.palette, layout: state.layout, parent: null, listDepth: 0, ordinal: null }
 }
 
 /** Same context, different parent token. */
@@ -165,6 +167,56 @@ function withParent(state: RenderState, parent: Token | null): RenderState {
 /** Inline-styled children keep the outer parent but shed list context. */
 function inlineChildren(state: RenderState): RenderState {
   return { ...state, listDepth: 0, ordinal: null }
+}
+
+function renderTheme(state: RenderState): Theme {
+  return state.palette ?? getActiveTheme()
+}
+
+export interface FormattedMarkdown {
+  readonly text: string
+  /** Content column of each source logical line; zero means ordinary wrap. */
+  readonly continuationIndent: readonly number[]
+}
+
+export function joinFormattedMarkdown(parts: readonly FormattedMarkdown[]): FormattedMarkdown {
+  let text = ''
+  const continuationIndent = [0]
+  let tailWidth = 0
+  for (const part of parts) {
+    const last = continuationIndent.length - 1
+    const first = part.continuationIndent[0] ?? 0
+    if (first > 0) continuationIndent[last] = tailWidth + first
+    for (const indent of part.continuationIndent.slice(1)) continuationIndent.push(indent)
+    const newline = part.text.lastIndexOf(EOL)
+    tailWidth = newline >= 0
+      ? stringWidth(stripAnsi(part.text.slice(newline + 1)))
+      : tailWidth + stringWidth(stripAnsi(part.text))
+    text += part.text
+  }
+  return { text, continuationIndent }
+}
+
+export function trimFormattedMarkdown(part: FormattedMarkdown, start: boolean, end: boolean): FormattedMarkdown {
+  const text = end ? (start ? part.text.trim() : part.text.trimEnd()) : (start ? part.text.trimStart() : part.text)
+  const removedStart = start ? part.text.slice(0, part.text.length - part.text.trimStart().length) : ''
+  const skippedLines = removedStart.split(EOL).length - 1
+  const continuationIndent = part.continuationIndent.slice(skippedLines, skippedLines + text.split(EOL).length)
+  if (continuationIndent.length > 0) {
+    continuationIndent[0] = Math.max(0, (continuationIndent[0] ?? 0) - stringWidth(removedStart.slice(removedStart.lastIndexOf(EOL) + 1)))
+  }
+  return { text, continuationIndent }
+}
+
+export function formatTokenWithLayout(token: Token, highlight: CliHighlight | null = null, palette: Theme = getActiveTheme()): FormattedMarkdown {
+  const layout = new Map<Token, readonly number[]>()
+  const text = dispatch(token, { highlight, palette, layout, parent: null, listDepth: 0, ordinal: null })
+  return { text, continuationIndent: layout.get(token) ?? [0] }
+}
+
+function formattedChild(token: Token, state: RenderState): FormattedMarkdown {
+  const text = dispatch(token, state)
+  return { text, continuationIndent: state.layout?.get(token) ?? text.split(EOL).map(() => 0) }
 }
 
 /**
@@ -228,16 +280,22 @@ function isToken<K extends MarkedToken['type']>(
 
 /** Fan-out point: narrows the token union, then delegates to the per-type render functions. */
 function dispatch(token: Token, state: RenderState): string {
+  const text = renderToken(token, state)
+  if (state.layout && !state.layout.has(token)) state.layout.set(token, text.split(EOL).map(() => 0))
+  return text
+}
+
+function renderToken(token: Token, state: RenderState): string {
   if (isToken(token, 'blockquote')) return renderBlockquote(token, state)
   if (isToken(token, 'code')) return renderCodeBlock(token, state)
-  if (isToken(token, 'codespan')) return renderCodeSpan(token)
+  if (isToken(token, 'codespan')) return renderCodeSpan(token, state)
   if (isToken(token, 'em')) return renderEmphasis(token, state)
   if (isToken(token, 'strong')) return renderStrong(token, state)
   if (isToken(token, 'heading')) return renderHeading(token, state)
   if (isToken(token, 'del')) {
     return chalk.strikethrough(token.tokens.map(child => dispatch(child, inlineChildren(state))).join(''))
   }
-  if (isToken(token, 'hr')) return chalk.dim('\u2500'.repeat(16)) + EOL
+  if (isToken(token, 'hr')) return colorize('\u2500'.repeat(16), renderTheme(state).markdownHorizontalRule, 'foreground') + EOL
   if (isToken(token, 'image')) {
     const target = state.parent?.type === 'link' ? token.href : createHyperlink(token.href)
     return token.text ? `${token.text} (${target})` : target
@@ -280,13 +338,19 @@ function renderNestedMathBlock(token: MathToken): string {
 }
 
 function renderBlockquote(token: Tokens.Blockquote, state: RenderState): string {
-  const inner = token.tokens.map(child => dispatch(child, fresh(state))).join('')
+  const formatted = joinFormattedMarkdown(token.tokens.map(child => formattedChild(child, fresh(state))))
+  const inner = formatted.text
+  const innerLines = inner.split(EOL)
+  state.layout?.set(token, formatted.continuationIndent.map((indent, i) => {
+    const plain = stripAnsi(innerLines[i] ?? '')
+    if (!plain.trim()) return 0
+    return 2 + (indent > 0 ? indent : plain.match(/^ */)?.[0].length ?? 0)
+  }))
   // Dim gutter bar per line; keep the text italic but at normal brightness —
   // chalk.dim is nearly invisible on dark themes.
   const gutter = chalk.dim(QUOTE_BAR)
-  return inner
-    .split(EOL)
-    .map(line => (stripAnsi(line).trim() ? `${gutter} ${chalk.italic(line)}` : line))
+  return innerLines
+    .map(line => (stripAnsi(line).trim() ? `${gutter} ${chalk.italic(colorize(line, renderTheme(state).markdownBlockQuote, 'foreground'))}` : line))
     .join(EOL)
 }
 
@@ -294,7 +358,7 @@ function renderCodeBlock(token: Tokens.Code, state: RenderState): string {
   // Kimi Code style: a muted ```lang opening line (language tag + boundary
   // for unhighlighted blocks) + 2-space indent; no closing fence (syntax
   // colors or the indent already mark the end, it only cost vertical space).
-  const theme = getActiveTheme()
+  const theme = renderTheme(state)
   const openFence = colorize('```' + (token.lang ?? ''), theme.subtle, 'foreground')
   const indent = '  '
   const renderBody = (): string => {
@@ -331,26 +395,19 @@ function renderCodeBlock(token: Tokens.Code, state: RenderState): string {
 
 function renderEmphasis(token: Tokens.Em, state: RenderState): string {
   const inner = token.tokens.map(child => dispatch(child, inlineChildren(state))).join('')
-  return chalk.italic(inner)
+  return chalk.italic(colorize(inner, renderTheme(state).markdownEmph, 'foreground'))
 }
 
 function renderStrong(token: Tokens.Strong, state: RenderState): string {
   const inner = token.tokens.map(child => dispatch(child, inlineChildren(state))).join('')
-  return chalk.bold(inner)
+  return chalk.bold(colorize(inner, renderTheme(state).markdownStrong, 'foreground'))
 }
 
 function renderHeading(token: Tokens.Heading, state: RenderState): string {
   const text = token.tokens.map(child => dispatch(child, fresh(state))).join('')
-  // Blue-primary progression: H1 gets the mist brand blue + underline, H2 the
-  // lighter border blue, deeper levels stay bold near-text (kimi-style).
-  const theme = getActiveTheme()
-  const styled =
-    token.depth === 1
-      ? chalk.bold.underline(colorize(text, theme.accent, 'foreground'))
-      : token.depth === 2
-        ? chalk.bold(colorize(text, theme.permission, 'foreground'))
-        : chalk.bold(text)
-  return styled + EOL + EOL
+  const heading = colorize(text, renderTheme(state).markdownHeading, 'foreground')
+  const styled = token.depth === 1 ? chalk.bold.underline(heading) : chalk.bold(heading)
+  return styled + EOL
 }
 
 function renderLink(token: Tokens.Link, state: RenderState): string {
@@ -374,20 +431,20 @@ function renderList(token: Tokens.List, state: RenderState): string {
   // ordered lists always carry a numeric start ("" only occurs for unordered),
   // but the type says otherwise, so coerce defensively.
   const start = typeof token.start === 'number' ? token.start : 1
-  return token.items
-    .map((item, index) => {
-      const ordinal = token.ordered ? start + index : null
-      return dispatch(item, { ...state, ordinal })
-    })
-    .join('')
+  const result = joinFormattedMarkdown(token.items.map((item, index) => {
+    const ordinal = token.ordered ? start + index : null
+    return formattedChild(item, { ...state, ordinal })
+  }))
+  state.layout?.set(token, result.continuationIndent)
+  return result.text
 }
 
 function renderListItem(token: Tokens.ListItem, state: RenderState): string {
   const indent = '  '.repeat(state.listDepth)
   const depth = state.listDepth + 1
   const bullet = state.ordinal === null ? '-' : `${formatListMarker(depth, state.ordinal)}.`
-  const theme = getActiveTheme()
-  const marker = colorize(bullet, theme.permission, 'foreground')
+  const theme = renderTheme(state)
+  const marker = colorize(bullet, state.ordinal === null ? theme.markdownListItem : theme.markdownListEnumeration, 'foreground')
   const checkbox = token.task
     ? colorize(token.checked ? '[\u2713]' : '[ ]', token.checked ? theme.success : theme.subtle, 'foreground') + ' '
     : ''
@@ -395,24 +452,39 @@ function renderListItem(token: Tokens.ListItem, state: RenderState): string {
   const continuation = indent + ' '.repeat(stringWidth(bullet + ' ' + stripAnsi(checkbox)))
   const childState = withParent({ ...state, listDepth: depth }, token)
   let first = true
+  const indents: number[] = []
   const body = token.tokens.map(child => {
     let body = dispatch(child, childState).replace(/\n+$/, '')
-    // Newer marked versions include a checkbox token; the prefix owns it.
-    if (!body) return child.type === 'space' ? EOL : ''
-    if (child.type === 'list') {
-      // Nested lists already carry their own absolute depth indentation.
-      const nestedIndent = '  '.repeat(depth)
+    if (!body) {
+      if (child.type === 'space') indents.push(0)
+      return child.type === 'space' ? EOL : ''
+    }
+    const nestedIndent = child.type === 'list' ? '  '.repeat(depth) : ''
+    const childIndents = state.layout?.get(child)
+    if (nestedIndent) {
       body = body.split(EOL)
         .map(line => line.startsWith(nestedIndent) ? line.slice(nestedIndent.length) : line)
         .join(EOL)
     }
-    return body.split(EOL).map(line => {
-      if (!stripAnsi(line).trim()) return ''
+    return body.split(EOL).map((line, index) => {
+      if (!stripAnsi(line).trim()) {
+        indents.push(0)
+        return ''
+      }
       const lead = first ? prefix : continuation
       first = false
+      const contentIndent = nestedIndent
+        ? Math.max(0, (childIndents?.[index] ?? 0) - nestedIndent.length)
+        : (childIndents?.[index] ?? 0) > 0
+          ? childIndents![index]!
+          : stripAnsi(line).match(/^ */)?.[0].length ?? 0
+      indents.push(stringWidth(stripAnsi(lead)) + contentIndent)
       return lead + line
     }).join(EOL) + EOL
   }).join('')
+  if (first) indents.unshift(stringWidth(stripAnsi(prefix)))
+  indents.push(0)
+  state.layout?.set(token, indents)
   return first ? prefix + EOL + body : body
 }
 

@@ -72,11 +72,11 @@ const UNSAFE_BOUNDARY: StableBoundary = {
 /**
  * Token types whose formatted output is provably blank, taken from
  * the markdown dispatcher's table: `space`/`br` emit a single newline,
- * `def`/`del`/`html` emit nothing. Kept in step with `analyzeSuffixStart`,
+ * `def`/`html` emit nothing. Kept in step with `analyzeSuffixStart`,
  * which splits the same set into "newline" and "empty" halves.
  */
 function isBlankTokenType(type: string): boolean {
-  return type === 'space' || type === 'br' || type === 'def' || type === 'del' || type === 'html'
+  return type === 'space' || type === 'br' || type === 'def' || type === 'html'
 }
 
 /** Newlines contributed by a blank token: one for `space`/`br`, none otherwise. */

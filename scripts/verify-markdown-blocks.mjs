@@ -13,10 +13,11 @@ process.env.DSH_TUI_THEME = 'dark'
 process.env.TERM = 'dumb'
 delete process.env.TERM_PROGRAM
 delete process.env.LC_TERMINAL
-const [{ applyMarkdown, formatToken }, { default: stripAnsi }, { supportsHyperlinks }] = await Promise.all([
+const [{ applyMarkdown, formatToken, formatTokenWithLayout, joinFormattedMarkdown, trimFormattedMarkdown }, { default: stripAnsi }, { supportsHyperlinks }, { marked }] = await Promise.all([
   import('../lib/types/terminal-utils/markdown.js'),
   import('strip-ansi'),
   import('../lib/types/ink/supports-hyperlinks.js'),
+  import('marked'),
 ])
 let checks = 0
 let failures = 0
@@ -80,6 +81,21 @@ process.env.TERM_PROGRAM = 'kitty'
 const linkedImage = applyMarkdown('[![alt](https://example.com/i.png)](https://example.com/page)')
 equal('linked image OSC label is intact', stripAnsi(linkedImage), 'alt (https://example.com/i.png)')
 check('linked image emits only the outer OSC target', (linkedImage.match(/\u001b\]8;;https:/g) ?? []).length === 1 && linkedImage.includes('\u001b]8;;https://example.com/page\u0007'), JSON.stringify(linkedImage))
+for (const [name, source, expected] of [
+  ['mixed paragraphs and tasks', 'plain\n\n- [x] done\n- next\n\nlast', [0, 0, 6, 2, 0, 0]],
+  ['nested ordered and code', '1. a\n   2. nested\n\n      ```txt\n      - not a list\n      ```', [3, 6, 0, 6, 8]],
+  ['quoted nested list', '> - quote\n>   - nested', [4, 6]],
+  ['quote inside list', '- > - quoted item', [6]],
+  ['later quote inside list', '- outer\n\n  > - quoted item', [2, 0, 6]],
+  ['ordinary quote body', '> quoted words', [2]],
+  ['large quoted list', Array.from({ length: 6000 }, () => '> - item').join('\n'), Array(6000).fill(4)],
+  ['empty item', '- \n- next', [2, 2]],
+]) {
+  const part = trimFormattedMarkdown(joinFormattedMarkdown(marked.lexer(source).map(token => formatTokenWithLayout(token))), false, true)
+  equal(`${name} layout retains formatter text`, part.text, applyMarkdown(source))
+  equal(`${name} content columns`, JSON.stringify(part.continuationIndent), JSON.stringify(expected))
+  equal(`${name} one metadata entry per logical line`, part.continuationIndent.length, part.text.split('\n').length)
+}
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exitCode = 1
 else console.log('Markdown P0 blocks: OK')

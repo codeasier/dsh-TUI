@@ -289,6 +289,8 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 输入框鼠标选区编辑（拖选/Shift+click/双击选词/删除替换/Esc 分层/Ctrl+C 复制、CJK 宽字符与 fold 侧钳制） | `node --import tsx/esm scripts/verify-input-selection.tsx` |
 | Sixel 编码、worker 缓存、缩略图/预览生命周期 | `node --import tsx/esm scripts/verify-terminal-images-sixel.tsx`、`node --import tsx/esm scripts/verify-sixel-transcript.tsx`；耗时对比 `node --import tsx/esm scripts/bench-sixel-encode.tsx` |
 | Markdown 列表标记、任务项、列表内块、图片描述、删除线与分割线 | `node scripts/verify-markdown-blocks.mjs` |
+| Markdown 悬挂缩进、软换行复制与超长列表滚动 | `node --import tsx/esm scripts/verify-hanging-wrap.tsx`、`node --import tsx/esm scripts/verify-markdown-hanging.tsx` |
+| Markdown 语义主题色、旧 palette 回退/缓存、标题间距与思考颜色 | `node scripts/verify-markdown-palette.mjs` |
 | Markdown 独立节点（表格、mermaid 图、公式块）、LaTeX 公式与流式分块间距 | `pnpm verify:table-layout`、`pnpm verify:mermaid-diagram`、`pnpm verify:latex-math`、`node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx` |
 | 跨进程会话占用账本（失败行为、严格读、锁回收、预约） | `pnpm verify:session-mounts` |
 | 未发送草稿的跨屏交接（快照、光标、图片绑定、归属） | `pnpm verify:composer-draft-handoff`；端到端换屏另见 `node scripts/verify-session-browser.mjs` |

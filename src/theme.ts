@@ -49,6 +49,15 @@ export type Theme = {
   warning: string
   merged: string
   warningShimmer: string
+  // Markdown semantics, independently overridable from UI accents.
+  markdownHeading: string
+  markdownStrong: string
+  markdownEmph: string
+  markdownCode: string
+  markdownBlockQuote: string
+  markdownListItem: string
+  markdownListEnumeration: string
+  markdownHorizontalRule: string
   // Diff colors
   diffAdded: string
   diffRemoved: string
@@ -269,6 +278,14 @@ const darkTheme: Theme = {
   warning: rgb('#D8B270'), // Soft amber
   merged: rgb('#B3A0D4'), // Soft violet (matches autoAccept)
   warningShimmer: rgb('#E4C78E'),
+  markdownHeading: rgb('#7DA1DE'),
+  markdownStrong: rgb('#E5C07B'),
+  markdownEmph: rgb('#D8B270'),
+  markdownCode: rgb('#ABC2EC'),
+  markdownBlockQuote: rgb('#D8B270'),
+  markdownListItem: rgb('#ABC2EC'),
+  markdownListEnumeration: rgb('#5E88CC'),
+  markdownHorizontalRule: rgb('#8D95A6'),
   diffAdded: rgb('#27392C'),
   diffRemoved: rgb('#3E2A2C'),
   diffAddedDimmed: rgb('#2B352C'),
@@ -352,6 +369,14 @@ const lightTheme: Theme = {
   warning: rgb('#C08A3E'), // Muted amber
   merged: rgb('#9B86B8'), // Muted violet (matches autoAccept)
   warningShimmer: rgb('#D0A050'),
+  markdownHeading: rgb('#3F6CC4'),
+  markdownStrong: rgb('#8A6A00'),
+  markdownEmph: rgb('#8A6A00'),
+  markdownCode: rgb('#3F6CC4'),
+  markdownBlockQuote: rgb('#8A6A00'),
+  markdownListItem: rgb('#3F6CC4'),
+  markdownListEnumeration: rgb('#3F6CC4'),
+  markdownHorizontalRule: rgb('#8991A0'),
   diffAdded: rgb('#DCEBDD'),
   diffRemoved: rgb('#F2DEDE'),
   diffAddedDimmed: rgb('#E4EFE5'),
@@ -438,6 +463,14 @@ const darkAnsiTheme: Theme = {
   warning: 'ansi:yellowBright',
   merged: 'ansi:magentaBright',
   warningShimmer: 'ansi:yellowBright',
+  markdownHeading: 'ansi:blueBright',
+  markdownStrong: 'ansi:yellowBright',
+  markdownEmph: 'ansi:yellowBright',
+  markdownCode: 'ansi:blueBright',
+  markdownBlockQuote: 'ansi:yellowBright',
+  markdownListItem: 'ansi:blueBright',
+  markdownListEnumeration: 'ansi:cyanBright',
+  markdownHorizontalRule: 'ansi:white',
   diffAdded: 'ansi:green',
   diffRemoved: 'ansi:red',
   diffAddedDimmed: 'ansi:green',
@@ -489,6 +522,17 @@ const darkAnsiTheme: Theme = {
   subagentStatusFailed: 'ansi:redBright',
 }
 
+export const MARKDOWN_THEME_FALLBACKS = Object.freeze({
+  markdownHeading: 'accent',
+  markdownStrong: 'toolNameMutate',
+  markdownEmph: 'warning',
+  markdownCode: 'permission',
+  markdownBlockQuote: 'warning',
+  markdownListItem: 'permission',
+  markdownListEnumeration: 'ide',
+  markdownHorizontalRule: 'inactive',
+} as const satisfies Partial<Record<keyof Theme, keyof Theme>>)
+
 interface NormalizedThemeCacheEntry {
   readonly signature: string
   readonly palette: Theme
@@ -516,7 +560,8 @@ export function normalizeThemePalette(value: unknown): Theme | undefined {
   const raw = value as Record<string, unknown>
   const hasDeprecatedKey = (Object.keys(DEPRECATED_THEME_KEY_ALIASES) as DeprecatedThemeKey[])
     .some(key => Object.prototype.hasOwnProperty.call(raw, key))
-  if (!hasDeprecatedKey && !Object.keys(raw).some(isRetiredThemeKey)) return value as Theme
+  const missingMarkdown = Object.keys(MARKDOWN_THEME_FALLBACKS).some(key => typeof raw[key] !== 'string')
+  if (!hasDeprecatedKey && !missingMarkdown && !Object.keys(raw).some(isRetiredThemeKey)) return value as Theme
   const signature = themeObjectSignature(raw)
   const cached = normalizedThemeCache.get(raw)
   if (cached?.signature === signature) return cached.palette
@@ -527,6 +572,11 @@ export function normalizeThemePalette(value: unknown): Theme | undefined {
       normalized[canonical] = normalized[deprecated]
     }
     delete normalized[deprecated]
+  }
+  for (const [key, fallback] of Object.entries(MARKDOWN_THEME_FALLBACKS)) {
+    if (typeof normalized[key] !== 'string') {
+      normalized[key] = typeof normalized[fallback] === 'string' ? normalized[fallback] : darkTheme[fallback]
+    }
   }
   const palette = Object.freeze(normalized as Theme)
   normalizedThemeCache.set(raw, { signature, palette })
