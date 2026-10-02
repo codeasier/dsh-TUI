@@ -15,8 +15,6 @@ import { getLang, t, type I18nKey } from '../../i18n.js'
 import type { ToolBackground } from '../../tuiDisplayPrefs.js'
 import type { Theme } from '../../theme.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
-import { revealLinesOf, snapReveal } from '../smoothReveal.js'
-import { useRevealVersion } from '../../hooks/useRevealVersion.js'
 import { primaryComboString } from '../../utils/keymap.js'
 import { MachineRail, RAIL_WIDTH } from './MachineRail.js'
 
@@ -62,20 +60,6 @@ type Props = {
    * `+N lines` hint; verbose/expanded cards render the full title.
    */
   foldTerminalCommand?: boolean
-  /**
-   * Smooth streaming reveal (settings `dsh-tui.smoothStreaming`): the card
-   * BODY (diff hunks / write content — model-authored prose, not tool
-   * output) paints through an even ~30fps line reveal when it first appears,
-   * instead of one jarring block. Only the pending CALL view animates; the
-   * settled result view paints complete (real output is progress, not
-   * prose), and so do replayed cards.
-   */
-  smoothReveal?: boolean
-  /** Live-arrived row (channel `fresh`): gates reveal participation —
-   *  replayed cards must paint complete. */
-  fresh?: boolean
-  /** Reveal version supplied by MessageList to avoid one store subscriber per card. */
-  revealVersion?: number
 }
 
 /** Tool display names localize through the `tool-name-*` dictionary family
@@ -588,17 +572,7 @@ export function AssistantToolUseMessage({
   toolBackground = 'none',
   onOpenFile,
   foldTerminalCommand = false,
-  smoothReveal = false,
-  fresh = false,
-  revealVersion,
 }: Props): React.ReactNode {
-  // MessageList owns the single production subscription and passes a version
-  // prop only to active reveal rows. Standalone consumers keep the fallback
-  // subscription so the component contract remains self-contained.
-  // DefaultLane on purpose (useRevealVersion): a useSyncExternalStore wakeup
-  // forces a SyncLane render per tick, and repeated sync commits ending with
-  // streaming work pending feed React's nested-update counter (error #185).
-  useRevealVersion(revealVersion === undefined)
   const isRunning = tool.status === 'running'
   const isError = tool.status === 'error'
   const displayArgs = verbose ? tool.argsFull ?? tool.argsText : tool.argsText
@@ -695,21 +669,8 @@ export function AssistantToolUseMessage({
   const lines = capLines(bodyLines, cap, verbose)
   const rendered: BodyLine[] =
     footnote === undefined ? lines : [...lines, { text: footnote, tone: 'hint' }]
-  // Smooth reveal (line-unit, pending CALL body only): model-authored prose
-  // (diff hunks, write content) flows in at ~30fps; the settled RESULT view,
-  // error bodies, verbose/expanded cards, and replayed (non-fresh) cards all
-  // paint complete. `snapReveal` on every non-revealable render retires a
-  // cursor the moment its card stops qualifying (result arrived, user
-  // expanded) — idempotent, safe during render.
-  const revealKey = `tool:${tool.callId}`
-  const revealable = smoothReveal && !isError && isRunning && view !== undefined &&
-    tool.resultView === undefined && !verbose && !isExpanded && fresh
-  if (!revealable) snapReveal(revealKey)
-  const revealedLineCount = revealable
-    ? revealLinesOf(revealKey, rendered.length, { enabled: true, active: true })
-    : rendered.length
-  const shownLines: BodyLine[] =
-    revealedLineCount >= rendered.length ? rendered : rendered.slice(0, revealedLineCount)
+  // Tool bodies are explicit detail: collapsed cards have no body to reveal,
+  // and opening a card paints the complete detail immediately.
   // Nested split-diff context panes must also yield to interaction highlights.
   // `none` leaves them transparent so the selected/expanded root shows through.
   const ordinaryToolBackground = isSelected || isExpanded ? 'none' : toolBackground
@@ -767,7 +728,7 @@ export function AssistantToolUseMessage({
             </Box>
           )}
         </Box>
-        {/* Collapsed cards take the `shownLines` path instead: SplitDiffView
+        {/* Collapsed cards take the `rendered` path instead: SplitDiffView
             has its own "totalRows - maxRows === 1 is shown directly" rule and
             would leave one diff row behind at a zero budget. */}
         {useSplitDiff && view?.card === 'diff' && verbose ? (
@@ -781,11 +742,10 @@ export function AssistantToolUseMessage({
               maxRows={DIFF_BODY_MAX_LINES}
               verbose={verbose}
               toolBackground={ordinaryToolBackground}
-              reveal={revealable ? { key: `${revealKey}:split` } : undefined}
             />
           </Box>
         ) : (
-          shownLines.map((line, index) => (
+          rendered.map((line, index) => (
             <Box key={index} flexDirection="row">
               <Box width={3} flexShrink={0}>
                 <Text

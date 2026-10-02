@@ -194,8 +194,8 @@ export const SETTING_DEFINITIONS = {
     label: 'Smooth streaming',
     descriptions: { zh: '流式平滑输出' },
     group: 'conversation',
-    hint: 'Reveal live replies, expanded thinking, and tool-call bodies through an even ~30fps flow instead of per-burst jumps; one-shot non-streaming replies paint as a flow too. Replay/history always paints complete. On by default.',
-    hintDescriptions: { zh: '把实时回复、展开的思考与工具卡正文按 ~30fps 匀速揭示，不再随供应商突发一跳一跳；一次性到达的非流式回复也会平滑打出。回放/历史内容始终完整直出。默认开启。' },
+    hint: 'Reveal live replies and expanded thinking through an even ~30fps flow instead of per-burst jumps; one-shot non-streaming replies paint as a flow too. Replay/history and explicitly opened tool details always paint complete. On by default.',
+    hintDescriptions: { zh: '把实时回复与展开的思考按 ~30fps 匀速揭示，不再随供应商突发一跳一跳；一次性到达的非流式回复也会平滑打出。回放/历史内容与主动展开的工具详情始终完整直出。默认开启。' },
     kind: 'boolean',
   },
   'splashFont': {

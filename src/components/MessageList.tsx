@@ -27,7 +27,7 @@ import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
 import { clipPreview, type TimelineSnapshot, type TimelineTurn } from '../ink/timeline-rail.js'
 import type { ToolBackground } from '../tuiDisplayPrefs.js'
-import { getRevealVersion, revealLengthOf, revealTextOf } from './smoothReveal.js'
+import { revealLengthOf, revealTextOf } from './smoothReveal.js'
 import { useRevealVersion } from '../hooks/useRevealVersion.js'
 import { TranscriptImages } from './messages/TranscriptImages.js'
 import { primaryComboString } from '../utils/keymap.js'
@@ -1248,10 +1248,6 @@ export function MessageList({
           const tool = row.tool
           const subagent = row.kind === 'subagent' ? row.subagent : undefined
           const job = row.kind === 'job' ? row.job : undefined
-          const revealVersion = smoothStreaming && row.kind === 'tool' && row.fresh === true &&
-            row.tool?.status === 'running' && row.tool.resultView === undefined
-            ? getRevealVersion()
-            : 0
           // Smooth reveal feeds the SAME flattened text prop a chunk feeds,
           // and keeps the streaming layout alive until the reveal catches up
           // (settling mid-reveal must not snap — a one-shot non-streaming
@@ -1292,9 +1288,6 @@ export function MessageList({
               thinkingFold={thinkingFold}
               toolBackground={toolBackground}
               foldTerminalCommand={foldTerminalCommand}
-              smoothStreaming={smoothStreaming}
-              fresh={row.fresh === true}
-              revealVersion={revealVersion}
               activityFrames={activityFrames}
               background={rowBackground(row.id)}
               toolCallId={tool?.callId}
@@ -1363,12 +1356,6 @@ type MemoRowProps = {
   model: string
   /** Edit/Write diff presentation preference (forwarded to tool cards). */
   diffLayout: 'auto' | 'split' | 'unified'
-  /** Smooth streaming reveal (forwarded to thinking/tool renderers). */
-  smoothStreaming: boolean
-  /** Live-arrived row flag (drives tool-card reveal participation). */
-  fresh: boolean
-  /** Version tick for active tool reveal; 0 keeps settled rows memoized. */
-  revealVersion: number
   thinkingFold: 'preview' | 'full'
   toolBackground: ToolBackground
   /** Terminal-card header folding (forwarded to tool cards). */
@@ -1447,9 +1434,6 @@ function TranscriptRow({
   expanded,
   model,
   diffLayout,
-  smoothStreaming,
-  fresh,
-  revealVersion,
   thinkingFold,
   toolBackground,
   foldTerminalCommand,
@@ -1663,9 +1647,6 @@ function TranscriptRow({
             footnote={toolFootnote}
             diffLayout={diffLayout}
             toolBackground={toolBackground}
-            smoothReveal={smoothStreaming}
-            fresh={fresh}
-            revealVersion={revealVersion}
             foldTerminalCommand={foldTerminalCommand}
             onClick={foldOnClick}
             onOpenFile={onOpenFile}
