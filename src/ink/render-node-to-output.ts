@@ -1070,10 +1070,16 @@ function renderNodeToOutput(
       }
       const indents = hangingPaintMetadata.get(node)
       if (continuationIndent && indents && indents.prepared === textPaintCache.get(node)) {
-        for (let row = 0; row < indents.syntheticIndents.length; row++) {
+        const textY = y + paddingTop
+        const visible = output.getVisibleRect(x, textY, width, indents.syntheticIndents.length)
+        // Index directly into the visible window, including ScrollBox's
+        // blit+shift edge clip. Filtering a full scan still costs O(history).
+        const from = visible === undefined ? 0 : Math.max(0, visible.y - textY)
+        const to = visible === undefined ? 0 : Math.min(indents.syntheticIndents.length, visible.y + visible.height - textY)
+        for (let row = from; row < to; row++) {
           const indent = indents.syntheticIndents[row]!
           if (indent > 0) output.noSelect({
-            x: x + paddingLeft, y: y + paddingTop + row, width: indent, height: 1,
+            x: x + paddingLeft, y: textY + row, width: indent, height: 1,
           })
         }
       }
