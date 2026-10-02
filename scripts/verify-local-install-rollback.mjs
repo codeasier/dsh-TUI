@@ -155,7 +155,10 @@ function verify(layout, mode, options = {}) {
   assert.equal(run.error, undefined)
   const success = ['success', 'relink-success'].includes(mode) && !options.lockHeld && !options.externalLink
   const expected = options.lockHeld || options.externalLink || mode === 'restore-fail' ? 1 : ({ 'before-add': 42, 'partial-add': 42, 'relink-fail': 43, 'pack-fail': 41, 'terminated-add': 143 }[mode] ?? (success ? 0 : 1))
-  assert.equal(run.status, expected, `${layout}/${mode}: ${run.stdout}\n${run.stderr}`)
+  const diagnostic = `${layout}/${mode}: ${run.stdout}\n${run.stderr}`
+  // BSD tar exits 1 for this bad archive; GNU tar exits 2. Both must roll back.
+  if (mode === 'unpack-fail') assert.notEqual(run.status, 0, diagnostic)
+  else assert.equal(run.status, expected, diagnostic)
   const calls = existsSync(state) ? readFileSync(state, 'utf8').trim().split('\n').map(JSON.parse) : []
   if (options.lockHeld || options.externalLink) assert.equal(calls.some(call => call.command === 'dsh' || call.command === 'npm'), false, 'reject before mutating the profile/tarball')
   else if (!['pack-fail'].includes(mode)) assert.equal(calls.find(call => call.command === 'dsh')?.entryExists, false)
