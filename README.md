@@ -112,6 +112,14 @@ Manual alternative: `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-
 The repo's `sh install.sh` runs that step and checks the required commands.
 Afterwards `dsh-tui` and `dsh --profile dsh-tui` are equivalent.
 
+For a source checkout, `sh scripts/local-install.sh [profile]` installs a local
+tarball. It snapshots the profile's `node_modules`, manifest/lock and previously
+referenced tarball before packing, restoring them on install/verification failure.
+Allow disk space for a full dependency-tree copy; external dependency symlinks are
+rejected. The profile-local lock rejects parallel invocations of this script;
+keep other `dsh plugin`/pnpm commands and profile edits idle during installation.
+Recovery failure exits nonzero and retains the backup/lock path printed on stderr.
+
 > **New-user note**: pnpm ≥11 blocks dependencies with install scripts by
 > default and reports `ERR_PNPM_IGNORED_BUILDS`. Updates skip foreign-platform
 > `@img/sharp-*` native packages, saving about 200MB of downloads. `/update`

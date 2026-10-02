@@ -128,6 +128,7 @@
     "tui": "node --import tsx/esm scripts/run.ts",
     "smoke": "node --import tsx/esm scripts/smoke.tsx",
     "verify:build": "node scripts/run-verify-build.mjs",
+    "verify:local-install-rollback": "node scripts/verify-local-install-rollback.mjs",
     "verify:boundary": "node --import tsx/esm scripts/verify-adapter-boundary.ts",
     "verify:i18n": "node --import tsx/esm scripts/verify-i18n.ts",
     "verify:contract": "node --import tsx/esm scripts/verify-upstream-contract.ts",

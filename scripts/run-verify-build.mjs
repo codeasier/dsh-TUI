@@ -28,6 +28,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const GATES = [
+  'verify:local-install-rollback',
   'verify:boundary',
   'verify:contract',
   'verify:herdr',
