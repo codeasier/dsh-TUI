@@ -2,9 +2,10 @@
  * Delayed terminal-query replies must stay in raw mode and never become
  * visible shell input. Covers concurrent OSC 11 and XTVERSION batches.
  *
- * Also covers the DECRQM probe gate: macOS Terminal.app prints the trailing
- * `p` of `CSI ? 1049 $ p` as literal text, so the alt-screen health probe
- * must be skipped there and kept everywhere else.
+ * Also covers the DECRQM probe gate: Terminal.app leaks a literal `p`, and
+ * Orca's shared desktop/mobile PTY stalls mobile fullscreen redraws during
+ * mode-1049 health queries. Both skip the query while retaining input and
+ * mouse tracking; conforming and unknown terminals keep the probe.
  *
  * The tail half of the file pins the reply-claim gate: a post-flush reply
  * tail is only held/claimed while a query of the matching expected response
@@ -123,7 +124,7 @@ assert.deepEqual(visibleInput, [], 'terminal responses must not reach input list
 instance.unmount()
 console.log('PASS: delayed OSC/XTVERSION replies stay raw and leave no visible residue')
 
-// -- DECRQM probe gate (Terminal.app leaks the trailing `p`) ----------------
+// -- DECRQM probe gate (Terminal.app residue / Orca mobile redraw) ---------
 //
 // Terminal.app does not implement DECRQM and its CSI parser abandons the
 // sequence at the `$` intermediate byte, printing `p` at the cursor. The probe
@@ -134,8 +135,8 @@ const realTermProgram = process.env.TERM_PROGRAM
 
 // The probe rides on keyboard dispatch, which only runs when the tree
 // actually consumes input.
-function ProbeKeyConsumer(): React.ReactNode {
-  useInput(() => {})
+function ProbeKeyConsumer({ onInput }: { onInput?: (input: string) => void }): React.ReactNode {
+  useInput(input => onInput?.(input))
   return <Text>decrqm gate</Text>
 }
 
@@ -229,13 +230,20 @@ assert.equal(
   'Apple_Terminal must be excluded from DECRQM probes',
 )
 
+process.env.TERM_PROGRAM = 'Orca'
+assert.equal(
+  supportsDecrqmProbe(),
+  false,
+  'Orca must skip mode queries that stall mobile fullscreen redraws',
+)
+
 for (const term of ['iTerm.app', 'ghostty', 'WezTerm', 'vscode']) {
   process.env.TERM_PROGRAM = term
   assert.equal(supportsDecrqmProbe(), true, `${term} must keep the DECRQM probe`)
 }
 
 // Unknown/unset terminals keep the spec-conforming probe: this is an
-// exclusion of one known-broken terminal, not an allowlist.
+// exclusion of known-incompatible hosts, not an allowlist.
 delete process.env.TERM_PROGRAM
 assert.equal(
   supportsDecrqmProbe(),
@@ -253,11 +261,12 @@ assert.equal(
 // is in alt-screen, so an inline tree would pass this assertion vacuously.
 async function decrqmProbeBytes(termProgram: string): Promise<string> {
   process.env.TERM_PROGRAM = termProgram
+  const receivedInput: string[] = []
   const probeStdin = new FakeStdin()
   const probeStdout = new FakeStdout()
   const probeInstance = await render(
     <AlternateScreen>
-      <ProbeKeyConsumer />
+      <ProbeKeyConsumer onInput={input => receivedInput.push(input)} />
     </AlternateScreen>,
     {
       stdin: probeStdin,
@@ -267,15 +276,23 @@ async function decrqmProbeBytes(termProgram: string): Promise<string> {
       patchConsole: false,
     },
   )
-  await settled(() => probeStdout.output.includes('\x1b[?1049h'))
+  assert.ok(await settled(() => probeStdout.output.includes('\x1b[?1049h')))
   const beforeKeypress = probeStdout.output.length
   probeStdin.write('a')
   probeStdin.write('\x7f')
+  assert.ok(
+    await settled(() => receivedInput.length === 2),
+    `${termProgram}: skipping the query must not disable keyboard input`,
+  )
   // 固定窗:探针 negative assertion — the leak (if any) is written
   // asynchronously after dispatch, so the slice must span an observation
   // window rather than settle on an already-true condition.
   await sleep(120)
   const emitted = probeStdout.output.slice(beforeKeypress)
+  assert.ok(
+    emitted.includes('\x1b[?1003h'),
+    `${termProgram}: mouse tracking must still be reasserted`,
+  )
   probeInstance.unmount()
   return emitted
 }
@@ -284,6 +301,12 @@ assert.equal(
   (await decrqmProbeBytes('Apple_Terminal')).includes('$p'),
   false,
   'Terminal.app must never receive a DECRQM probe (leaks a visible `p`)',
+)
+
+assert.equal(
+  (await decrqmProbeBytes('Orca')).includes('\x1b[?1049$p'),
+  false,
+  'Orca mobile typing must not emit the fullscreen health query',
 )
 
 // Guard the guard: the same path on a conforming terminal must still probe,
@@ -820,4 +843,4 @@ console.log('PASS: late DA1 tails stay in the terminal-response lane')
 if (realTermProgram === undefined) delete process.env.TERM_PROGRAM
 else process.env.TERM_PROGRAM = realTermProgram
 
-console.log('PASS: DECRQM probe is gated off for Apple_Terminal and kept elsewhere')
+console.log('PASS: Terminal.app/Orca skip DECRQM; input/mouse and conforming probes remain active')

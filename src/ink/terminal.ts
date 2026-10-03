@@ -259,14 +259,20 @@ export function terminalImagesBindToCells(): boolean {
  * only happens when the sequence reaches Terminal.app's own parser, and a
  * remote session is parsed by whatever terminal is actually attached.
  *
+ * Orca attaches desktop and mobile emulators to the same PTY. Its mode-1049
+ * health queries stall mobile fullscreen redraws until the tab is reattached;
+ * bypassing the query restores live typing. A client-local mode report is
+ * therefore not a reliable health signal for that shared terminal.
+ *
  * Kept as an exclusion rather than an allowlist so unknown terminals keep the
- * (correct, spec-conforming) probe and only the known-broken one opts out.
+ * probe and only the known-incompatible hosts opt out.
  * Same failure mode as the extended-keys allowlist below: assuming terminals
  * silently ignore unknown CSI is not safe in practice.
  * @returns true when it is safe to send a DECRQM probe.
  */
 export function supportsDecrqmProbe(): boolean {
-  return process.env.TERM_PROGRAM !== 'Apple_Terminal'
+  const termProgram = process.env.TERM_PROGRAM
+  return termProgram !== 'Apple_Terminal' && termProgram !== 'Orca'
 }
 
 // Terminals known to correctly implement the Kitty keyboard protocol

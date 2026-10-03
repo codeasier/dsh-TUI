@@ -1724,11 +1724,9 @@ export default class Ink {
     }
     const querier = this.app?.querier;
     if (querier === undefined) return;
-    // macOS Terminal.app prints the trailing `p` of `CSI ? 1049 $ p` as
-    // literal text instead of ignoring the unsupported query, leaking a
-    // visible character at the cursor on every probe. The blind
-    // mouse-tracking re-assert above still runs there — only the round trip
-    // is skipped, which costs nothing: Terminal.app never answered it.
+    // Terminal.app leaks the query's trailing `p`; Orca's shared PTY stalls
+    // mobile redraws during mode-1049 round trips. Skip only the query on
+    // those hosts; the blind mouse-tracking re-assert above still runs.
     if (!supportsDecrqmProbe()) return;
     void Promise.all([querier.send(decrqm(1049)), querier.flush()]).then(([reply]) => {
       if (this.isUnmounted || this.isPaused || this.terminalQueriesSuspended) return;
