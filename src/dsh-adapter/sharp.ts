@@ -2,15 +2,15 @@
  * Host-first `sharp` loader.
  *
  * dsh-tui runs inside the dsh process, and the host attachment service
- * (`@deepseek-ai/dsh-attachment-local`) already loads its own `sharp`. Loading
+ * (`@deepseek-ai/dsh-attachment-local`) loads its own `sharp` on demand. Loading
  * a second copy from this package's optional dependency puts two libvips
  * dylibs into one process; on macOS the Objective-C runtime reports the
- * duplicate classes on stderr, and that text lands on the alternate screen
- * (0.1.2-rc.1 ships sharp 0.35.4 while this package pins 0.35.3).
+ * duplicate classes on stderr, and that text lands on the alternate screen.
  *
- * Resolve `sharp` from the host tree first, fall back to our own optional
- * copy, and cache the outcome so the process holds one instance. A missing
- * module resolves to `undefined`; callers keep their text fallback.
+ * Reuse an already-loaded sharp factory when available, otherwise resolve
+ * from the host tree first and fall back to our own optional copy. Cache the
+ * outcome so TUI consumers share one instance. A missing module resolves to
+ * `undefined`; callers keep their fallback.
  */
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
@@ -19,7 +19,7 @@ export type SharpModule = Awaited<typeof import('sharp')>['default']
 
 let loader: Promise<SharpModule | undefined> | undefined
 
-/** Load `sharp` once per process, preferring the host's copy. */
+/** Share an already-loaded or host-preferred `sharp` with every TUI consumer. */
 export function loadSharp(): Promise<SharpModule | undefined> {
   loader ??= resolveSharp()
   return loader
@@ -48,6 +48,25 @@ export function sharpCandidatePaths(): string[] {
 }
 
 async function resolveSharp(): Promise<SharpModule | undefined> {
+  // The attachment service uses createRequire, so its successful factory is
+  // visible here even when a source checkout resolves a different dev tree.
+  // Check the factory API, not a hard-coded sharp version or entry filename.
+  for (const entry of Object.values(createRequire(import.meta.url).cache)) {
+    if (entry?.loaded !== true) continue
+    const candidate: unknown = entry.exports
+    if (typeof candidate !== 'function') continue
+    const factory = candidate as {
+      versions?: { sharp?: unknown; vips?: unknown }
+      cache?: unknown
+      concurrency?: unknown
+    }
+    if (typeof factory.versions?.sharp === 'string'
+      && typeof factory.versions.vips === 'string'
+      && typeof factory.cache === 'function'
+      && typeof factory.concurrency === 'function') {
+      return candidate as SharpModule
+    }
+  }
   for (const path of sharpCandidatePaths()) {
     try {
       const mod = await import(pathToFileURL(path).href) as { default?: unknown }

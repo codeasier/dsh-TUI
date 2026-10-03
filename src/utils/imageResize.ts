@@ -21,6 +21,7 @@
  * exactly what it did, so the caller can tell the user instead of silently
  * rewriting their image.
  */
+import { loadSharp } from '../dsh-adapter/sharp.js'
 
 export interface ImageSizeProbe {
   readonly width: number
@@ -221,9 +222,7 @@ export type AdaptOutcome =
     readonly detail: string
   }
 
-/** Minimal structural types for the sharp calls used here — keeps the
- * module typechecking without depending on the optional package's d.ts
- * resolution in every tsconfig that pulls it in. */
+/** Only the image pipeline operations needed by the admission gate. */
 interface SharpPipeline {
   flatten(options: { background: { r: number; g: number; b: number } }): SharpPipeline
   toFormat(format: string, options?: unknown): { toBuffer(): Promise<Uint8Array> }
@@ -233,23 +232,6 @@ interface SharpInstance extends SharpPipeline {
   resize(width: number, height: number, options: { fit: string }): SharpPipeline
 }
 type SharpFactory = (input: Uint8Array, options?: { animated?: boolean }) => SharpInstance
-
-/** Load sharp lazily so a missing optionalDependency stays a typed outcome. */
-async function loadSharp(): Promise<SharpFactory | null> {
-  try {
-    // The ESM build exposes the factory as the namespace's default; some
-    // bundlers hand the function itself. Handle both without trusting either.
-    const mod: unknown = await import('sharp')
-    if (typeof mod === 'function') return mod as SharpFactory
-    if (typeof mod === 'object' && mod !== null) {
-      const candidate = (mod as { default?: unknown }).default
-      if (typeof candidate === 'function') return candidate as SharpFactory
-    }
-    return null
-  } catch {
-    return null
-  }
-}
 
 /**
  * Produce bytes the profile can admit, and report what had to change.
@@ -275,8 +257,8 @@ export async function adaptImageForAdmission(
   acceptedMediaTypes: readonly string[],
 ): Promise<AdaptOutcome> {
   const probe = probeImageSize(bytes)
-  const sharp = await loadSharp()
-  if (sharp === null) {
+  const sharp = await loadSharp() as SharpFactory | undefined
+  if (sharp === undefined) {
     return { kind: 'unavailable', reason: 'sharp-missing', detail: 'sharp is not installed in this environment' }
   }
   try {

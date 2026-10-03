@@ -10,6 +10,7 @@
  *      的动图明确拒绝、B11 限内动图原字节直通、B12/B13 解码失败（含截断
  *      GIF）拒绝、B14 提示数字取附件库回报、B15 allowlist 复查、B16 字节
  *      上限、B17 会话代际守卫；
+ *   D. 独立宿主/profile 依赖树：图片适配复用 sharp，坏宿主/缺失时保留回退；
  *   E. sharp 缺失（子进程 + loader 钩子让 optional 依赖不可解析）：可放行时
  *      降级交给附件库，已知超限/格式不可转换时粘贴即报错。
  *
@@ -28,7 +29,7 @@ function check(name: string, ok: boolean, extra = ''): void {
   if (!ok) failures++
 }
 
-/** E 段子进程模式：先注册钩子再加载被测模块，让 `import('sharp')` 像最小安装
+/** E 段子进程模式：先注册钩子再加载被测模块，让所有 sharp 候选入口像最小安装
  *  那样失败（A–B 段需要真 sharp，所以本模式只跑 E 段）。 */
 const NO_SHARP = process.env.DSH_VERIFY_IMAGE_NOSHARP === '1'
 if (NO_SHARP) {
@@ -364,6 +365,19 @@ if (!NO_SHARP) {
       .then(() => 'staged', (error: Error) => error.message)
     check('B17. session-change guard still refuses stale staging',
       refused.includes('session changed'), String(refused).slice(0, 60))
+  }
+
+  // ── D. 独立依赖树；新进程避免真实 sharp 的缓存遮蔽夹具 ────────────────
+  {
+    const { spawnSync } = await import('node:child_process')
+    const child = spawnSync(
+      process.execPath,
+      ['--import', 'tsx/esm', 'scripts/verify-sharp-loader.mjs'],
+      { encoding: 'utf8' },
+    )
+    check('D1. all image consumers share sharp across host/profile trees', child.status === 0)
+    if (child.stdout) console.log(child.stdout.trim())
+    if (child.status !== 0 && child.stderr) console.error(child.stderr.trim())
   }
 
   // ── E1. sharp 缺失场景放进子进程（钩子只在子进程注册）──────────────────
