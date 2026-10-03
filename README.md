@@ -112,6 +112,14 @@ Manual alternative: `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-
 The repo's `sh install.sh` runs that step and checks the required commands.
 Afterwards `dsh-tui` and `dsh --profile dsh-tui` are equivalent.
 
+For a source checkout, `sh scripts/local-install.sh [profile]` installs a local
+tarball. It snapshots the profile's `node_modules`, manifest/lock and previously
+referenced tarball before packing, restoring them on install/verification failure.
+Allow disk space for a full dependency-tree copy; external dependency symlinks are
+rejected. The profile-local lock rejects parallel invocations of this script;
+keep other `dsh plugin`/pnpm commands and profile edits idle during installation.
+Recovery failure exits nonzero and retains the backup/lock path printed on stderr.
+
 > **New-user note**: pnpm ≥11 blocks dependencies with install scripts by
 > default and reports `ERR_PNPM_IGNORED_BUILDS`. Updates skip foreign-platform
 > `@img/sharp-*` native packages, saving about 200MB of downloads. `/update`
@@ -169,7 +177,7 @@ Full guide: [Session migration](docs/migrate.en.md).
 
 Markdown keeps markers in tight, loose, ordered and nested lists; task items show `[ ]` / `[✓]`, and continuation paragraphs, code, and soft-wrapped lines align with the item body; display-only wrap padding is excluded from copied text. Images show alt text and a visible URL. Double-tilde `~~text~~` uses terminal strikethrough; single-tilde approximations such as `~100` stay literal. Horizontal rules render as a separate 16-cell line. Code-block headers show the original language/info label without ```` ``` ````; unlabeled blocks keep ```` ``` ````, and no code-block background is added. Headings, lists, quotes, code, tables and rules are separated from neighbouring blocks by exactly one blank line, even without a source blank; adjacent paragraphs are separated only when the source is. Settled and streaming replies share this policy. Dedicated Markdown colors distinguish purple headings, amber strong text, green inline code and cyan underlined links in the default dark theme (see [Themes](docs/themes.en.md)); thinking headers and previews use the warning color at normal brightness, while expanded thinking keeps Markdown colors. Minimal UI does not force these thinking colors.
 
-Collapsed tool cards use one physical row, including long commands and arguments. Settled summaries use a neutral, non-bold foreground; running, failed and hovered cards remain prominent, and status dots retain their category colors. Width-truncated content is available on hover; click or `Ctrl+O` opens the full card. The default `pageMargin: normal` leaves three columns per side and one row top/bottom; a custom `2x1` keeps the previous inset.
+Collapsed tool cards use one physical row, including long commands and arguments. Settled summaries use a neutral, non-bold foreground; running, failed and hovered cards remain prominent, and status dots retain their category colors. Width-truncated content is available on hover; click or `Ctrl+O` opens the full card immediately. `smoothStreaming` animates replies and expanded thinking; tool details and replayed history paint complete. The default `pageMargin: normal` leaves three columns per side and one row top/bottom; a custom `2x1` keeps the previous inset.
 
 ## Keybindings & Mouse
 

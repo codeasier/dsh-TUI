@@ -10,6 +10,9 @@
  * 断言 scrollback + 视口中每段唯一 UI 文本只出现一次；完整跑过 streaming
  * reasoning → tool → assistant/working → idle 后，还断言硬件 cursor 与输入 caret
  * 重合，且思考、工具、正文、输入边框各占独立行，没有互相覆盖。
+ * 默认保留冷历史的折叠摘要场景，再在独立子进程从新会话通过真实 Ctrl+O
+ * 展开，验证完整正文在长流式回复后也只保留一份；两种模式都保留 caret、
+ * 边框和零 full-reset 断言。
  * 运行：node --import tsx/esm scripts/repro-inline-scrollback.tsx
  */
 process.env.FORCE_COLOR = '3'
@@ -32,6 +35,7 @@ const COLS = 100
 const ROWS = 20
 const SCROLLBACK = 2000
 const INPUT_MARKER = 'CARET_ANCHOR_7F31'
+const expandedTools = process.argv.includes('--expanded-tools')
 const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: SCROLLBACK, allowProposedApi: true })
 // 取证终端与真实终端同宽（⚓ 等 Emoji_Presentation 字符 2 格）——
 // 否则现场思考行落定重绘的断言测的是 xterm 旧表的宽度（#574）。
@@ -139,22 +143,24 @@ const channel: any = {
 const bump = () => { channel.version++; for (const cb of listeners) cb() }
 
 let id = 0
-for (let turn = 0; turn < 2; turn++) {
-  channel.rows.push({ id: id++, kind: 'user', text: `历史问题 ${turn}：检查一下构建配置` })
-  channel.rows.push({ id: id++, kind: 'reasoning', text: '用户想看构建配置，先找配置文件。'.repeat(3), streaming: false, durationMs: 1200 })
-  for (let t = 0; t < 4; t++) {
-    channel.rows.push({
-      id: id++, kind: 'tool', text: '',
-      tool: {
-        callId: `h${turn}-${t}`, name: t % 2 ? 'Read' : 'Bash',
-        argsText: t % 2 ? `{"file_path": "/home/demo/lib/history${turn}_${t}.dart"}` : '{"command": "git log --oneline -15"}',
-        argsFull: '{}',
-        status: 'ok', startedAt: Date.now() - 60000, durationMs: 30,
-        resultText: Array.from({ length: 8 + t * 5 }, (_, i) => `历史结果行 ${turn}-${t}-${i}`).join('\n'),
-      },
-    })
+if (!expandedTools) {
+  for (let turn = 0; turn < 2; turn++) {
+    channel.rows.push({ id: id++, kind: 'user', text: `历史问题 ${turn}：检查一下构建配置` })
+    channel.rows.push({ id: id++, kind: 'reasoning', text: '用户想看构建配置，先找配置文件。'.repeat(3), streaming: false, durationMs: 1200 })
+    for (let t = 0; t < 4; t++) {
+      channel.rows.push({
+        id: id++, kind: 'tool', text: '',
+        tool: {
+          callId: `h${turn}-${t}`, name: t % 2 ? 'Read' : 'Bash',
+          argsText: t % 2 ? `{"file_path": "/home/demo/lib/history${turn}_${t}.dart"}` : '{"command": "git log --oneline -15"}',
+          argsFull: '{}',
+          status: 'ok', startedAt: Date.now() - 60000, durationMs: 30,
+          resultText: Array.from({ length: 8 + t * 5 }, (_, i) => `历史结果行 ${turn}-${t}-${i}`).join('\n'),
+        },
+      })
+    }
+    channel.rows.push({ id: id++, kind: 'assistant', text: `历史回答 ${turn}：\n\n- 构建配置在 \`pubspec.yaml\``, streaming: false })
   }
-  channel.rows.push({ id: id++, kind: 'assistant', text: `历史回答 ${turn}：\n\n- 构建配置在 \`pubspec.yaml\``, streaming: false })
 }
 
 const stdoutObj = new FakeStdout()
@@ -167,6 +173,16 @@ const instance = await render(
 
 const ticker = setInterval(() => { channel.responseChars += 7; bump() }, 100)
 await sleep(800) // 固定窗:pacing 等首帧铺满，无单一可轮询锚点
+if (expandedTools) {
+  stdin.write('\x0f') // real Chat Ctrl+O, not a component verbose prop
+  const { settled } = await import('./lib/term-test.mjs')
+  channel.rows.push({ id: id++, kind: 'tool', text: '', tool: {
+    callId: 'expanded-probe', name: 'Read', argsText: '{}', status: 'ok', startedAt: 0,
+    callView: { card: 'generic', title: 'Read CTRL_O_PROBE' }, resultText: 'CTRL_O_BODY',
+  } })
+  bump()
+  check('真实 Ctrl+O 后新工具正文完整可见', await settled(() => fullBufferLines().some(line => line.includes('CTRL_O_BODY'))))
+}
 
 // ---- 现场回合：user → Read → reasoning ticker → settle → tool → 长流式回复 ----
 const add = (row: any) => { channel.rows.push({ id: id++, ...row }); bump() }
@@ -181,7 +197,9 @@ add({
   tool: {
     callId: 'read-before-thinking', name: 'Read',
     argsText: '{"file_path": "READ_ONCE_7F31"}',
+    callView: { card: 'generic', title: 'Read READ_ONCE_7F31' },
     argsFull: '{}', status: 'ok', resultText: 'READ_RESULT_ONCE_7F31',
+    resultFull: ['READ_RESULT_ONCE_7F31', ...Array.from({ length: 6 }, (_, i) => `READ_DETAIL_${i}_7F31`), 'READ_END_ONCE_7F31'].join('\n'),
     startedAt: Date.now() - 80, durationMs: 80,
   },
 })
@@ -206,11 +224,22 @@ const tool1 = {
   tool: {
     callId: 'c1', name: 'Bash',
     argsText: '{"command": "printf TOOL_CALL_ONCE_7F31"}',
+    callView: { card: 'generic', title: 'Bash TOOL_CALL_ONCE_7F31' },
     argsFull: '{}',
     status: 'running' as string, resultText: undefined as string | undefined, startedAt: Date.now(), durationMs: undefined as number | undefined,
   },
 }
 channel.rows.push(tool1); bump(); await sleep(400) // 固定窗:pacing 工具 running 态的回放时长
+if (expandedTools) {
+  const beforeGrowth = fullBufferLines()
+  const markers = ['READ_RESULT_ONCE_7F31', ...Array.from({ length: 6 }, (_, i) => `READ_DETAIL_${i}_7F31`), 'READ_END_ONCE_7F31']
+  check('结果增长前：旧展开 READ 正文已完整到达且唯一',
+    markers.every(marker => beforeGrowth.filter(line => line.includes(marker)).length === 1))
+  const tailRows = ['READ_DETAIL_5_7F31', 'READ_END_ONCE_7F31'].map(marker => beforeGrowth.findIndex(line => line.includes(marker)))
+  check('结果增长前：READ 尾行仍处在原生视口，覆盖 spacer 清除边界',
+    tailRows.every(y => y >= term.buffer.active.baseY && y < term.buffer.active.baseY + ROWS),
+    `tailRows=${tailRows.join(',')} baseY=${term.buffer.active.baseY}`)
+}
 tool1.tool.status = 'ok'
 tool1.tool.durationMs = 42
 tool1.tool.resultText = Array.from({ length: 20 }, (_, i) => `工具结果行 ${i}`).join('\n')
@@ -306,17 +335,19 @@ const countExact = (needle: string) => lines.filter(l => l.trim() === needle).le
 // 的合法内容，不能按包含计数）。
 for (const t of [
   '探索未至',
-  '历史问题 0：',
-  '历史问题 1：',
+  ...(expandedTools ? ['CTRL_O_PROBE', 'CTRL_O_BODY'] : ['历史问题 0：', '历史问题 1：']),
   '看看这个项目，给个概览',
   'READ_ONCE_7F31',
-  'READ_RESULT_ONCE_7F31',
   'TOOL_CALL_ONCE_7F31',
   'ASSISTANT_BODY_ONCE_7F31',
   INPUT_MARKER,
 ]) {
   const n = count(t)
   check(`「${t}」恰好一份`, n === 1, `实际 ${n} 次`)
+}
+for (const marker of ['READ_RESULT_ONCE_7F31', ...Array.from({ length: 6 }, (_, i) => `READ_DETAIL_${i}_7F31`), 'READ_END_ONCE_7F31']) {
+  check(`工具正文「${marker}」${expandedTools ? '恰好一份' : '折叠隐藏'}`,
+    count(marker) === (expandedTools ? 1 : 0), `实际 ${count(marker)} 次`)
 }
 for (const t of ['五、代码结构']) {
   const n = countExact(t)
@@ -400,4 +431,13 @@ if (process.env.DSH_TUI_REPRO_DUMP) {
 }
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} 项失败`)
 await instance.unmount()
+term.dispose()
+if (failed === 0 && !expandedTools) {
+  const { spawnSync } = await import('node:child_process')
+  console.log('\n== inline Ctrl+O expanded-body scenario ==')
+  const child = spawnSync(process.execPath, [...process.execArgv, process.argv[1]!, '--expanded-tools'], {
+    env: process.env, stdio: 'inherit', timeout: 120000,
+  })
+  process.exit(child.status === 0 ? 0 : 1)
+}
 process.exit(failed === 0 ? 0 : 1)

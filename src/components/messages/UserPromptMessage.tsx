@@ -47,7 +47,8 @@ export function UserPromptMessage({
   // nodes below are explicitly wrapped, so they must never be wrapped again by
   // Ink; a second wrap would move the continuation back to column zero.
   const lines = wrapWidth(text, Math.max(1, columns - prefixWidth - 3))
-  const continuationIndent = ' '.repeat(stringWidth(barPrefix) + stringWidth(promptPrefix))
+  // The bar's two cells are emitted separately on continuation lines too.
+  const continuationIndent = ' '.repeat(stringWidth(promptPrefix))
   // No hover tooltip here, deliberately: the message is pre-wrapped so every
   // visual line is already on screen — a float would only repeat visible
   // text, and worse, the card REPLACES the cells it covers, so a drag-copy
