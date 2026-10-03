@@ -230,7 +230,7 @@ try {
   check('E 移开即隐藏工具提示', await settled(() => tooltip.getTooltipSnapshot() === null))
 
   // --- F. 折叠脚本 + 非零退出码：悬停弹完整脚本，附注带退出码 ----------
-   //     （折叠卡正文隐藏；退出码跟随隐藏脚本的元数据浮层。展开正文另由
+   //     （卡片预览保留退出码；隐藏脚本的浮层也携带元数据。完整正文另由
    //       repro-toolcards 覆盖，浮层元数据以「结束时刻」探测。）
   const scriptF = [
     '$items = Get-ChildItem -Recurse',
@@ -247,7 +247,7 @@ try {
   }, true))
   check('场景 F 就绪：折叠脚本首行可见', await settled(() => screenHas(term, 'Get-ChildItem -Recurse')))
   check('场景 F 就绪：折叠隐藏了其余行', !screenHas(term, 'Select-Object -First 10 Name'))
-  check('场景 F 就绪：折叠正文不泄露退出码行', !screenHas(term, '退出码 7'))
+  check('场景 F 就绪：预览直接显示退出码', screenHas(term, '退出码 7'))
   hoverText(stdin, term, '$items')
   check('F 折叠脚本悬停弹完整命令（含末行）', await settled(() => screenHas(term, 'Select-Object -First 10 Name')))
   check('F 浮层附注带元数据（结束时刻 + 退出码）', await settled(() => screenHas(term, '结束') && screenHas(term, '退出码 7')))

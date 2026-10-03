@@ -89,10 +89,8 @@ for (const fullscreen of [true, false]) {
       revision++
       app.rerender(<Harness />)
     }
-    // 上界按「行预算」而不是「卡数」理解：挂载窗口是一段行区间，而机器
-    // 活动行之间不再留空行（工具卡的连续调用收紧成一簇），同样的视口因此
-    // 装得下约两倍的单行卡。60（= 120 的一半）仍然只在「整列全挂」时才
-    // 触发——那才是这条断言要防的回归。
+    // 挂载窗口按视觉行预算计算，卡片高度可随预览和内边距变化。
+    // 60（= 120 的一半）保护的是历史全挂回归，不绑定具体卡片高度。
     assert.ok(await settled(() => latestFrame.includes(120) && latestFrame.length < 60),
       `${fullscreen ? 'fullscreen' : 'inline'}: historical failure pinned ${latestFrame.length} tool cards`)
     assert.ok(!latestFrame.includes(1), 'an offscreen footnote is not a force-mount request')

@@ -11,11 +11,10 @@
  *   1. USER TURN — a full-width band (`userPromptBackground`) whose left edge
  *      is `▌ ❯` at the page-margin column, the turn anchor for scrolling back.
  *   2. ASSISTANT PROSE — col 0 (page margin only), NO prefix marker.
- *   3. MACHINE ACTIVITY (tool cards, thinking, subagent/job cards) — col 2,
- *      prefixed by the dim `│ ` rail, body gutter shifted by the same two
- *      columns.
- *   4. Vertical rhythm — consecutive machine rows are TIGHT (one step's tool
- *      calls read as one cluster); every other pair keeps its blank line.
+ *   3. TOOL CARDS — full-width surface and continuous border, independent
+ *      from reasoning/subagent/job activity (which keeps its dim rail).
+ *   4. Vertical rhythm — tool cards have padding and a blank line between
+ *      them; only other consecutive machine updates remain tight.
  *
  * Run after build: `node scripts/verify-transcript-blocks.mjs`
  */
@@ -224,14 +223,20 @@ check('the railed content sits two columns right of prose',
 
 // ── 4. vertical rhythm ───────────────────────────────────────────────────
 const readIdx = rowOf('Read /tmp/handoff.md (63 - 82)')
-check('consecutive tool cards sit tight (no blank line between them)',
-  readIdx === editIdx + 1, `edit=${editIdx} read=${readIdx}`)
-check('the reasoning row under a tool card is tight too', thinkIdx === bashIdx - 1,
+check('consecutive tool cards have padding and a blank separator',
+  readIdx === editIdx + 4, `edit=${editIdx} read=${readIdx}`)
+check('the separator has no card background or rail',
+  (lines()[editIdx + 2] ?? '').trim() === '' && bandCells(editIdx + 2) === 0)
+check('card border spans top padding, title and bottom padding',
+  [editIdx - 1, editIdx, editIdx + 1].every(y => (lines()[y] ?? '').startsWith(`${' '.repeat(MARGIN)}│`)))
+check('tool card surface fills the content width', bandCells(editIdx) > COLS - MARGIN - 8,
+  `cells=${bandCells(editIdx)}`)
+check('reasoning is separated from the next tool card', thinkIdx === bashIdx - 3,
   `think=${thinkIdx} bash=${bashIdx}`)
-check('a prose row keeps its blank line above', proseIdx === readIdx + 2,
+check('a prose row keeps its blank line after card padding', proseIdx === readIdx + 3,
   `read=${readIdx} prose=${proseIdx}`)
-check('a second user turn keeps its blank line above',
-  rowOf('记录下来') === rowOf('Bash(ls -la)') + 2, `bash=${bashIdx}`)
+check('a second user turn keeps its blank line after card padding',
+  rowOf('记录下来') === bashIdx + 3, `bash=${bashIdx}`)
 
 await instance.unmount()
 term.dispose()

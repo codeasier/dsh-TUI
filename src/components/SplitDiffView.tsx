@@ -237,6 +237,10 @@ function alignFileDiff(fileIndex: number, oldText: string | null, newText: strin
 
 // --- rendering --------------------------------------------------------------
 
+const MIN_PANE_WIDTH = 20
+/** Smallest content width that can hold both panes and their divider. */
+export const SPLIT_DIFF_MIN_WIDTH = MIN_PANE_WIDTH * 2 + 1
+
 function PaneLine({
   side,
   kind,
@@ -299,7 +303,7 @@ export function SplitDiffView({
   width,
   maxRows,
   verbose,
-  toolBackground = 'none',
+  toolBackground = 'subtle',
 }: {
   readonly diffs: readonly ToolFileDiff[]
   /** Content width available to the whole two-pane block (divider included). */
@@ -338,11 +342,11 @@ export function SplitDiffView({
   })
 
   const totalRows = rows.length
-  const capped = verbose || totalRows <= maxRows || totalRows - maxRows === 1
+  const capped = verbose || totalRows <= maxRows
   const visible = capped ? rows : rows.slice(0, maxRows)
   const hidden = totalRows - visible.length
 
-  const paneWidth = Math.max(20, Math.floor((width - 1) / 2))
+  const paneWidth = Math.max(MIN_PANE_WIDTH, Math.floor((width - 1) / 2))
 
   // Whole-hunk highlight per file (multi-line lexer state preserved);
   // only the visible rows merge syntax runs with word flags below.

@@ -1,17 +1,16 @@
 /**
  * Tool-card presentation scenarios: the channel captures dsh-tools
  * presentCall/presentResult views and AssistantToolUseMessage renders them
- * as indented tool bodies (`  ⎿  ` gutter) — diff hunks in red/green,
+ * as independent bordered cards — diff hunks in red/green,
  * terminal output, envelope-stripped read content — instead of the raw
  * tool-message dump. Exercises the pure component with fabricated ToolRows
  * (no channel needed: views are plain data on the row).
  *
- * A collapsed card is a ONE-LINE summary: header only, no `⎿` body. Bodies
- * render in the expanded state (click the row / Ctrl+O), which is why the
- * fixtures below default to `verbose` — scenario #7 covers the collapsed
- * shape itself.
+ * Cards preview three output lines by default; click / Ctrl+O expands the
+ * full result. Fixtures default to verbose; scenario #7 covers the preview.
  */
 process.env.FORCE_COLOR = '3'
+process.env.DSH_TUI_THEME = 'dark'
 // 固定英文 UI：本脚本的断言全部针对 en 文案（折叠/退出码/工具名），
 // 不 pin 会随宿主 locale 漂移（zh 机器上这些串已本地化，见 verify-toolcard-i18n）。
 process.env.DSH_TUI_LANG = 'en'
@@ -39,7 +38,7 @@ const stdout = new FakeStdout()
 function lines(): string[] {
   const buf = term.buffer.active
   const out: string[] = []
-  for (let y = 0; y < ROWS; y++) out.push(buf.getLine(y)?.translateToString(true) ?? '')
+  for (let y = 0; y < ROWS; y++) out.push((buf.getLine(y)?.translateToString(true) ?? '').trimEnd())
   return out
 }
 function screen(): string {
@@ -64,7 +63,10 @@ let failures = 0
 const results: string[] = []
 const check = (name: string, ok: boolean) => {
   results.push(`${ok ? 'PASS' : 'FAIL'}  ${name}`)
-  if (!ok) failures++
+  if (!ok) {
+    failures++
+    results.push(screen())
+  }
 }
 
 const base = {
@@ -75,12 +77,7 @@ const base = {
   durationMs: 12,
 }
 
-/**
- * Fabricate one card. `verbose` defaults to true here on purpose: a collapsed
- * card now paints its header line only (the `⎿` body is click / Ctrl+O
- * detail), so every body-rendering scenario below is an EXPANDED one. The
- * collapsed shape has its own scenario (#7) and passes `false` explicitly.
- */
+/** Fabricate a card; body scenarios default to full expansion. */
 function card(key: string, tool: Record<string, unknown>, verbose = true, foldTerminalCommand = false): React.ReactElement {
   return React.createElement(AssistantToolUseMessage, {
     key,
@@ -91,13 +88,9 @@ function card(key: string, tool: Record<string, unknown>, verbose = true, foldTe
   })
 }
 
-/**
- * 工具卡正文槽：卡面 head 行带机器活动竖线（`│ • Name …`），正文列整体右移
- * 两列，所以首行是「空 rail 列 + ` ⎿ `」，续行是 5 个空格。断言只用这两个
- * 常量拼，排版再动一次也只改这里。
- */
-const BODY = '   ⎿ '
-const BODY_CONT = '     '
+// Left border, padding and body indent align output with the title.
+const BODY = '│   '
+const BODY_CONT = BODY
 
 const editTool = {
   name: 'edit',
@@ -128,7 +121,7 @@ function show(key: string, tool: Record<string, unknown>, verbose = true, foldTe
 
 // 1. Settled Edit: diff body, red `- ` / green `+ ` lines under the ⎿ gutter.
 check('编辑卡片标题为「Edit /tmp/a.ts」（非 JSON args）', await settled(() => screen().includes('Edit /tmp/a.ts') && !screen().includes('{"file_path"')))
-check('删除行带 ⎿ 缩进', await settled(() => { const r = rowOf('- const a = 1'); return r >= 0 && lines()[r]!.startsWith(`${BODY}- const a = 1`) }))
+check('删除行与标题对齐', await settled(() => { const r = rowOf('- const a = 1'); return r >= 0 && lines()[r]!.startsWith(`${BODY}- const a = 1`) }))
 check('新增行延续缩进', await settled(() => { const r = rowOf('+ const a = 2'); return r >= 0 && lines()[r]!.startsWith(`${BODY_CONT}+ const a = 2`) }))
 check('删除行为红色系', await settled(() => { const r = rowOf('- const a = 1'); return r >= 0 && fgAt(7, r) === 0xb26671 }))
 check('新增行为绿色系', await settled(() => { const r = rowOf('+ const a = 2'); return r >= 0 && fgAt(7, r) === 0x57956b }))
@@ -145,7 +138,7 @@ show('write', {
 check('新建文件标题为「Write /tmp/new.ts」', await settled(() => screen().includes('Write /tmp/new.ts')))
 check('新建只有新增行', await settled(() => screen().includes('+ hello') && screen().includes('+ world') && !screen().includes('- hello')))
 
-// 3. Bash 终端卡：命令作标题，输出缩进。
+// 3. Bash 终端卡：命令作标题，输出预览。
 show('bash', {
   name: 'bash',
   argsText: '{"command":"ls -la"}',
@@ -153,8 +146,8 @@ show('bash', {
   resultView: { card: 'terminal', output: 'total 8\nfile1\nfile2', exitCode: 0 },
   resultFull: 'total 8\nfile1\nfile2',
 })
-check('终端卡标题为「Bash(ls -la)」', await settled(() => screen().includes('Bash(ls -la)')))
-check('终端输出带 ⎿ 缩进', await settled(() => { const r = rowOf('total 8'); return r >= 0 && lines()[r]!.startsWith(`${BODY}total 8`) }))
+check('终端卡标题为「$ ls -la」', await settled(() => screen().includes('$ ls -la')))
+check('终端输出与标题对齐', await settled(() => { const r = rowOf('total 8'); return r >= 0 && lines()[r]!.startsWith(`${BODY}total 8`) }))
 
 // 4. Bash 非零退出：追加 Exit code 行。
 show('bash-err', {
@@ -177,7 +170,7 @@ show('read', {
   resultFull: '<path>/tmp/x.ts</path>\n<content>\nline one\nline two\n</content>',
 })
 check('Read 正文无信封标签', await settled(() => screen().includes('line one') && !screen().includes('<content>') && !screen().includes('<path>')))
-check('Read 正文带 ⎿ 缩进', await settled(() => { const r = rowOf('line one'); return r >= 0 && lines()[r]!.startsWith(`${BODY}line one`) }))
+check('Read 正文与标题对齐', await settled(() => { const r = rowOf('line one'); return r >= 0 && lines()[r]!.startsWith(`${BODY}line one`) }))
 
 // 6. 无 presenter 的工具：回退到 Name(args) + 原始结果（仍然缩进）。
 show('fallback', {
@@ -187,7 +180,7 @@ show('fallback', {
 check('无视图时回退 Name(args) 标题', await settled(() => screen().includes('Read({"file_path":"/tmp/a.ts"})')))
 check('无视图时结果仍缩进', await settled(() => { const r = rowOf('raw output here'); return r >= 0 && lines()[r]!.startsWith(`${BODY}raw output here`) }))
 
-// 7. 折叠上限：默认一张卡只占标题行，正文零行；Ctrl+O（verbose）展开全文。
+// 7. 默认输出预览三行；Ctrl+O（verbose）展开全文。
 const seqTool = {
   name: 'bash',
   callView: { card: 'terminal', title: 'seq 6' },
@@ -195,18 +188,18 @@ const seqTool = {
   resultFull: '1\n2\n3\n4\n5\n6',
 }
 await show('cap', seqTool, false)
-check('折叠态只有标题行', await settled(() => rowOf('Bash(seq 6)') >= 0 && !screen().includes('⎿')))
-check('折叠态不画正文行', await settled(() => rowOf('5') === -1 && !screen().includes('ctrl+o to expand')))
+check('默认卡显示命令和前三行输出', await settled(() => rowOf('$ seq 6') >= 0 && lines().includes(`${BODY}1`) && lines().includes(`${BODY}3`)))
+check('超出预览上限显示展开提示', await settled(() => !lines().includes(`${BODY}5`) && screen().includes('… +3 lines') && screen().includes('ctrl+o to expand')))
 await show('cap-open', seqTool, true)
 check('verbose 不折叠', await settled(() => rowOf('5') >= 0 && rowOf('6') >= 0 && !screen().includes('ctrl+o to expand')))
 
-// 8. 错误卡：errorText 红色缩进。
+// 8. 错误卡：errorText 红色预览。
 show('error', {
   name: 'read',
   status: 'error',
   errorText: 'Error: ENOENT',
 })
-check('错误行带 ⎿ 缩进', await settled(() => { const r = rowOf('Error: ENOENT'); return r >= 0 && lines()[r]!.startsWith(`${BODY}Error: ENOENT`) }))
+check('错误行与标题对齐', await settled(() => { const r = rowOf('Error: ENOENT'); return r >= 0 && lines()[r]!.startsWith(`${BODY}Error: ENOENT`) }))
 check('错误行有颜色', await settled(() => { const r = rowOf('Error: ENOENT'); return r >= 0 && fgAt(7, r) !== 0 }))
 
 // 9. 运行中的 Edit：挂起期间就展示待定 diff。
@@ -290,7 +283,7 @@ const pwshTool = {
   resultFull: '',
 }
 await show('fold-on', pwshTool, false, true)
-check('折叠时标题仅保留命令首行', await settled(() => screen().includes('PowerShell($items = Get-ChildItem -Recurse)')))
+check('折叠时标题仅保留命令首行', await settled(() => screen().includes('$ $items = Get-ChildItem -Recurse')))
 check('折叠时显示 +N 行提示', await settled(() => screen().includes('… +3 lines') && screen().includes('ctrl+o')))
 check('折叠时后续脚本行不出现', await settled(() => rowOf('Sort-Object') === -1 && rowOf('Select-Object') === -1))
 
@@ -301,7 +294,7 @@ await show('fold-trailing', {
   resultView: { card: 'terminal', output: '', exitCode: 0 },
   resultFull: '',
 }, false, true)
-check('尾随换行不计入折叠行数', await settled(() => screen().includes('… +1 lines') && screen().includes('Bash(cd /tmp)')))
+check('尾随换行不计入折叠行数', await settled(() => screen().includes('… +1 lines') && screen().includes('$ cd /tmp')))
 
 // 14. Ctrl+O（verbose）在折叠开启时仍展开完整脚本。
 await show('fold-open', pwshTool, true, true)
@@ -318,7 +311,7 @@ await show('fold-single', {
   resultView: { card: 'terminal', output: '1\n2\n3\n4\n5\n6', exitCode: 0 },
   resultFull: '1\n2\n3\n4\n5\n6',
 }, false, true)
-check('单行命令折叠开启时不加提示', await settled(() => screen().includes('Bash(seq 6)') && !screen().includes('… +1 lines')))
+check('单行命令折叠开启时不加提示', await settled(() => screen().includes('$ seq 6') && !screen().includes('… +1 lines')))
 
 // 17. The compact header is one physical row, including long single-line
 // commands, multi-line scripts with folding off, and unstructured args.
@@ -333,16 +326,45 @@ for (const width of [20, 55, 90]) {
     ['raw args', { name: 'read', argsText: '{"SUMMARY_ARGS":"' + 'x'.repeat(600) + 'ARGS_END"}' }],
   ] as const) {
     app.rerender(<TerminalSizeContext.Provider value={{ columns: width, rows: ROWS }}><Box width={width}>{card(`summary-${width}-${name}`, tool, false)}</Box></TerminalSizeContext.Provider>)
-    const label = tool.name === 'bash' ? 'Bash(' : 'Read('
-    check(`${name} width=${width}: single physical summary row`, await settled(() => screen().includes(label) && lines().filter(line => line.trim()).length === 1))
+    const label = tool.name === 'bash' ? '$ ' : 'Read('
+    check(`${name} width=${width}: single physical summary row`, await settled(() => screen().includes(label) && lines().filter(line => line.replace('│', '').trim()).length === 1))
     check(`${name} width=${width}: tail remains detail`, !screen().includes('COMMAND_END') && !screen().includes('SCRIPT_END') && !screen().includes('ARGS_END'))
     const row = rowOf(label)
     const x = row < 0 ? -1 : lines()[row]!.indexOf(label)
-    check(`${name} width=${width}: neutral, non-bold header`, x >= 0 && fgAt(x, row) === 0x8d95a6 && !term.buffer.active.getLine(row)?.getCell(x)?.isBold())
+    check(`${name} width=${width}: readable, non-bold header`, x >= 0 && fgAt(x, row) === 0xe8e6e0 && !term.buffer.active.getLine(row)?.getCell(x)?.isBold())
   }
 }
 show('long-command-open', { name: 'bash', callView: { card: 'terminal', title: longCommand } }, true)
 check('expanded command retains its full tail', await settled(() => screen().includes('COMMAND_END')))
+
+// Independent surfaces must surround the output, not just paint the header.
+show('surface', {
+  name: 'bash',
+  callView: { card: 'terminal', title: 'printf CARD_SURFACE' },
+  resultView: { card: 'terminal', output: 'CARD_OUTPUT\nSECOND_OUTPUT', exitCode: 0 },
+}, false)
+check('card surface ready', await settled(() => rowOf('SECOND_OUTPUT') >= 0))
+const surfaceHead = rowOf('CARD_SURFACE')
+const surfaceEnd = rowOf('SECOND_OUTPUT')
+check('command and output have a blank separator', rowOf('CARD_OUTPUT') === surfaceHead + 2)
+check('left border spans padding, header, separator and output',
+  lines().slice(surfaceHead - 1, surfaceEnd + 2).every(line => line.startsWith('│')))
+check('default surface fills the card width including padding',
+  [surfaceHead - 1, surfaceHead, surfaceEnd, surfaceEnd + 1].every(y =>
+    [1, 30, COLS - 1].every(x => term.buffer.active.getLine(y)?.getCell(x)?.getBgColor() === 0x1c2330)))
+
+show('failed-preview', {
+  name: 'bash',
+  callView: { card: 'terminal', title: 'run FAILED_PREVIEW' },
+  resultView: { card: 'terminal', output: 'first\nsecond\nthird\nfourth\nfifth', exitCode: 7 },
+}, false)
+check('long log keeps exit code outside the preview cap', await settled(() =>
+  rowOf('Exit code 7') >= 0 && rowOf('third') >= 0 && rowOf('fourth') === -1))
+show('error-preview', {
+  name: 'read', status: 'error', errorText: 'ERROR_FIRST\nERROR_SECOND\nERROR_THIRD\nERROR_FOURTH\nERROR_LAST',
+}, false)
+check('multiline error remains bounded and expandable', await settled(() =>
+  rowOf('ERROR_THIRD') >= 0 && rowOf('ERROR_LAST') === -1 && screen().includes('… +2 lines')))
 
 app.unmount()
 // 固定窗:pacing unmount 后输出 flush 无可观测条件。

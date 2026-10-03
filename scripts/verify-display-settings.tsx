@@ -411,15 +411,16 @@ check('statusBar.cost switch still hides the cost field', () => {
 })
 
 // Tool background normalization and terminal ANSI output.
-check('normalizeToolBackground accepts the three modes and falls back to none', () => {
+check('normalizeToolBackground preserves explicit modes and defaults to subtle', () => {
   assert.equal(normalizeToolBackground('none'), 'none')
   assert.equal(normalizeToolBackground('subtle'), 'subtle')
   assert.equal(normalizeToolBackground('strong'), 'strong')
-  assert.equal(normalizeToolBackground('loud'), 'none')
-  assert.equal(normalizeToolBackground(undefined), 'none')
+  for (const value of [undefined, null, '', 'loud', 0, {}, []]) {
+    assert.equal(normalizeToolBackground(value), 'subtle')
+  }
 })
 
-async function renderToolBackground(toolBackground: 'none' | 'subtle' | 'strong'): Promise<string> {
+async function renderToolBackground(toolBackground?: 'none' | 'subtle' | 'strong'): Promise<string> {
   const harness = makeHarness(80, 6)
   const tool = {
     callId: `background-${toolBackground}`,
@@ -452,6 +453,7 @@ async function renderToolBackground(toolBackground: 'none' | 'subtle' | 'strong'
   return harness.writes.join('')
 }
 
+const defaultAnsi = await renderToolBackground()
 const noneAnsi = await renderToolBackground('none')
 const subtleAnsi = await renderToolBackground('subtle')
 const strongAnsi = await renderToolBackground('strong')
@@ -459,6 +461,7 @@ check('tool background modes map to stable dark-theme ANSI backgrounds', () => {
   const subtleBg = '\x1b[48;2;28;35;48m'
   const strongBg = '\x1b[48;2;36;43;58m'
   assert.ok(!noneAnsi.includes(subtleBg) && !noneAnsi.includes(strongBg))
+  assert.ok(defaultAnsi.includes(subtleBg), 'omitted toolBackground must use the subtle surface')
   assert.ok(subtleAnsi.includes(subtleBg), 'subtle background ANSI missing')
   assert.ok(strongAnsi.includes(strongBg), 'strong background ANSI missing')
 })

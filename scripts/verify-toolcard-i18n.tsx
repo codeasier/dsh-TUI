@@ -5,9 +5,9 @@
  * tool display names, per-line fold hints, exit/signal error lines, the
  * running placeholder, and search-result truncation. These used to be
  * hardcoded English that leaked into the zh UI.
- * Collapsed cards expose only a single summary row. Body-copy scenarios
- * explicitly expand; line-budget hints are tested on SplitDiffView itself,
- * since opened tool details are uncapped.
+ * Collapsed cards show a single header plus a short output preview. Body-copy
+ * scenarios check the preview and then expand; opened tool details are uncapped.
+ * SplitDiffView also exercises its own localized line-budget hints.
  *
  * Belt and suspenders with scripts/verify-i18n.ts: that gate bans the
  * English literals at the SOURCE level (they may only live in the dict);
@@ -70,7 +70,7 @@ type Scenario = {
   id: string
   tool: Record<string, unknown>
   opts?: { foldTerminalCommand?: boolean; verbose?: boolean }
-  /** Visible header while the body-copy scenario remains collapsed. */
+  /** Visible header while the body-copy scenario shows its short preview. */
   summary?: { zh: string; en: string }
   zh: string[]
   en: string[]
@@ -92,8 +92,14 @@ const SCENARIOS: Scenario[] = [
     en: ['Glob(**/*.ts)'],
   },
   {
-    id: 'name-bash-proper-noun',
+    id: 'terminal-command-prefix',
     tool: { name: 'bash', callView: { card: 'terminal', title: 'ls' }, resultView: { card: 'terminal', output: 'ok', exitCode: 0 }, resultFull: 'ok' },
+    zh: ['$ ls', 'ok'],
+    en: ['$ ls', 'ok'],
+  },
+  {
+    id: 'name-bash-proper-noun',
+    tool: { name: 'bash', argsText: 'ls' },
     zh: ['Bash(ls)'],
     en: ['Bash(ls)'],
   },
@@ -120,13 +126,13 @@ const SCENARIOS: Scenario[] = [
       resultFull: '',
     },
     opts: { foldTerminalCommand: true },
-    zh: ['Bash(cd /tmp)', '… +2 行（ctrl+o 展开）'],
-    en: ['Bash(cd /tmp)', '… +2 lines (ctrl+o to expand)'],
+    zh: ['$ cd /tmp', '… +2 行（ctrl+o 展开）'],
+    en: ['$ cd /tmp', '… +2 lines (ctrl+o to expand)'],
   },
   {
     id: 'exit-code-line',
     opts: { verbose: true },
-    summary: { zh: 'Bash(false)', en: 'Bash(false)' },
+    summary: { zh: '$ false', en: '$ false' },
     tool: {
       name: 'bash',
       callView: { card: 'terminal', title: 'false' },
@@ -139,7 +145,7 @@ const SCENARIOS: Scenario[] = [
   {
     id: 'signal-line',
     opts: { verbose: true },
-    summary: { zh: 'Bash(sleep 9)', en: 'Bash(sleep 9)' },
+    summary: { zh: '$ sleep 9', en: '$ sleep 9' },
     tool: {
       name: 'bash',
       callView: { card: 'terminal', title: 'sleep 9' },
@@ -223,9 +229,17 @@ async function runPass(lang: 'zh' | 'en') {
       }))
       check(`[${lang}] ${scenario.id}: 折叠摘要可见`,
         await settled(() => screenOf(rig.term).includes(scenario.summary![lang])))
-      check(`[${lang}] ${scenario.id}: 折叠仅一物理行且正文隐藏`,
-        screenOf(rig.term).split('\n').filter(line => line.trim() !== '').length === 1 &&
-        scenario[lang].filter(text => text !== scenario.summary![lang]).every(text => !screenOf(rig.term).includes(text)))
+      check(`[${lang}] ${scenario.id}: 预览标题仍为一物理行`,
+        screenOf(rig.term).split('\n').filter(line => line.includes(scenario.summary![lang])).length === 1)
+      const preview = scenario.id === 'body-detail'
+        ? ['l1', 'l2', 'l3', lang === 'zh' ? '… +2 行（ctrl+o 展开）' : '… +2 lines (ctrl+o to expand)']
+        : scenario[lang]
+      check(`[${lang}] ${scenario.id}: 短预览与界面文案可见`,
+        await settled(() => preview.every(text => screenOf(rig.term).includes(text))))
+      if (scenario.id === 'body-detail') {
+        check(`[${lang}] ${scenario.id}: 三行预览隐藏输出尾部`,
+          !screenOf(rig.term).includes('l4') && !screenOf(rig.term).includes('l5'))
+      }
     }
     app.rerender(React.createElement(AssistantToolUseMessage, {
       key: `${scenario.id}-${lang}`,
@@ -241,7 +255,8 @@ async function runPass(lang: 'zh' | 'en') {
     const forbidden = scenario[other].filter(text => !scenario[lang].includes(text))
     check(`[${lang}] ${scenario.id}: 无对方语言残留`, forbidden.every(text => !screenOf(rig.term).includes(text)))
     if (!scenario.opts?.verbose) {
-      check(`[${lang}] ${scenario.id}: 单行摘要`, screenOf(rig.term).split('\n').filter(line => line.trim() !== '').length === 1)
+      check(`[${lang}] ${scenario.id}: 标题单行，正文可有短预览`,
+        screenOf(rig.term).split('\n').filter(line => line.includes(scenario[lang][0]!)).length === 1)
     }
   }
   splitApp.rerender(React.createElement(SplitDiffView, {

@@ -10,7 +10,7 @@
  *   paint complete immediately.
  * Group C — component contracts:
  *   thinking preview ticker follows the ARRIVED text while the expanded body
- *   paints the revealed slice; tool cards stay single-line when collapsed
+ *   paints the revealed slice; tool cards show bounded previews when collapsed
  *   and explicitly opened bodies paint complete without reveal timers.
  * Group D — long-session fanout:
  *   real assistant/reasoning reveal with 80 historical tool cards uses one
@@ -311,7 +311,7 @@ console.log('--- C: component contracts ---')
   )
 }
 
-// C2/C3: tool detail is opt-in and complete, independent of smooth streaming.
+// C2/C3: tool previews and full detail are independent of smooth streaming.
 {
   resetRevealForTest()
   const diffs = [
@@ -339,8 +339,8 @@ console.log('--- C: component contracts ---')
     () => <AssistantToolUseMessage tool={runningTool} marginTopOnTurn={false} verbose={false} />,
     async (screen, rerender) => {
       check(await settled(() => screen().includes('Edit /src/example.ts')), 'C2 running summary is visible')
-      check(screen().split('\n').filter(line => line.trim() !== '').length === 1 && !screen().includes('old line'),
-        'C2 collapsed running card occupies one physical line without body')
+      check(await settled(() => screen().includes('old line 0') && screen().includes('new line 1') && !screen().includes('new line 2')),
+        'C2 running diff preview paints its eight-row budget without exposing the tail')
       check(!isRevealTimerRunning() && getRevealVersion() === 0 && getRevealSubscriberCount() === 0,
         'C2 tool card owns neither reveal cursor nor subscriber')
       rerender(<AssistantToolUseMessage tool={runningTool} marginTopOnTurn={false} verbose isExpanded />)
@@ -349,8 +349,8 @@ console.log('--- C: component contracts ---')
       check(!isRevealTimerRunning() && getRevealVersion() === 0, 'C2 opened diff paints complete without animation')
       rerender(<AssistantToolUseMessage tool={doneTool} marginTopOnTurn={false} verbose={false} />)
       check(await settled(() => screen().includes('Edited') && !screen().includes('old line')), 'C3 settled summary replaces call title')
-      check(!screen().includes('settled-result-marker') && screen().split('\n').filter(line => line.trim() !== '').length === 1,
-        'C3 settled collapsed card still hides detail')
+      check(await settled(() => screen().includes('settled-result-marker')),
+        'C3 settled card immediately paints its short output preview')
       rerender(<AssistantToolUseMessage tool={doneTool} marginTopOnTurn={false} verbose isExpanded />)
       check(await settled(() => screen().includes('settled-result-marker')), 'C3 opened result paints complete')
       check(!isRevealTimerRunning() && getRevealVersion() === 0, 'C3 result never activates reveal')

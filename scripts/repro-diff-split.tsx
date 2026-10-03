@@ -51,12 +51,8 @@ const editTool = {
   },
 }
 
-/**
- * 卡面左侧的机器活动竖线占 2 列，正文槽（` ⎿ `/`   `）再占 3 列：双栏正文
- * 从第 5 列开始。下面所有按列取色/取字的断言都从这里推导，排版再动一次
- * 也只改这个常量。
- */
-const BODY_LEFT = 5
+// Left border + padding + output indent.
+const BODY_LEFT = 4
 
 /** Boot one headless terminal at the given width and render the card. */
 async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none', verbose = true) {
@@ -68,8 +64,7 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
     isTTY = true
     _write(chunk, _e, cb) { term.write(String(chunk), cb) }
   }
-  // verbose：这些场景测的是 diff 的呈现（双栏/统一式、底色、词色），而
-  // 折叠卡现在只画头行（零正文行），非 verbose 下整屏只有一个标题。
+  // Full expansion isolates diff layout/color assertions from preview limits.
   const app = await render(
     React.createElement(AssistantToolUseMessage, { tool, marginTopOnTurn: false, verbose, diffLayout, toolBackground }),
     { stdout: new FakeStdout(), debug: true, exitOnCtrlC: false },
@@ -90,15 +85,15 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
 {
   const { lines, screen, bgAt, fgAt } = await renderAt(120, editTool)
   const s = screen()
-  check('宽屏不出现统一式 - /+ 行', !lines.some(line => line.startsWith(' ⎿ - ') || line.startsWith(' ⎿ + ')))
+  check('宽屏不出现统一式 - /+ 行', !lines.some(line => line.startsWith('│   - ') || line.startsWith('│   + ')))
   const pairRow = lines.findIndex(line => line.includes('def shout(text):') && line.includes('def shout(text, mark="!"):'))
   check('改动对在同行双栏呈现', pairRow >= 0)
   // 竖线要落在正文槽右侧才算是分栏符：第 0 列的 `│` 是机器活动竖线。
   check('双栏以 │ 分隔', pairRow >= 0 && (lines[pairRow]!.indexOf('│', BODY_LEFT) ?? -1) > BODY_LEFT)
   const ctxRow = lines.findIndex(line => line.includes('# tail'))
-  check('上下文行双栏都有内容', ctxRow >= 0 && lines[ctxRow]!.split('│').length === 2)
+  check('上下文行双栏都有内容', ctxRow >= 0 && lines[ctxRow]!.slice(BODY_LEFT).split('│').length === 2)
   if (pairRow >= 0) {
-    const dividerX = lines[pairRow]!.indexOf('│')
+    const dividerX = lines[pairRow]!.indexOf('│', BODY_LEFT)
     check('左栏（old）改动行底色为暗红系', bgAt(6, pairRow) === 0x362b2c, `bg=${bgAt(6, pairRow).toString(16)}`)
     check('右栏（new）改动行底色为暗绿系', bgAt(dividerX + 2, pairRow) === 0x2b352c, `bg=${bgAt(dividerX + 2, pairRow).toString(16)}`)
     const markX = lines[pairRow]!.indexOf('mark="!"')
@@ -107,7 +102,7 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
     check('关键字使用语法色（syntaxKeyword）', defX > 0 && fgAt(defX, pairRow) === 0x78a0d6, `fg=${fgAt(Math.max(defX, 0), pairRow).toString(16)}`)
   }
   if (ctxRow >= 0) {
-    check('默认 none 档：上下文行无卡片底色', bgAt(6, ctxRow) === 0xffffff, `bg=${bgAt(6, ctxRow).toString(16)}`)
+    check('显式 none 档：上下文行无卡片底色', bgAt(6, ctxRow) === 0xffffff, `bg=${bgAt(6, ctxRow).toString(16)}`)
   }
 }
 
@@ -135,13 +130,13 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
   check('窄屏回退统一式 + 行', s.includes('+ def shout(text, mark="!"):'))
   // 唯一允许的 `│` 是卡面左侧的机器活动竖线；正文槽里不能再出现分栏符。
   const pipes = (s.match(/│/gu) ?? []).length
-  const railPipes = (s.match(/^│ |^ {2}│ /gmu) ?? []).length
+  const railPipes = lines.filter(line => line.startsWith('│')).length
   check('窄屏不出现 │ 分隔', pipes === railPipes, `pipes=${pipes} rail=${railPipes}`)
   const bodyRow = lines.findIndex(line => line.includes('# tail'))
   if (bodyRow >= 0) {
-    check('默认 none 档：统一式卡体无底色（文本处）', bgAt(lines[bodyRow]!.indexOf('# tail'), bodyRow) === 0xffffff,
+    check('显式 none 档：统一式卡体无底色（文本处）', bgAt(lines[bodyRow]!.indexOf('# tail'), bodyRow) === 0xffffff,
       `bg=${bgAt(lines[bodyRow]!.indexOf('# tail'), bodyRow).toString(16)}`)
-    check('默认 none 档：统一式卡体无底色（行尾）', bgAt(69, bodyRow) === 0xffffff,
+    check('显式 none 档：统一式卡体无底色（行尾）', bgAt(69, bodyRow) === 0xffffff,
       `bg=${bgAt(69, bodyRow).toString(16)}`)
   }
 }
@@ -160,8 +155,8 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
   }
   const { lines } = await renderAt(120, writeTool)
   const helloRow = lines.findIndex(line => line.includes('hello'))
-  check('新建文件的行落在右栏', helloRow >= 0 && lines[helloRow]!.includes('│') && lines[helloRow]!.indexOf('hello') > lines[helloRow]!.indexOf('│'))
-  check('新建文件左栏留空', helloRow >= 0 && lines[helloRow]!.slice(5, lines[helloRow]!.indexOf('│')).trim() !== 'hello')
+  check('新建文件的行落在右栏', helloRow >= 0 && lines[helloRow]!.includes('│') && lines[helloRow]!.indexOf('hello') > lines[helloRow]!.indexOf('│', BODY_LEFT))
+  check('新建文件左栏留空', helloRow >= 0 && lines[helloRow]!.slice(BODY_LEFT, lines[helloRow]!.indexOf('│', BODY_LEFT)).trim() !== 'hello')
 }
 
 // ---- 5. diffLayout preference overrides the width heuristic
@@ -172,6 +167,39 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
 {
   const { screen } = await renderAt(90, editTool, 'split')
   check('split 偏好下 90 列也强制双栏', screen().includes('│'))
+}
+
+// Forced split still needs room for both panes. Preview and expanded cards
+// must not hide a new file's only populated pane beyond the right edge.
+for (const cols of [20, 40]) {
+  for (const verbose of [false, true]) {
+    const { lines, screen } = await renderAt(cols, {
+      ...editTool, name: 'write',
+      callView: { card: 'diff', title: 'Write new.ts', diffs: [{ path: 'new.ts', oldText: null, newText: 'NEW_FILE' }] },
+    }, 'split', 'subtle', verbose)
+    check(`split ${cols} cols verbose=${verbose}: new file remains visible`, screen().includes('+ NEW_FILE'))
+    check(`split ${cols} cols verbose=${verbose}: no overflowing pane`, lines.every(line => !line.slice(BODY_LEFT).includes('│')))
+  }
+}
+{
+  const { lines, screen } = await renderAt(120, {
+    ...editTool,
+    callView: { card: 'diff', title: 'Edit large.ts', diffs: [{
+      path: 'large.ts', oldText: 'OLD_LINE\n'.repeat(10_000), newText: 'NEW_LINE\n'.repeat(10_001),
+    }] },
+  }, 'auto', 'subtle', false)
+  check('large unequal replacement previews unified instead of quadratic split alignment',
+    screen().includes('- OLD_LINE') && lines.every(line => !line.slice(BODY_LEFT).includes('│')))
+  check('large diff preview stays at eight content rows', lines.filter(line => line.includes('- OLD_LINE')).length === 8)
+}
+{
+  const { screen } = await renderAt(120, {
+    ...editTool, name: 'write',
+    callView: { card: 'diff', title: 'Write cap.ts', diffs: [{
+      path: 'cap.ts', oldText: null, newText: Array.from({ length: 9 }, (_, i) => `DIFF_ROW_${i}`).join('\n'),
+    }] },
+  }, 'auto', 'subtle', false)
+  check('split preview caps even one extra row', screen().includes('DIFF_ROW_7') && !screen().includes('DIFF_ROW_8') && screen().includes('+1 lines'))
 }
 
 // ---- 6. issue #250 regression assertions

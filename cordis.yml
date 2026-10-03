@@ -63,6 +63,7 @@
     fullscreen: true
     # 以下为 /settings 可改的显示设置；每项说明与默认值见应用内 /settings 屏。
     terminalImages: true
+    # toolBackground: subtle # none / subtle（默认）/ strong
     # mermaidDiagrams: true
     # 回复中 LaTeX 公式的显示方式：auto（默认，目前为 Unicode）/ image（支持图形的终端里块级公式显示为图片）/ unicode / source（保留源码）。/settings 可实时改。
     # mathRendering: auto

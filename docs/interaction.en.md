@@ -442,8 +442,9 @@ In inline mode, the terminal emulator owns native scrollback and selection.
 - **`Esc`** — Cancel an active drag (or an existing selection) without copying.
 - **Single-click a message row** — Plain text rows (user/assistant) do nothing — the
   transcript is a reading surface, selection is the mouse's job there.
-- **Single-click a tool card / thinking / compact summary** — Expand / collapse (header
-  brightens on hover; trailing blank cells do not trigger).
+- **Single-click a tool card surface** — Expand / collapse the full command and output. The title,
+  preview and padding are clickable; file-path links still open the file separately.
+- **Single-click a thinking / compact summary** — Expand / collapse; the header brightens on hover.
 - **Single-click a subagent card** — Open that subagent's detail scene (status glyph
   brightens on hover).
 - **Single-click the input box** — Place the text caret at the click (multi-line, wrapped

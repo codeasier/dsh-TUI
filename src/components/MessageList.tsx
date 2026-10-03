@@ -283,13 +283,11 @@ function signatureParts(
 /**
  * Visual layer of a transcript row — what the block-gap pre-pass groups by.
  *
- * Only a run of MACHINE rows loses the blank line between its members, which
- * is how a step's five tool calls become one readable cluster instead of five
- * equally-spaced lines. Layers are not kinds: `tool`, `reasoning`, `subagent`,
- * `job` and the `!` shell rows are all one machine layer because they are the
- * same thing to a reader — the agent doing work, not talking.
+ * Tool calls own independent cards, separated from both prose and machine
+ * activity. Reasoning, subagent/job updates and local shell rows still form
+ * tight runs. Compute gaps before windowing so scroll offsets stay stable.
  */
-type BlockLayer = 'user' | 'prose' | 'machine' | 'notice' | 'interrupt' | 'compact'
+type BlockLayer = 'user' | 'prose' | 'tool' | 'machine' | 'notice' | 'interrupt' | 'compact'
 
 function blockLayer(kind: ChatRow['kind']): BlockLayer {
   switch (kind) {
@@ -298,6 +296,7 @@ function blockLayer(kind: ChatRow['kind']): BlockLayer {
     case 'assistant':
       return 'prose'
     case 'tool':
+      return 'tool'
     case 'reasoning':
     case 'subagent':
     case 'job':
@@ -324,7 +323,7 @@ export function MessageList({
   model,
   diffLayout = 'auto',
   thinkingFold = 'preview',
-  toolBackground = 'none',
+  toolBackground = 'subtle',
   foldTerminalCommand = false,
   smoothStreaming = false,
   activityFrames,
@@ -531,13 +530,9 @@ export function MessageList({
       : thinkingVisible
         ? sliced
         : sliced.filter(row => row.kind !== 'reasoning')
-    // Blank line BETWEEN blocks, none inside a machine run. A step's tool
-    // calls, reasoning rows, subagent and job cards are one unit to a reader —
-    // the agent working, not talking — so consecutive machine rows lose the
-    // separating blank line and read as one cluster. Every other pair keeps
-    // the blank line it always had (prose included: each assistant message
-    // stays its own block). Pre-pass over the FULL list so a windowed row
-    // keeps the exact spacing it would have in a fully-mounted list.
+    // Independent tool cards keep a blank line on either side. Only machine
+    // runs remain tight. Pre-pass over the FULL list so a windowed row keeps
+    // the exact spacing it would have in a fully-mounted list.
     const margins = new Map<number, boolean>()
     {
       let prev: BlockLayer | undefined

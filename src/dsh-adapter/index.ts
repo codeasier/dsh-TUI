@@ -108,7 +108,7 @@ export interface Config {
    *  preview and folds each step when it settles; `full` keeps thinking
    *  expanded until the whole turn ends. Editable live from `/settings`. */
   thinkingFold?: 'preview' | 'full'
-  /** Tool-card background strength; defaults to no added background. */
+  /** Tool-card background strength; defaults to a subtle card surface. */
   toolBackground?: ToolBackground
   /** What the fullscreen transcript's right gutter shows (settings
    *  `dsh-tui.scrollGutter`): `timeline` turn rail (default), `scrollbar`
@@ -223,7 +223,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   preset: Schema.string().required(false),
   diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
   thinkingFold: Schema.union(['preview', 'full']).default('preview'),
-  toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
+  toolBackground: Schema.union(['none', 'subtle', 'strong']).default('subtle'),
   scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
   // Preset names AND custom `NxM` specs must survive validation (a custom
   // spec is not a fixed union member); junk is normalized to `normal` by

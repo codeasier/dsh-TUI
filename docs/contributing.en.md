@@ -387,7 +387,7 @@ change, also run the closest focused script:
 | Markdown hanging indentation, soft-wrap copying and long-list scrolling | `node --import tsx/esm scripts/verify-hanging-wrap.tsx`, `node --import tsx/esm scripts/verify-markdown-hanging.tsx` |
 | Markdown semantic colors/links, legacy palette fallback/cache, heading spacing and thinking colors | `node scripts/verify-markdown-palette.mjs` |
 | Markdown block spacing, settled/streaming parity and long-block splitting | `node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx`, `node --import tsx/esm scripts/verify-streaming-markdown-blocks.tsx` |
-| Single-row tool summaries, expansion and truncated-header tooltips | `node --import tsx/esm scripts/repro-toolcards.tsx`, `node --import tsx/esm scripts/verify-tool-tooltip-gating.tsx` |
+| Tool-card short previews, expansion and truncated-header tooltips | `node --import tsx/esm scripts/repro-toolcards.tsx`, `node --import tsx/esm scripts/verify-tool-tooltip-gating.tsx` |
 | Default/custom page insets, content width and full-bleed gutters | `node --import tsx/esm scripts/verify-page-margin.tsx` |
 | Markdown code-block captions (original info labels, untagged fence cues and copy boundaries) | `node scripts/verify-code-block-caption.mjs` |
 | Standalone Markdown nodes (tables, mermaid diagrams) and streaming block spacing | `pnpm verify:table-layout`, `pnpm verify:mermaid-diagram`, `node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx` |

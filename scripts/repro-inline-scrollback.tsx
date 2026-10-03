@@ -32,10 +32,12 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat
 ])
 
 const COLS = 100
-const ROWS = 20
+const expandedTools = process.argv.includes('--expanded-tools')
+// Keep the expanded READ tail inside the viewport before result growth. The
+// independent cards add padding/separators; the default cold-history rig stays 20 rows.
+const ROWS = expandedTools ? 28 : 20
 const SCROLLBACK = 2000
 const INPUT_MARKER = 'CARET_ANCHOR_7F31'
-const expandedTools = process.argv.includes('--expanded-tools')
 const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: SCROLLBACK, allowProposedApi: true })
 // 取证终端与真实终端同宽（⚓ 等 Emoji_Presentation 字符 2 格）——
 // 否则现场思考行落定重绘的断言测的是 xterm 旧表的宽度（#574）。
@@ -345,9 +347,11 @@ for (const t of [
   const n = count(t)
   check(`「${t}」恰好一份`, n === 1, `实际 ${n} 次`)
 }
-for (const marker of ['READ_RESULT_ONCE_7F31', ...Array.from({ length: 6 }, (_, i) => `READ_DETAIL_${i}_7F31`), 'READ_END_ONCE_7F31']) {
-  check(`工具正文「${marker}」${expandedTools ? '恰好一份' : '折叠隐藏'}`,
-    count(marker) === (expandedTools ? 1 : 0), `实际 ${count(marker)} 次`)
+const resultMarkers = ['READ_RESULT_ONCE_7F31', ...Array.from({ length: 6 }, (_, i) => `READ_DETAIL_${i}_7F31`), 'READ_END_ONCE_7F31']
+for (const [index, marker] of resultMarkers.entries()) {
+  const visible = expandedTools || index < 3
+  check(`工具正文「${marker}」${visible ? '恰好一份' : '折叠隐藏'}`,
+    count(marker) === (visible ? 1 : 0), `实际 ${count(marker)} 次`)
 }
 for (const t of ['五、代码结构']) {
   const n = countExact(t)

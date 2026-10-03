@@ -696,7 +696,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       Schema.object({
         diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
         thinkingFold: Schema.union(['preview', 'full']).default('preview'),
-        toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
+        // Leave the legacy user layer unset so explicit cordis choices (including
+        // `none`) survive; applyDisplay normalizes an absent value to `subtle`.
+        toolBackground: Schema.union(['none', 'subtle', 'strong']),
         scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
         // Preset names AND custom `NxM` specs (the settings field's parse
         // gate keeps junk out of the user layer; the transform normalizes
@@ -1066,6 +1068,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         },
         {
           ...settingField('toolBackground'),
+          format(value: unknown): string {
+            return normalizeToolBackground(value ?? config.toolBackground)
+          },
         },
         {
           ...settingField('scrollGutter'),

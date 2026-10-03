@@ -36,7 +36,7 @@ const STATUS_BAR_KEYS = Object.keys(DEFAULT_STATUS_BAR) as (keyof StatusBarConfi
 export function normalizeToolBackground(value: unknown): ToolBackground {
   return typeof value === 'string' && TOOL_BACKGROUNDS.has(value as ToolBackground)
     ? value as ToolBackground
-    : 'none'
+    : 'subtle'
 }
 
 /** Same normalize contract as toolBackground; `timeline` is the default. */

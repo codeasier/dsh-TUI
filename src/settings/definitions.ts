@@ -375,8 +375,8 @@ export const SETTING_DEFINITIONS = {
     label: 'Tool background',
     descriptions: { zh: '工具卡背景' },
     group: 'appearance',
-    hint: 'Choose whether tool-call cards add no, subtle, or strong background emphasis.',
-    hintDescriptions: { zh: '选择工具调用卡片不添加、轻微或明显的背景强调。' },
+    hint: 'Tool-call cards use a subtle background by default. Choose None for no background, or Strong for more emphasis.',
+    hintDescriptions: { zh: '工具调用卡片默认使用轻微底色。选择「无」关闭底色，或「明显」增强背景强调。' },
     kind: 'select',
     options: [
       { value: 'none', label: 'None', descriptions: { zh: '无' } },

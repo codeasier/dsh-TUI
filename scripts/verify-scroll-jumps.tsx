@@ -177,8 +177,8 @@ try {
   const tailId = 599
   const rowHeight = (): number => mounted.get(tailId)?.yogaNode?.getComputedHeight() ?? 0
   const collapsedHeight = rowHeight()
-  assert.equal(collapsedHeight, 2, 'collapsed tail is one physical summary row plus its block gap')
-  assert.ok(!screen().includes('DETAIL[199]'), 'collapsed summary hides resultFull')
+  assert.equal(collapsedHeight, 9, 'preview card has padding, header, separator, three output rows, fold hint and block gap')
+  assert.ok(screen().includes('DETAIL[199]-2') && !screen().includes('DETAIL_END[199]'), 'preview shows the first three lines, not the full result')
   const clickTail = (): void => {
     const y = viewportLines(term).findIndex(line => line.includes(toolMarker(199))) + 1
     assert.ok(y > 0 && y < height, 'same tool title remains on screen for the real click')
@@ -197,7 +197,7 @@ try {
     assert.ok(screen().includes('COMPOSER'), 'expanded detail does not displace composer')
   }
   const assertCollapsed = async (label: string): Promise<void> => {
-    assert.ok(await settled(() => screen().includes(toolMarker(199)) && !screen().includes('DETAIL[199]') &&
+    assert.ok(await settled(() => screen().includes(toolMarker(199)) && screen().includes('DETAIL[199]-2') && !screen().includes('DETAIL_END[199]') &&
       rowHeight() === collapsedHeight && scroll.isSticky()), label)
   }
   const detailStart = frames.length
@@ -222,7 +222,7 @@ try {
   stdin.write('\x0f')
   await assertExpanded('real Ctrl+O expands complete detail')
   stdin.write('\x0f')
-  await assertCollapsed('second Ctrl+O restores the single-line summary and cached geometry')
+  await assertCollapsed('second Ctrl+O restores the bounded preview and cached geometry')
   assert.ok(frames.slice(detailStart).every(frame => frame.slice(0, height - 1).some(line => /ANSWER|TOOL\[|DETAIL/.test(line))),
     'no blank transcript frames during click, Ctrl+O, wheel or resize')
   console.log('PASS: same-row SGR/Ctrl+O toggles, complete body, height-cache, wheel and resize protection')

@@ -446,20 +446,24 @@ An empty session shows the whale logo area at the top (scrolls away with the con
 - **User turn**: a full-width band (`userPromptBackground`) with a `▌` bar on the left and the prompt in
   bold gold after `❯` — the anchor your eye lands on first when scrolling back through a long session.
 - **Assistant prose**: column 0, normal brightness, **no prefix marker at all**.
-- **Machine activity** (tool cards / thinking / subagents / background jobs / `!` shell rows) indents two
-  columns under a dim rail, as in `│ • Bash(ls -la)`; consecutive tool calls inside one step lose the
-  blank line between them and read as one cluster. Blank lines separate clusters from prose, and prose
-  from the next user turn.
+- **Machine activity** (tool cards / thinking / subagents / background jobs / `!` shell rows) is
+  distinguished from prose by a left rail. Tool cards have their own background and a continuous left
+  border through the title, preview and expanded body. Cards are separated by one blank line;
+  spacing from prose and user turns is preserved too.
 
-**One-line summaries** (default on)
+**Tool previews and thinking summaries** (default on)
 
-- Thinking blocks and tool cards each take **a single line**: thinking is `│ + 思考 · 7s`; a tool card is
-  its header row (`│ • Bash(ls -la)`) carrying the tool name, argument or path, status dot and elapsed clock.
-- Settled tool summaries are neutral and non-bold. Long commands and arguments truncate to the available width without continuation rows; hover reveals hidden content. Running, failed and hovered states remain distinct, and expanded cards retain category colors.
-- Open/close: **click the row**, or press `Ctrl+O` to toggle detail for the whole transcript. A thinking
-  block's `+` becomes `-` while it is open.
-- Expanded, thinking shows its full text and a tool card its complete output (uncapped); a failed card
-  collapses to its `✗` header row plus the failure hint.
+- Settled thinking still folds to one line, `│ + 思考 · 7s`. Tool cards show the command/title plus a
+  short output preview: up to **3 text lines** or **8 diff rows**. Terminal titles use `$ command`;
+  other tools show their name and arguments or path.
+- Very narrow terminals fall back to unified diffs even with `split` selected; large-diff previews
+  also use unified layout. Expanding still shows the complete diff, with side-by-side layout when
+  the available width and layout setting allow it.
+- Settled tool summaries use the theme text color without bold. Long commands and arguments truncate to the available width without continuation rows; hover reveals truncated header content only. Truncated output previews have no tooltip—click or `Ctrl+O` opens the full text. Running, failed and hovered states remain distinct, and expanded cards retain category colors.
+- Open/close: **click the tool card or thinking summary**, or press `Ctrl+O` to toggle detail for the
+  whole transcript. A thinking block's `+` becomes `-` while it is open.
+- Expanded, thinking shows its full text and a tool card its complete command and output (uncapped).
+  Failed cards retain the `✗` marker and failure hint.
 
 **Long single-line fold** (default on)
 
@@ -517,8 +521,8 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | diffLayout | Edit/Write diff layout: auto (two columns ≥110 cols) / split / unified |
 | thinkingFold | thinking block: preview (2-3 line live preview, folded to a single `+ 思考 · Ns` row when settled, the mark flipping to `-` while open) / full (expanded to end of turn) |
 | effortDefault | default reasoning effort: auto / off / low / high / max. Start level for new sessions (details below) |
-| smoothStreaming | smooth streaming output (default on): replies and expanded thinking reveal at ~30fps; replay/history always direct. Tool cards collapse to single-line summaries; details opened by click or Ctrl+O paint complete |
-| toolBackground | tool-card background emphasis: none / subtle / strong |
+| smoothStreaming | smooth streaming output (default on): replies and expanded thinking reveal at ~30fps; replay/history always direct. Tool cards show titles and short previews by default; details opened by click or Ctrl+O paint complete |
+| toolBackground | tool-card background emphasis: none (off) / subtle (default) / strong; an explicit none remains unfilled |
 | mermaidDiagrams | Mermaid diagrams (default on): ```` ```mermaid ```` blocks render as character diagrams, forming while streaming; too-wide or unsupported types keep source with the required columns. Applies immediately |
 | mathRendering | LaTeX math (default `auto`; lives on the **Formula** subpage of `/settings`): how `$…$` / `\(…\)` inline and `$$…$$` / `\[…\]` / bare display-environment (`\begin{align}` …) block formulas in replies show. `auto` uses the best available renderer (today Unicode text, with fractions and limits stacked in blocks), `image` typesets formulas with MathJax as terminal images when the terminal has graphics — the Kitty graphics protocol (Kitty, Ghostty, WezTerm, iTerm2…) or Sixel (Windows Terminal 1.22+, xterm, foot, WezTerm) — in the theme's text color (block formulas up to 16 rows; inline formulas as one-row images when a single row can hold them legibly; still-streaming formulas, dimmed thinking, terminals without graphics, formulas too small on one row, and any render failure fall back to Unicode), `unicode` pins Unicode text, `source` keeps the TeX. Unsupported, still-streaming, or too-wide formulas keep their source (a too-wide block first falls back to one line). Prices (`$5`), shell variables (`$HOME`), and `$` in code are left alone. The older `latexMath: false` still means `source`. **Click a formula image** to open the preview card: it re-typesets at twice the cell size, zooms 100–800%, pans, closes on `Esc` or a click outside, and titles itself with the formula's TeX. On Sixel the formulas carry **no backing** (only their strokes), so the terminal background or wallpaper shows through. Illustrations that ship with their own transparent margins — the `whaleGirl` raster — float the same way; photographs, screenshots, and images inside cards still composite onto a colour, because Sixel cannot express soft alpha. Applies immediately |
 | mathImageScale | formula image size (default `auto`; same **Formula** subpage), used with LaTeX math → Image: `auto` matches the body text, `large` / `xlarge` set **display** formulas bigger. Terminal images are drawn one device pixel per pixel, so "bigger" literally means more pixels per stroke — the only sharpness lever there is. Inline formulas are unaffected (they must fit one row). Applies immediately |

@@ -74,13 +74,12 @@ const GROUPS = {
     ['verify-text-viewport-paint', ['node', '--import', 'tsx/esm', 'scripts/verify-text-viewport-paint.ts']],
     ['verify-tool-history-window', ['node', '--import', 'tsx/esm', 'scripts/verify-tool-history-window.tsx']],
 // 转录块层级回归：用户回合的底色 + 左竖条、助手正文贴左无标记、机器活动
-// （工具卡/思考）挂在 `│ ` 竖线下，以及「机器行之间不留空行、其余照旧」
-// 的块间距规则。
+// 带左竖线；工具卡有独立底色/内边距/块间空行，其他机器活动仍紧排。
     ['verify-transcript-blocks', ['node', 'scripts/verify-transcript-blocks.mjs']],
 // 流式平滑揭示回归（dsh-tui.smoothStreaming）：调度器步进/游标生命周期
 // （追加保游标、替换 snap、追平不再重打）+ MessageList 集成（流式行/
 // 非流式 fresh 行渐进揭示、回放行直出、开关关闭直出）+ 组件契约
-// （thinking ticker 跟随已到达文本而展开体吃切片、工具摘要单行且
+// （thinking ticker 跟随已到达文本而展开体吃切片、工具卡短预览且
 // 展开完整直出）+ 长历史工具卡下真实回复/思考动画与订阅预算。
     ["verify-smooth-reveal", ['node', '--import', 'tsx/esm', 'scripts/verify-smooth-reveal.tsx']],
 // 根级页边距（PageMargin）契约：无内缩终端（裸 WSL/tmux/SSH）下文字贴边。
@@ -856,7 +855,7 @@ const GROUPS = {
 // 单行超长文本折叠回归（用户反馈：单行超长文本默认整行渲染，铺成上千视觉
 // 行拖慢转录）：折叠阈值常量 1000 字符、行边界不被改写、短文本零分配快路径；
 // 真实 MessageList 下 user 消息 / assistant 正文 / 工具卡标题（单行超长命令）
-// 与正文都出折叠标记且裁掉的尾巴不在屏上；Ctrl+O 逃生门恢复原文；
+// 与正文的超长内容保持有界预览且裁掉的尾巴不在屏上；Ctrl+O 恢复原文；
 // reasoning 行不折叠（自带三行预览）。
     ["verify-long-line-fold", ['node', '--import', 'tsx/esm', 'scripts/verify-long-line-fold.tsx']],
   ],
