@@ -27,7 +27,7 @@ import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
 import { clipPreview, type TimelineSnapshot, type TimelineTurn } from '../ink/timeline-rail.js'
 import type { ToolBackground } from '../tuiDisplayPrefs.js'
-import { getRevealVersion, revealLengthOf, revealTextOf } from './smoothReveal.js'
+import { revealLengthOf, revealTextOf } from './smoothReveal.js'
 import { useRevealVersion } from '../hooks/useRevealVersion.js'
 import { TranscriptImages } from './messages/TranscriptImages.js'
 import { primaryComboString } from '../utils/keymap.js'
@@ -617,6 +617,7 @@ export function MessageList({
    *  scrollback and the diff skips them. */
   const lastStartRef = React.useRef<number>(-1)
   const holdFlushTickRef = React.useRef<number>(-1)
+  const geometryFlushPendingRef = React.useRef(false)
   /** True when frame-budgeted history painting still has batches left
    *  (main-screen open): the layout effect schedules the next slice. */
   const paintPendingRef = React.useRef(false)
@@ -680,6 +681,7 @@ export function MessageList({
   // render was O(rows) garbage per tick (3200-row session ⇒ several MB/s
   // into minor GC; the GC share of the scroll profile).
   const sigRef = React.useRef(new Map<number, Array<string | number | boolean>>())
+  let heightInputsChanged = false
   {
     const sigs = sigRef.current
     for (let i = 0; i < visibleRows.length; i++) {
@@ -715,6 +717,7 @@ export function MessageList({
         }
       }
       if (same) continue
+      heightInputsChanged = true
       if (sigs.size >= HEIGHTS_CACHE_MAX) {
         const oldest = sigs.keys().next().value
         if (oldest !== undefined) sigs.delete(oldest)
@@ -723,6 +726,22 @@ export function MessageList({
       sigs.set(row.id, parts.slice())
       heightsRef.current.delete(row.id)
       heightsVersionRef.current++
+    }
+  }
+
+  // Inline history must survive the first flush of changed row geometry,
+  // even when that commit did not widen the mount window. A measurement
+  // commit can otherwise replace still-visible rows with spacers BEFORE
+  // the growing frame pushes their complete text into native scrollback.
+  if (historyPaintEnabled) {
+    const flushTick = getTerminalFlushTick()
+    if (geometryFlushPendingRef.current) {
+      // Release the completed hold before arming another: continuous
+      // streaming must still be able to tighten its window at flush edges.
+      if (flushTick !== holdFlushTickRef.current) geometryFlushPendingRef.current = false
+    } else if (heightInputsChanged) {
+      holdFlushTickRef.current = flushTick
+      geometryFlushPendingRef.current = true
     }
   }
 
@@ -1248,10 +1267,6 @@ export function MessageList({
           const tool = row.tool
           const subagent = row.kind === 'subagent' ? row.subagent : undefined
           const job = row.kind === 'job' ? row.job : undefined
-          const revealVersion = smoothStreaming && row.kind === 'tool' && row.fresh === true &&
-            row.tool?.status === 'running' && row.tool.resultView === undefined
-            ? getRevealVersion()
-            : 0
           // Smooth reveal feeds the SAME flattened text prop a chunk feeds,
           // and keeps the streaming layout alive until the reveal catches up
           // (settling mid-reveal must not snap — a one-shot non-streaming
@@ -1292,9 +1307,6 @@ export function MessageList({
               thinkingFold={thinkingFold}
               toolBackground={toolBackground}
               foldTerminalCommand={foldTerminalCommand}
-              smoothStreaming={smoothStreaming}
-              fresh={row.fresh === true}
-              revealVersion={revealVersion}
               activityFrames={activityFrames}
               background={rowBackground(row.id)}
               toolCallId={tool?.callId}
@@ -1363,12 +1375,6 @@ type MemoRowProps = {
   model: string
   /** Edit/Write diff presentation preference (forwarded to tool cards). */
   diffLayout: 'auto' | 'split' | 'unified'
-  /** Smooth streaming reveal (forwarded to thinking/tool renderers). */
-  smoothStreaming: boolean
-  /** Live-arrived row flag (drives tool-card reveal participation). */
-  fresh: boolean
-  /** Version tick for active tool reveal; 0 keeps settled rows memoized. */
-  revealVersion: number
   thinkingFold: 'preview' | 'full'
   toolBackground: ToolBackground
   /** Terminal-card header folding (forwarded to tool cards). */
@@ -1447,9 +1453,6 @@ function TranscriptRow({
   expanded,
   model,
   diffLayout,
-  smoothStreaming,
-  fresh,
-  revealVersion,
   thinkingFold,
   toolBackground,
   foldTerminalCommand,
@@ -1663,9 +1666,6 @@ function TranscriptRow({
             footnote={toolFootnote}
             diffLayout={diffLayout}
             toolBackground={toolBackground}
-            smoothReveal={smoothStreaming}
-            fresh={fresh}
-            revealVersion={revealVersion}
             foldTerminalCommand={foldTerminalCommand}
             onClick={foldOnClick}
             onOpenFile={onOpenFile}

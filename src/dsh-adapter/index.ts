@@ -134,7 +134,7 @@ export interface Config {
    *  default; off removes both entry points. */
   expandEditor?: boolean
   /** Smooth streaming reveal (settings `dsh-tui.smoothStreaming`): live
-   *  assistant text, expanded thinking, and tool call bodies paint through
+   *  assistant text and expanded thinking paint through
    *  a ~30fps reveal instead of jumping per provider burst — bursty or
    *  one-shot deliveries read as an even flow. On by default. */
   smoothStreaming?: boolean

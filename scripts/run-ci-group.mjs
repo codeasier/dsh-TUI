@@ -80,8 +80,8 @@ const GROUPS = {
 // 流式平滑揭示回归（dsh-tui.smoothStreaming）：调度器步进/游标生命周期
 // （追加保游标、替换 snap、追平不再重打）+ MessageList 集成（流式行/
 // 非流式 fresh 行渐进揭示、回放行直出、开关关闭直出）+ 组件契约
-// （thinking ticker 跟随已到达文本而展开体吃切片、工具卡行级揭示、
-// result 落定即全显）。
+// （thinking ticker 跟随已到达文本而展开体吃切片、工具摘要单行且
+// 展开完整直出）+ 长历史工具卡下真实回复/思考动画与订阅预算。
     ["verify-smooth-reveal", ['node', '--import', 'tsx/esm', 'scripts/verify-smooth-reveal.tsx']],
 // 根级页边距（PageMargin）契约：无内缩终端（裸 WSL/tmux/SSH）下文字贴边。
 // 左右 3 列上下 1 行内缩 + TerminalSize 收敛成内容区尺寸 + inset 坐标
