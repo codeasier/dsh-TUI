@@ -137,10 +137,10 @@ export class BackgroundJobStore {
   private readonly jobs = new Map<string, BackgroundJobState>()
   /** Kernel-ring read state per job id (own cursor — never the model's). */
   private readonly kernelReads = new Map<string, KernelReadState>()
-  /** Commands captured from start acks that arrived before the registry
-   *  registered the job (the tool/result stream and the registry commit can
-   *  race); consumed on registration. */
-  private readonly pendingCommands = new Map<string, string>()
+  /** Durable hand-offs prove a shell job actually left the foreground. Keep
+   *  the command when available, including a bounded set of acks that arrived
+   *  before the registry roster (replay and live delivery can race). */
+  private readonly backgroundCommands = new Map<string, string | undefined>()
 
   constructor(private readonly events: BackgroundJobEvents = {}) {}
 
@@ -160,8 +160,7 @@ export class BackgroundJobStore {
       seen.add(snap.id)
       const prev = this.jobs.get(snap.id)
       if (prev === undefined) {
-        const command = this.pendingCommands.get(snap.id)
-        if (command !== undefined) this.pendingCommands.delete(snap.id)
+        const command = this.backgroundCommands.get(snap.id)
         this.jobs.set(snap.id, {
           id: snap.id,
           kind: snap.kind,
@@ -219,6 +218,8 @@ export class BackgroundJobStore {
         if (this.jobs.size <= JOBS_MAX_TRACKED) break
         if (isTerminal(job.status)) {
           this.jobs.delete(id)
+          this.backgroundCommands.delete(id)
+          this.kernelReads.delete(id)
           changed = true
         }
       }
@@ -227,21 +228,30 @@ export class BackgroundJobStore {
   }
 
   /**
-   * Record the full command that started a job, captured from its tool
-   * call's args via the `started background job <id>` ack. May arrive
-   * before the registry registers the job — the command is parked and
-   * consumed by the next replace().
+   * Confirm a background hand-off (explicit start, timeout promotion, or
+   * job_output), optionally recording its full command. Registry membership
+   * alone is not evidence: modern bash/pwsh also register foreground calls.
    */
-  onStarted(id: string, command: string): void {
+  onStarted(id: string, command?: string): void {
     const job = this.jobs.get(id)
-    if (job === undefined) {
-      this.pendingCommands.set(id, command)
-      return
-    }
-    if (job.command !== command) {
-      job.command = command
+    const newlyBackground = !this.backgroundCommands.has(id)
+    const fullCommand = command ?? this.backgroundCommands.get(id)
+    this.backgroundCommands.set(id, fullCommand)
+    // A replay can contain many already-expired jobs absent from the roster.
+    // Bound those pending proofs without evicting a tracked live job's proof.
+    const pending = [...this.backgroundCommands.keys()].filter(key => !this.jobs.has(key))
+    for (const key of pending.slice(0, Math.max(0, pending.length - JOBS_MAX_TRACKED))) this.backgroundCommands.delete(key)
+    if (job !== undefined && (newlyBackground || job.command !== fullCommand)) {
+      if (fullCommand !== undefined) job.command = fullCommand
       this.events.onChanged?.()
     }
+  }
+
+  /** Shell records become independent UI jobs only after a durable hand-off.
+   *  Other producers already represent independent work at registration. */
+  isBackground(id: string): boolean {
+    const job = this.jobs.get(id)
+    return job !== undefined && ((job.kind !== 'bash' && job.kind !== 'pwsh') || this.backgroundCommands.has(id))
   }
 
   /**
@@ -357,12 +367,16 @@ export class BackgroundJobStore {
     return count
   }
 
-  /** Drop everything (session swap / transcript wipe). */
-  reset(): void {
-    if (this.jobs.size === 0) return
+  /** Drop session state. Reanchoring after replay preserves only hand-offs
+   *  waiting for the new roster, never proofs belonging to the old roster. */
+  reset(options: { preservePendingStarts?: boolean } = {}): void {
+    const changed = this.jobs.size > 0
+    if (options.preservePendingStarts) {
+      for (const id of this.jobs.keys()) this.backgroundCommands.delete(id)
+    } else this.backgroundCommands.clear()
     this.jobs.clear()
     this.kernelReads.clear()
-    this.events.onChanged?.()
+    if (changed) this.events.onChanged?.()
   }
 }
 

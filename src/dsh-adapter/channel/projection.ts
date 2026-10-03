@@ -7,7 +7,7 @@ import { replaySelectionAttachment } from './ide-selection.js'
 import type { InputConvergence } from './input-actions.js'
 import type { BackgroundJobStore } from '../jobs.js'
 import type { TuiRendererHost } from '../renderers.js'
-import { isSubagentToolName, parseJobOutputId, toolCommandOf, BACKGROUND_START_ACK, todoPanelItems } from './projection-helpers.js'
+import { isSubagentToolName, parseJobOutputId, toolCommandOf, BACKGROUND_START_ACK, BACKGROUND_PROMOTED_ACK, todoPanelItems } from './projection-helpers.js'
 import { ARGS_PREVIEW_LIMIT, harnessToolResultView, LOCAL_OUTPUT_LIMIT, prepareReplayEvents, preview, RESULT_PREVIEW_LIMIT, toolErrorText } from './transcript.js'
 import { estimateTokens, isTokenDelta, tokenDeltaChars, usageOutputTokens } from './usage.js'
 import { transcriptImagesOf, type TranscriptImage } from '../transcript-images.js'
@@ -212,6 +212,22 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
   // silently skipped (v1 renders text blocks only) — never crashes.
   const textOf = (content: readonly ContentBlock[] | undefined): string =>
     (content ?? []).map(block => (block.type === 'text' ? block.text : '')).join('').trim()
+
+  /** Native and nested PTC calls share durable job hand-off/output semantics. */
+  const projectJobResult = (name: string, argsFull: string | undefined, result: string, at: number): void => {
+    if (name === 'job_output') {
+      const id = parseJobOutputId(argsFull)
+      if (id !== undefined) {
+        deps.jobs.onStarted(id)
+        deps.jobs.onOutputSeen(id, result, at)
+      }
+    }
+    // Membership in the runtime registry includes foreground shell work;
+    // only an explicit start or timeout hand-off exposes an independent job.
+    const startAck = BACKGROUND_START_ACK.exec(result)
+      ?? (name === 'bash' || name === 'pwsh' ? BACKGROUND_PROMOTED_ACK.exec(result) : null)
+    if (startAck !== null) deps.jobs.onStarted(startAck[1], toolCommandOf(argsFull))
+  }
 
   /**
    * Transcript-facing text of a user message: the FIRST text block only.
@@ -535,6 +551,21 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     // goal chip and panel stay dark without this fold.
     if ((event as { type: string }).type === 'goal/change') {
       applyGoalChange((event as unknown as { data: GoalChangePayload }).data)
+      return
+    }
+    // Nested PTC calls have no ordinary tool card. Consume their plugin-owned
+    // outcome structurally, keeping dsh-tools out of the runtime peer surface.
+    if ((event as { type: string }).type === 'tool/ptc-dispatch') {
+      const data = (event as unknown as { data: {
+        name: string
+        arguments: unknown
+        content: readonly ContentBlock[]
+        isError: boolean
+        error?: unknown
+      } }).data
+      if (!data.isError && data.error === undefined) {
+        projectJobResult(data.name, JSON.stringify(data.arguments), textOf(data.content), event.time ?? Date.now())
+      }
       return
     }
     switch (event.type) {
@@ -904,22 +935,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
             // pairs the args: live cards are never folded, so it is intact.
             card.tool.resultView = presentResultView(card.tool.name, card.tool.argsFull ?? '', event.data)
             state.contextSegments.tools += estimateTokens(result)
-            // A job_output result doubles as the job card's output feed:
-            // the registry's read() is consuming and reserved for the
-            // owning agent, so the UI mirrors the tail that already streams
-            // through the transcript instead of polling the job itself.
-            if (card.tool.name === 'job_output' && result !== '') {
-              const id = parseJobOutputId(card.tool.argsFull)
-              if (id !== undefined) deps.jobs.onOutputSeen(id, result, event.time ?? Date.now())
-            }
-            // A `started background job <id>` ack pairs the job with its
-            // tool call: capture the FULL command from the args (the
-            // registry label is the friendly description) for the panel.
-            const startAck = BACKGROUND_START_ACK.exec(result)
-            if (startAck !== null) {
-              const command = toolCommandOf(card.tool.argsFull)
-              if (command !== undefined) deps.jobs.onStarted(startAck[1], command)
-            }
+            projectJobResult(card.tool.name, card.tool.argsFull, result, event.time ?? Date.now())
           }
           state.activeToolCount = Math.max(0, state.activeToolCount - 1)
           // The card is settled: no later event looks it up by callId, so

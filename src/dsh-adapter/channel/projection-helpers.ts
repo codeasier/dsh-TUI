@@ -46,6 +46,9 @@ export function toolCommandOf(argsFull: string | undefined): string | undefined 
 /** The ack a shell tool returns for `run_in_background: true`. */
 export const BACKGROUND_START_ACK = /^started background job (\S+)/
 
+/** The shell tool's hand-off marker follows any partial foreground output. */
+export const BACKGROUND_PROMOTED_ACK = /(?:^|\n)\[still running after \d+ms; moved to background job ([^\s\]]+)\](?:\n|$)/
+
 /** Narrow an optional plugin event without importing its module augmentation. */
 export function todoPanelItems(data: unknown): TodoPanelItem[] | undefined {
   if (typeof data !== 'object' || data === null) return undefined

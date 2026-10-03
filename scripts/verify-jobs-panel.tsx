@@ -5,7 +5,7 @@
  *   注册/转换/消失合成 killed、onSettled 恰好一次、输出镜像过滤与有界、时长格式化。
  * Group B — channel 集成（真实 cordis Context + 假 agents/jobs 服务）：
  *   任务注册建卡、job_output 结果镜像进瀑布、落定 toast、存活任务消失冻结、
- *   jobControl.kill 权限传递、无 jobs 服务降级、/new 重置投影。
+ *   jobControl.kill 权限传递、无 jobs 服务降级、/new 重置投影；前台 shell 隐藏、后台启动/超时移交显卡。
  * Group C — 渲染冒烟（headless xterm）：
  *   JobCard 运行态三行瀑布（有输出时）/仅头行（无输出时）、settled 折叠、JobsPanel 标题/行/提示。
  * Group D — 按键归属（Chat 整屏 + 假 channel）：
@@ -173,6 +173,23 @@ console.log('--- A: BackgroundJobStore units ---')
       && formatJobDuration({ startedAt: 0, finishedAt: 3_720_000 }) === '1h02m',
     `${formatJobDuration({ startedAt: 0, finishedAt: 192_000 })}`,
   )
+
+  const proofs = new BackgroundJobStore()
+  proofs.onStarted('bash-live', 'sleep 99')
+  proofs.replace([{ id: 'bash-live', kind: 'bash', label: 'live', status: 'running', startedAt: 0 }])
+  for (let i = 0; i <= JOBS_MAX_TRACKED; i += 1) proofs.onStarted(`bash-old-${i}`, 'true')
+  proofs.replace([
+    { id: 'bash-live', kind: 'bash', label: 'live', status: 'running', startedAt: 0 },
+    { id: 'bash-old-0', kind: 'bash', label: 'evicted proof', status: 'completed', startedAt: 0 },
+    { id: `bash-old-${JOBS_MAX_TRACKED}`, kind: 'bash', label: 'recent proof', status: 'completed', startedAt: 0 },
+  ])
+  check('A8 回放暂存有界但不丢存活任务证明',
+    proofs.isBackground('bash-live') && !proofs.isBackground('bash-old-0') && proofs.isBackground(`bash-old-${JOBS_MAX_TRACKED}`))
+  proofs.reset()
+  proofs.onStarted('bash-next', 'sleep 1')
+  proofs.reset()
+  proofs.replace([{ id: 'bash-next', kind: 'bash', label: 'next session', status: 'running', startedAt: 0 }])
+  check('A8 空名册 reset 也清掉待注册移交（不串会话）', !proofs.isBackground('bash-next') && proofs.get('bash-next')?.command === undefined)
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +277,36 @@ const NOW = Date.now()
     model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
   })
 
+  const shellResult = (id: string, name: string, command: string, result: string, background = false): void => {
+    emit('session/event', initial.session, {
+      type: 'tool/call',
+      data: { callId: `call-${id}`, name, arguments: JSON.stringify({ command, run_in_background: background }) },
+    })
+    emit('session/event', initial.session, {
+      type: 'tool/result',
+      data: { message: { source: { callId: `call-${id}` }, content: [{ type: 'text', text: result }] } },
+    })
+  }
+
+  // Modern shell producers register even foreground commands, settle them
+  // while the tool waits, then remove the record before returning the result.
+  for (const kind of ['bash', 'pwsh']) {
+    for (const status of ['completed', 'failed', 'killed']) {
+      const id = `${kind}-foreground-${status}`
+      const notices = channel.notifications.length
+      fake.register({ id, kind, label: 'git status', status: 'running', startedAt: NOW })
+      check(`B0 ${id} 运行中只显示工具事实`, jobRows(channel).length === 0 && channel.backgroundJobs.length === 0)
+      fake.update({ id, kind, label: 'git status', status, startedAt: NOW, finishedAt: NOW })
+      fake.remove(id)
+      shellResult(id, kind, 'git status', status === 'completed' ? 'clean' : '[exit code: 1]')
+      check(`B0 ${id} 落定不留 job 卡/面板记录/重复通知`,
+        jobRows(channel).length === 0 && channel.backgroundJobs.length === 0 && channel.notifications.length === notices)
+      check(`B0 ${id} 工具输出仍保留`, channel.rows.some(row => row.tool?.callId === `call-${id}` && row.tool.resultFull !== undefined))
+    }
+  }
+
   fake.register({ id: 'pwsh-1', kind: 'pwsh', label: 'gh run watch 42', status: 'running', startedAt: NOW - 3000 })
+  shellResult('pwsh-1', 'pwsh', 'gh run watch 42', 'started background job pwsh-1', true)
   check('B1 任务注册进快照', await settled(() => channel.backgroundJobs.length === 1))
   check('B1 转录出现任务卡行', await settled(() => jobRows(channel).length === 1))
   check('B1 卡行初态 running', jobRows(channel)[0]?.job?.status === 'running', String(jobRows(channel)[0]?.job?.status))
@@ -304,6 +350,7 @@ const NOW = Date.now()
 
   // 第二个任务：存活中消失（owner 处置）→ 卡行冻结为 killed，随后移出面板。
   fake.register({ id: 'bash-2', kind: 'bash', label: 'sleep 99', status: 'running', startedAt: NOW })
+  shellResult('bash-2', 'bash', 'sleep 99', 'started background job bash-2', true)
   check('B4 第二个任务注册', await settled(() => channel.backgroundJobs.length === 2))
   fake.remove('bash-2')
   check('B4 存活任务消失→卡行冻结 killed', await settled(() => {
@@ -320,6 +367,7 @@ const NOW = Date.now()
 
   // 存活任务被用户 kill → steer 通知模型（kill 会抑制 harness 完成通知）。
   fake.register({ id: 'bash-3', kind: 'bash', label: 'sleep 100', status: 'running', startedAt: NOW })
+  shellResult('bash-3', 'bash', 'sleep 100', 'started background job bash-3', true)
   check('B8 存活任务注册', await settled(() => channel.backgroundJobs.some(job => job.id === 'bash-3')))
   check('B8 存活 kill 返回 true', channel.jobControl.kill('bash-3') === true)
   check(
@@ -348,6 +396,49 @@ const NOW = Date.now()
     await settled(() => channel.backgroundJobs.find(job => job.id === 'pwsh-9')?.command === 'gh pr checks --watch 42'),
     String(channel.backgroundJobs.find(job => job.id === 'pwsh-9')?.command),
   )
+  check('B9 ack 先于注册也显示任务卡', jobRows(channel).some(row => row.job?.id === 'pwsh-9'))
+
+  for (const kind of ['bash', 'pwsh']) {
+    const id = `${kind}-promoted`
+    fake.register({ id, kind, label: 'sleep 99', status: 'running', startedAt: NOW })
+    check(`B10 ${kind} 移交前没有独立任务卡`, !jobRows(channel).some(row => row.job?.id === id))
+    shellResult(id, kind, 'sleep 99', `partial output\n[still running after 100ms; moved to background job ${id}]\nThe command keeps running in the background.`)
+    check(`B10 ${kind} 超时转后台显卡并保留命令`,
+      jobRows(channel).some(row => row.job?.id === id && row.job.status === 'running')
+        && channel.backgroundJobs.some(job => job.id === id && job.command === 'sleep 99'))
+    fake.update({ id, kind, label: 'sleep 99', status: 'completed', startedAt: NOW, finishedAt: NOW })
+    check(`B10 ${kind} 超时任务正常落定`, jobRows(channel).some(row => row.job?.id === id && row.job.status === 'completed'))
+  }
+
+  // A very short explicit background command may settle before its ack.
+  fake.register({ id: 'bash-fast', kind: 'bash', label: 'true', status: 'running', startedAt: NOW })
+  fake.update({ id: 'bash-fast', kind: 'bash', label: 'true', status: 'completed', startedAt: NOW, finishedAt: NOW })
+  shellResult('bash-fast', 'bash', 'true', 'started background job bash-fast', true)
+  check('B11 快速后台任务 ack 到达后仍显示完成卡', jobRows(channel).some(row => row.job?.id === 'bash-fast' && row.job.status === 'completed'))
+
+  // Reading an existing job is evidence even if its start was compacted away.
+  fake.register({ id: 'bash-existing', kind: 'bash', label: 'existing work', status: 'running', startedAt: NOW })
+  emit('session/event', initial.session, {
+    type: 'tool/call', data: { callId: 'existing-output', name: 'job_output', arguments: JSON.stringify({ job_id: 'bash-existing' }) },
+  })
+  emit('session/event', initial.session, {
+    type: 'tool/result', data: { message: { source: { callId: 'existing-output' }, content: [{ type: 'text', text: '[status: running]' }] } },
+  })
+  check('B12 job_output 可恢复已有后台任务卡', jobRows(channel).some(row => row.job?.id === 'bash-existing'))
+
+  fake.register({ id: 'other-producer', kind: 'pty-send', label: 'independent work', status: 'running', startedAt: NOW })
+  check('B13 其他任务生产者注册即显卡', jobRows(channel).some(row => row.job?.id === 'other-producer'))
+
+  fake.register({ id: 'bash-ptc', kind: 'bash', label: 'nested background work', status: 'running', startedAt: NOW })
+  emit('session/event', initial.session, {
+    type: 'tool/ptc-dispatch',
+    data: {
+      rootCallId: 'run-code', parentCallId: 'run-code', subCallId: 'run-code:ptc:1', name: 'bash',
+      arguments: { command: 'sleep 99', run_in_background: true }, isError: false,
+      content: [{ type: 'text', text: 'started background job bash-ptc' }],
+    },
+  })
+  check('B14 PTC 嵌套调用的后台移交也显示任务卡', jobRows(channel).some(row => row.job?.id === 'bash-ptc'))
 
   check('B6 /new 成功', (await channel.newSession()) === true)
   check('B6 切换后面板快照清空', channel.backgroundJobs.length === 0)
@@ -427,6 +518,14 @@ console.log('--- B2: kernel event bus integration ---')
   ;(kernelAgent as unknown as { id: string }).id = 'agent-k-id'
   const channel2 = createChannel(ctx2 as never, kernelAgent as never, {
     model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
+  })
+  const emit2 = (event: string, ...args: unknown[]) =>
+    (ctx2 as unknown as { emit(event: string, ...args: unknown[]): void }).emit(event, ...args)
+  emit2('session/event', kernelAgent.session, {
+    type: 'tool/call', data: { callId: 'kernel-start', name: 'pwsh', arguments: JSON.stringify({ command: 'kernel stream', run_in_background: true }) },
+  })
+  emit2('session/event', kernelAgent.session, {
+    type: 'tool/result', data: { message: { source: { callId: 'kernel-start' }, content: [{ type: 'text', text: 'started background job pwsh-7' }] } },
   })
 
   shots.set('pwsh-7', {
@@ -541,9 +640,13 @@ console.log('--- B3: session rebind (the roster must follow the binding) ---')
   check('B3c 会话未变时 reanchor 不重复读（挂载只读一次）', calls.length === 1, calls.join(','))
 
   bound = { id: 'sess-user' }
+  projection.reset()
+  // Adoption replays the new log before bind/reanchor reads its live roster.
+  projection.store.onStarted('user-job', 'user work')
   projection.reanchor()
   check('B3d 换绑后按新会话重读且旧名册被替换',
     calls.at(-1) === 'sess-user' && ids() === 'user-job', `${calls.join(',')} → ${ids()}`)
+  check('B3d 重锚保留新会话回放的后台移交', projection.store.isBackground('user-job'))
 
   const beforeEvent = calls.length
   emit({ type: 'registered', job: userJob }, 'sess-user')
@@ -578,9 +681,11 @@ class Input extends PassThrough {
 async function withTerminal(
   make: () => React.ReactNode,
   run: (screen: () => string, rerender: (node: React.ReactNode) => void, stdin: Input) => Promise<void>,
+  columns = COLS,
 ): Promise<void> {
-  const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const term = new XTerm({ cols: columns, rows: ROWS, scrollback: 0, allowProposedApi: true })
   const stdout = new FakeStdout(term) as unknown as NodeJS.WriteStream
+  stdout.columns = columns
   const stdin = new Input()
   const instance = await render(make(), {
     stdout,
@@ -766,6 +871,59 @@ console.log('--- D: /jobs panel owns Esc ---')
       check('D3 面板关闭后 Esc 恢复中断对话', await settled(() => cancelled.length === before + 1), JSON.stringify(cancelled))
     },
   )
+}
+
+// Whole-screen evidence: the real channel feeds Chat in narrow inline and
+// fullscreen modes, so a hidden foreground record cannot leak via rendering.
+console.log('--- E: narrow Chat foreground/background projection ---')
+for (const fullscreen of [false, true]) {
+  const mode = fullscreen ? 'fullscreen' : 'inline'
+  const ctx = new Context()
+  const provide = (ctx as unknown as { provide(name: string, value: unknown): void }).provide.bind(ctx)
+  const emit = (event: string, ...args: unknown[]) =>
+    (ctx as unknown as { emit(event: string, ...args: unknown[]): void }).emit(event, ...args)
+  const agent = makeAgent(`screen-${mode}`, `screen-${mode}`)
+  const fake = makeFakeJobs(() => agent.id)
+  provide('jobs', fake.runtime)
+  const channel = createChannel(ctx as never, agent as never, {
+    model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
+  })
+  const result = (callId: string, text: string): void => {
+    emit('session/event', agent.session, {
+      type: 'tool/result', data: { message: { source: { callId }, content: [{ type: 'text', text }] } },
+    })
+  }
+  try {
+    await withTerminal(
+      () => React.createElement(Chat, {
+        channel: channel as never, questionStore: new QuestionStore() as never,
+        onExit: () => {}, fullscreen, trajectorySeen: true,
+      }),
+      async screen => {
+        emit('session/event', agent.session, {
+          type: 'tool/call', data: { callId: 'screen-fg', name: 'bash', arguments: JSON.stringify({ command: 'printf foreground-output' }) },
+        })
+        fake.register({ id: 'bash-fg', kind: 'bash', label: 'foreground', status: 'running', startedAt: NOW })
+        fake.update({ id: 'bash-fg', kind: 'bash', label: 'foreground', status: 'completed', startedAt: NOW, finishedAt: NOW })
+        fake.remove('bash-fg')
+        result('screen-fg', 'foreground-output')
+        check(`E ${mode} 40列前台工具输出上屏`, await settled(() => screen().includes('foreground-output')))
+        check(`E ${mode} 40列不重复显示前台 job`, !screen().includes('job: bash-fg'))
+
+        emit('session/event', agent.session, {
+          type: 'tool/call', data: { callId: 'screen-bg', name: 'bash', arguments: JSON.stringify({ command: 'sleep 99', run_in_background: true }) },
+        })
+        fake.register({ id: 'bash-bg', kind: 'bash', label: 'sleep 99', status: 'running', startedAt: NOW })
+        result('screen-bg', 'started background job bash-bg')
+        check(`E ${mode} 40列真正后台 job 卡上屏`, await settled(() => screen().includes('job: bash-bg')), screen())
+        fake.update({ id: 'bash-bg', kind: 'bash', label: 'sleep 99', status: 'completed', detail: 'exit code: 0', startedAt: NOW, finishedAt: NOW })
+        check(`E ${mode} 40列后台任务可落定`, await settled(() => screen().includes('completed')))
+      },
+      40,
+    )
+  } finally {
+    channel.releaseContributions()
+  }
 }
 
 if (failed > 0) {

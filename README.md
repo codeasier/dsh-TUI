@@ -222,6 +222,8 @@ The session manager paints the last successful list immediately while it checks 
 
 **Background sessions**: `/bg` or `←` on an empty prompt; `Esc` returns. They run in this process and stop when the TUI exits. Logs survive.
 
+**Background jobs**: foreground bash/pwsh calls show only their tool card. Commands explicitly started in the background or handed off after a wait timeout also show an independent job card and appear in `/jobs`.
+
 Full commands: [Interaction and commands](docs/interaction.en.md).
 
 ## Configuration & Extensions

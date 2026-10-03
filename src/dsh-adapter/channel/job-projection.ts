@@ -31,7 +31,7 @@ export function createJobProjection(
   const syncRows = (): void => {
     if (!attachmentCurrent()) return
     const state = getState()
-    state.backgroundJobs = store.snapshot()
+    state.backgroundJobs = store.snapshot().filter(job => store.isBackground(job.id))
     for (const job of state.backgroundJobs) {
       let row = jobRowsByJobId.get(job.id)
       if (!row) {
@@ -58,6 +58,8 @@ export function createJobProjection(
 
   const store = new BackgroundJobStore({
     onSettled(job) {
+      // Foreground shell results already carry their completion/failure.
+      if (!store.isBackground(job.id)) return
       deps.notify(
         t(job.status === 'completed' ? 'jobs-toast-completed' : job.status === 'failed' ? 'jobs-toast-failed' : 'jobs-toast-killed', {
           id: job.id,
@@ -141,7 +143,9 @@ export function createJobProjection(
     const reanchorThis = (): void => {
       if (callerKnown && sessionCaller() === lastCaller) return
       dropRows()
-      store.reset()
+      // Session adoption resets first, replays durable hand-offs, then binds.
+      // Keep those pending proofs until refresh reads the newly bound roster.
+      store.reset({ preservePendingStarts: true })
       refresh()
     }
     /** One kernel `output` event: pull the ring increment past our cursor. */
