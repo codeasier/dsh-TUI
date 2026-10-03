@@ -111,14 +111,14 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
   const { lines, bgAt } = await renderAt(120, editTool, 'auto', 'subtle')
   const row = lines.findIndex(line => line.includes('# tail'))
   if (row >= 0) {
-    check('subtle 档：上下文行为浅档卡片底色', bgAt(6, row) === 0x1c2330, `bg=${bgAt(6, row).toString(16)}`)
+    check('subtle 档：上下文行为浅档卡片底色', bgAt(6, row) === 0x2a2a2a, `bg=${bgAt(6, row).toString(16)}`)
   }
 }
 {
   const { lines, bgAt } = await renderAt(120, editTool, 'auto', 'strong')
   const row = lines.findIndex(line => line.includes('# tail'))
   if (row >= 0) {
-    check('strong 档：上下文行为深档卡片底色', bgAt(6, row) === 0x242b3a, `bg=${bgAt(6, row).toString(16)}`)
+    check('strong 档：上下文行为深档卡片底色', bgAt(6, row) === 0x383838, `bg=${bgAt(6, row).toString(16)}`)
   }
 }
 

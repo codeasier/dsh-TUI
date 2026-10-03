@@ -40,7 +40,11 @@ export function hangingWrap(
   return { wrapped: lines.join('\n'), syntheticIndents, softWrap }
 }
 
-/** Call only after source-indexed styles have been restored. */
-export function addSyntheticIndents(text: string, indents: readonly number[]): string {
-  return text.split('\n').map((line, i) => ' '.repeat(indents[i] ?? 0) + line).join('\n')
+/** Call only after source-indexed styles have been restored.
+ *  indentStyle opens the synthetic cells' style without entering source indexing. */
+export function addSyntheticIndents(text: string, indents: readonly number[], indentStyle = ''): string {
+  return text.split('\n').map((line, i) => {
+    const indent = indents[i] ?? 0
+    return (indent > 0 ? indentStyle + ' '.repeat(indent) : '') + line
+  }).join('\n')
 }

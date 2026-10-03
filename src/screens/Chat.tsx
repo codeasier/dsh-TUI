@@ -10,6 +10,7 @@ import { planReload, type ReloadKind } from '../reload.js'
 import { AlternateScreen, Box, Image, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
 import * as tuiKit from '../ui.js'
 import { usePageInset } from '../components/PageMargin.js'
+import { TerminalSizeContext } from '../ink/components/TerminalSizeContext.js'
 import { POINTER } from '../terminal-utils/figures.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 import { actionMatches, effectiveComboDisplay, primaryComboString } from '../utils/keymap.js'
@@ -3078,6 +3079,12 @@ export function Chat({
    */
   const { columns: terminalColumns } = useTerminalSize()
   const pageInsetX = usePageInset().x
+  const transcriptColumns = Math.max(1, terminalColumns - Math.max(0,
+    (normalizeScrollGutter(channel.scrollGutter) === 'hidden' ? 0 : 2) - pageInsetX))
+  const transcriptSize = React.useMemo(
+    () => ({ columns: transcriptColumns, rows: terminalRows }),
+    [transcriptColumns, terminalRows],
+  )
   const wakeWidth = miniWakeWidth(terminalColumns)
   const wakeBand = React.useMemo(
         () =>
@@ -4543,11 +4550,12 @@ export function Chat({
           content column; the gutter still occupies the terminal's right edge. */}
       <Box flexDirection="row" flexGrow={1} flexShrink={1} marginLeft={-pageInsetX} marginRight={-pageInsetX}>
         <ScrollBox ref={setHandle} flexDirection="column" flexGrow={1} flexShrink={1} stickyScroll>
+        <TerminalSizeContext.Provider value={transcriptSize}>
         <Box
           flexDirection="column"
           flexShrink={0}
           marginLeft={pageInsetX}
-          width={Math.max(1, terminalColumns - Math.max(0, (normalizeScrollGutter(channel.scrollGutter) === 'hidden' ? 0 : 2) - pageInsetX))}
+          width={transcriptColumns}
         >
         <LogoHeader
           key={logoNonce}
@@ -4620,6 +4628,7 @@ export function Chat({
           suppressImageGraphics={activePreview !== null}
         />
         </Box>
+        </TerminalSizeContext.Provider>
         </ScrollBox>
         {(() => {
           // Gutter mode (settings `dsh-tui.scrollGutter`): the timeline
@@ -4828,6 +4837,8 @@ export function Chat({
         <PromptInput
           key="prompt-input"
           channel={channel}
+          bleed
+          collapsedColumns={transcriptColumns}
           suspended={promptReplacementOpen}
           draftCache={promptDraftRef.current}
           helpOpen={helpOpen}

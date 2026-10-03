@@ -16,7 +16,7 @@ import type { ToolBackground } from '../../tuiDisplayPrefs.js'
 import type { Theme } from '../../theme.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
 import { primaryComboString } from '../../utils/keymap.js'
-import { usePageInset } from '../PageMargin.js'
+import { usePagePanelBleed } from '../PageMargin.js'
 // Left border + horizontal padding; kept in sync with the card Box below.
 const CARD_CHROME_WIDTH = 3
 const BODY_INDENT = 2
@@ -619,11 +619,8 @@ export function AssistantToolUseMessage({
   // source line per terminal row (truncate) keeps the panes row-aligned,
   // which the flat add/del line model cannot express.
   const { columns } = useTerminalSize()
-  const pageInset = usePageInset()
-  // Keep one canvas column on the left and two gutter columns on the right.
   // Inline summaries remain prose-sized; standalone cards do not bleed.
-  const bleedLeft = bleed && !inlineSummary ? Math.max(0, pageInset.x - 1) : 0
-  const bleedRight = bleed && !inlineSummary ? Math.max(0, pageInset.x - 2) : 0
+  const { left: bleedLeft, right: bleedRight } = usePagePanelBleed(bleed && !inlineSummary)
   const cardColumns = columns + bleedLeft + bleedRight
   // Interactive rows grow a ▾/▴ disclose column while the pointer dwells
   // (fixed, no layout shift elsewhere). The tooltip resolves at show time —

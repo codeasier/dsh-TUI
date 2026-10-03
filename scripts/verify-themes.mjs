@@ -107,13 +107,18 @@ const check = (name, fn) => {
   }
 }
 
-check('palette: light panels are white without changing accent or dark surfaces', () => {
+check('palette: panels are neutral gray/white without changing accent colors', () => {
   const light = getTheme('light')
   assert.equal(light.toolCardBackground, 'rgb(255,255,255)')
   assert.equal(light.toolCardBackgroundDim, 'rgb(255,255,255)')
   assert.notEqual(light.text, light.toolCardBackground, 'body text stays readable on white')
   assert.notEqual(light.background, light.toolCardBackground, 'badge accent remains distinct from panel fill')
-  assert.equal(getTheme('dark').toolCardBackground, 'rgb(36,43,58)')
+  assert.equal(getTheme('dark').toolCardBackground, 'rgb(56,56,56)')
+  assert.equal(getTheme('dark').toolCardBackgroundDim, 'rgb(42,42,42)')
+  assert.equal(getTheme('dark').userPromptBackground, 'rgb(48,48,48)')
+  assert.equal(getTheme('dark').inputBackground, 'rgb(48,48,48)')
+  assert.equal(light.userPromptBackground, 'rgb(255,255,255)')
+  assert.equal(light.inputBackground, 'rgb(255,255,255)')
   assert.equal(getTheme('dark-ansi').toolCardBackground, 'ansi:blackBright')
 })
 

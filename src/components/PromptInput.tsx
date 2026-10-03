@@ -7,6 +7,7 @@ import { t } from '../i18n.js'
 import { Box, Text, useInput, useTerminalSize, useTheme, type ScrollBoxHandle } from '../ui.js'
 import { EffortChargeGlyph } from './EffortChargeGlyph.js'
 import { EffortInputBorder, type InputBorderLabel } from './EffortInputBorder.js'
+import { usePagePanelBleed } from './PageMargin.js'
 import { EffortTierBadge } from './EffortTierBadge.js'
 import { isLightThemeActive } from '../theme.js'
 import { sessionColorHex } from '../terminal-utils/sessionColors.js'
@@ -493,6 +494,10 @@ export interface PromptInputProps {
   channel: Channel
   /** Keep the draft mounted while another prompt-slot panel owns the UI. */
   suspended?: boolean
+  /** Align the collapsed composer with the transcript's wider card surfaces. */
+  bleed?: boolean
+  /** Actual prose column width after reserving the transcript gutter. */
+  collapsedColumns?: number
   /**
    * Owner-held slot for the unsent draft.
    *
@@ -607,6 +612,8 @@ export interface PromptInputProps {
 export function PromptInput({
   channel,
   suspended = false,
+  bleed = false,
+  collapsedColumns,
   draftCache,
   helpOpen,
   onToggleHelp,
@@ -1043,7 +1050,10 @@ export function PromptInput({
       }
     }
   }, [])
-  const { columns, rows: terminalRows } = useTerminalSize()
+  const { columns: terminalColumns, rows: terminalRows } = useTerminalSize()
+  const panelBleed = usePagePanelBleed(bleed && !expanded)
+  const columns = expanded ? terminalColumns
+    : (collapsedColumns ?? terminalColumns) + panelBleed.left + panelBleed.right
   React.useEffect(() => {
     // PromptInput self-detects double-clicks because its drag target resets
     // App's global chain. Geometry changed across resize, so the same screen
@@ -3726,7 +3736,13 @@ export function PromptInput({
   if (suspended) return null
 
   return (
-    <Box flexDirection="column" marginTop={1}>
+    <Box
+      flexDirection="column"
+      marginTop={1}
+      width={columns}
+      marginLeft={-panelBleed.left}
+      marginRight={-panelBleed.right}
+    >
       {/* 瞬态面板浮层（帮助/队列/补全）：零布局高度、向上覆盖转录尾部，
           帧高不随面板开关涨落——否则帧顶行会被滚进 scrollback 并在关闭
           重绘时二次写入（/model 切换多一份启动画的根因，见 OverlayAbove）。 */}

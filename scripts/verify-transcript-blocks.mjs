@@ -244,6 +244,18 @@ check('card leaves one canvas column left and the gutter clear right',
   cell(1, editIdx)?.getBgColor() !== CANVAS_BG &&
   cell(COLS - 3, editIdx)?.getBgColor() !== CANVAS_BG &&
   [COLS - 2, COLS - 1].every(x => cell(x, editIdx)?.getBgColor() === CANVAS_BG))
+const composerIdx = lines().findIndex(line => line.includes('⌸'))
+const surfaceEdges = y => {
+  const occupied = Array.from({ length: COLS }, (_, x) => x).filter(x =>
+    cell(x, y) !== undefined && !cell(x, y).isBgDefault() && cell(x, y).getBgColor() !== CANVAS_BG)
+  return [occupied[0], occupied.at(-1)]
+}
+check('composer and tool card have identical left/right surface edges',
+  composerIdx >= 0 && JSON.stringify(surfaceEdges(composerIdx)) === JSON.stringify(surfaceEdges(editIdx)),
+  `composer=${surfaceEdges(composerIdx)} card=${surfaceEdges(editIdx)}`)
+check('card and composer use neutral gray backgrounds without blue tint',
+  cell(MARGIN + 10, editIdx)?.getBgColor() === 0x2a2a2a &&
+  cell(MARGIN + 10, composerIdx)?.getBgColor() === 0x303030)
 check('reasoning is separated from the next tool card', thinkIdx === bashIdx - 3,
   `think=${thinkIdx} bash=${bashIdx}`)
 check('a prose row keeps its blank line after a summary run', proseIdx === rowOf('Read /tmp/next.ts') + 2,

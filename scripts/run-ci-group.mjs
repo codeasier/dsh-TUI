@@ -86,6 +86,8 @@ const GROUPS = {
 // 左右 3 列上下 1 行内缩 + TerminalSize 收敛成内容区尺寸 + inset 坐标
 // 补偿，对照组保证无 PageMargin 时既有「全宽」契约不变。
     ["verify-page-margin", ['node', '--import', 'tsx/esm', 'scripts/verify-page-margin.tsx']],
+// 会话底色与输入框/工具卡统一边界：暗/亮主题、窄屏、边距、滚动轨与中文草稿。
+    ['verify-session-surfaces', ['node', '--import', 'tsx/esm', 'scripts/verify-session-surfaces.tsx']],
 // User prompt character fidelity: component 80/78 geometry and real Chat with
 // timeline/scrollbar gutters, page margins, wide characters, resize and copy.
     ['verify-user-prompt-wrap', ['node', 'scripts/verify-user-prompt-wrap.mjs']],

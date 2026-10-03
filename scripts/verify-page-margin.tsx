@@ -256,8 +256,11 @@ check('Chat：用户回合竖条在第 3 列（内容不越左缘）', promptCol
 check('Chat：滚动轨在 98/99 列（贴终端右缘）', railRows.some(Boolean))
 check('Chat：右缘 98/99 列只有滚动轨占用（无其他内容越界）',
   Array.from({ length: CHAT_ROWS }, (_, y) => (cellAtC(y, 98) === '' && cellAtC(y, 99) === '') || railRows[y]!).every(Boolean))
-check('Chat：左缘 0/1/2 列恒空白（文本不越界）',
-  Array.from({ length: CHAT_ROWS }, (_, y) => [0, 1, 2].every(x => cellAtC(y, x).trim() === '')).every(Boolean))
+check('Chat：正文留白不越界，只有输入框表面允许出血',
+  Array.from({ length: CHAT_ROWS }, (_, y) => [0, 1, 2].every(x => {
+    const cell = termC.buffer.active.getLine(termC.buffer.active.baseY + y)?.getCell(x)
+    return cellAtC(y, x).trim() === '' || (x > 0 && cell?.getBgColor() === 0x303030)
+  })).every(Boolean))
 
 // 对照组：无 PageMargin 的树 —— 尺寸不收敛、inset=0（verify 直挂契约不变）。
 // 先卸载带边距的应用再挂对照组：同一进程并存两个 Ink 实例时，第二个实例

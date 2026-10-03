@@ -298,8 +298,8 @@ const darkTheme: Theme = {
   diffRemovedDimmed: rgb('#362B2C'),
   diffAddedWord: rgb('#57956B'),
   diffRemovedWord: rgb('#B26671'),
-  toolCardBackground: rgb('#242B3A'), // lighter blue-grey card surface
-  toolCardBackgroundDim: rgb('#1C2330'), // deeper blue substrate
+  toolCardBackground: rgb('#383838'), // neutral gray hover/strong surface
+  toolCardBackgroundDim: rgb('#2A2A2A'), // neutral gray card substrate
   toolDotExec: rgb('#7FAE99'), // sage green — bash/pwsh
   toolDotRead: rgb('#82B8C7'), // cyan blue — read/grep/glob
   toolDotWrite: rgb('#B3A0D4'), // soft violet — edit/write
@@ -318,11 +318,11 @@ const darkTheme: Theme = {
   professionalBlue: rgb('#7DA1DE'),
   chromeYellow: rgb('#D8B270'),
   mascotBody: rgb('#D98A63'), // Warm mascot orange
-  inputBackground: rgb('#000000'),
+  inputBackground: rgb('#303030'),
   userMessageBackground: '', // user turn: no fill, gold bold text only (Kimi style)
-  userMessageBackgroundHover: rgb('#3B5BDB'), // hover/expand: blue block with gold text
-  userPromptBackground: rgb('#252B37'), // user-turn band: one step off the terminal black
-  messageActionsBackground: rgb('#2E333D'),
+  userMessageBackgroundHover: rgb('#404040'), // neutral hover/expand surface
+  userPromptBackground: rgb('#303030'), // neutral user-turn/composer surface
+  messageActionsBackground: rgb('#404040'),
   selectionBg: rgb('#3B4A66'), // Mist-blue tint on dark
   bashMessageBackgroundColor: rgb('#2C3038'),
   memoryBackgroundColor: rgb('#30353D'),
@@ -411,10 +411,10 @@ const lightTheme: Theme = {
   professionalBlue: rgb('#5E88CC'),
   chromeYellow: rgb('#C99A3F'),
   mascotBody: rgb('#D98A63'), // Warm mascot orange
-  inputBackground: rgb('#F6F3ED'),
+  inputBackground: rgb('#FFFFFF'),
   userMessageBackground: '', // user turn: no fill in light mode, gold text only
-  userMessageBackgroundHover: rgb('#DCE4FB'), // subtle blue tint on hover/expand
-  userPromptBackground: rgb('#EFF2F9'), // user-turn band: cool white, one step off the page
+  userMessageBackgroundHover: rgb('#E8E8E8'), // neutral gray hover/expand surface
+  userPromptBackground: rgb('#FFFFFF'), // white user-turn/composer surface
   messageActionsBackground: rgb('#E4D9E5'),
   selectionBg: rgb('#D5DEF2'), // Mist-blue tint on warm white
   bashMessageBackgroundColor: rgb('#EAE1D3'),

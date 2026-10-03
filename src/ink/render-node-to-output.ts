@@ -1,5 +1,5 @@
 import indentString from 'indent-string'
-import { applyTextStyles } from './colorize.js'
+import { applyTextStyles, backgroundOpenCode } from './colorize.js'
 import type { DOMElement } from './dom.js'
 import { GEOMETRY_TRACE_ENABLED, noteScrollGeometry } from './geometry-trace.js'
 import getMaxWidth from './get-max-width.js'
@@ -1049,7 +1049,9 @@ function renderNodeToOutput(
           }
 
           // Restore source-indexed styles before introducing non-source cells.
-          if (hanging) text = addSyntheticIndents(text, hanging.syntheticIndents)
+          // Each output line starts with default styles. Synthetic spaces must
+          // keep the parent surface instead of punching terminal-default holes.
+          if (hanging) text = addSyntheticIndents(text, hanging.syntheticIndents, backgroundOpenCode(inheritedBackgroundColor))
           text = applyPaddingToText(node, text, softWrap)
 
           const lines = text.split('\n')

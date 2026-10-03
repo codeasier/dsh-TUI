@@ -351,7 +351,7 @@ check('left border spans padding, header, separator and output',
   lines().slice(surfaceHead - 1, surfaceEnd + 2).every(line => line.startsWith('│')))
 check('default surface fills the card width including padding',
   [surfaceHead - 1, surfaceHead, surfaceEnd, surfaceEnd + 1].every(y =>
-    [1, 30, COLS - 1].every(x => term.buffer.active.getLine(y)?.getCell(x)?.getBgColor() === 0x1c2330)))
+    [1, 30, COLS - 1].every(x => term.buffer.active.getLine(y)?.getCell(x)?.getBgColor() === 0x2a2a2a)))
 
 show('failed-preview', {
   name: 'bash',

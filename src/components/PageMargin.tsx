@@ -62,6 +62,15 @@ export function usePageInset(): PageInset {
   return React.useContext(PageInsetContext)
 }
 
+/** Shared composer/card edges: one canvas column left, two gutter columns right. */
+export function usePagePanelBleed(enabled: boolean): { left: number; right: number } {
+  const inset = usePageInset()
+  return {
+    left: enabled ? Math.max(0, inset.x - 1) : 0,
+    right: enabled ? Math.max(0, inset.x - 2) : 0,
+  }
+}
+
 /**
  * 根级页边距容器：给整棵 UI 加一圈可配置的小边距，并把「终端尺寸」收敛
  * 成「内容区尺寸」下传（见文件头三层策略）。flexGrow={1} 让它撑满
