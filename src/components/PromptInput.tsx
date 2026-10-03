@@ -19,7 +19,7 @@ import { noteAuxNumber } from '../ink/geometry-trace.js'
 import instances from '../ink/instances.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
-import { getGraphemeSegmenter } from '../utils/intl.js'
+import { getGraphemeSegmenter, getWordSegmenter } from '../utils/intl.js'
 import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
 import { imagePathMediaType, parsePastedImagePath, stageClipboardFilePaths } from '../utils/pastedImagePath.js'
 import { editInExternalEditor } from '../utils/externalEditor.js'
@@ -260,21 +260,31 @@ async function readBoundedRegularFile(path: string, maxBytes: number): Promise<U
   }
 }
 
-/** Index of the word boundary at or before `cursor` (readline alt+b). */
+/** Previous Unicode word start, skipping trailing whitespace. Punctuation
+ *  and emoji are their own units, so deleting after them never eats a word too. */
 function wordBoundaryLeft(text: string, cursor: number): number {
-  let index = cursor
-  while (index > 0 && /\s/.test(text[index - 1]!)) index--
-  while (index > 0 && !/\s/.test(text[index - 1]!)) index--
-  return index
+  const segments = getWordSegmenter().segment(text)
+  let offset = cursor
+  while (offset > 0) {
+    const { index, segment } = segments.containing(offset - 1)!
+    if (!/^\s+$/u.test(segment)) return index
+    offset = index
+  }
+  return 0
 }
 
-/** Index of the word boundary after `cursor` (readline alt+f). */
+/** Next word start: finish the current segment, then skip following whitespace. */
 function wordBoundaryRight(text: string, cursor: number): number {
-  const length = text.length
-  let index = cursor
-  while (index < length && !/\s/.test(text[index]!)) index++
-  while (index < length && /\s/.test(text[index]!)) index++
-  return index
+  const segments = getWordSegmenter().segment(text)
+  const current = segments.containing(cursor)
+  if (current === undefined) return text.length
+  let offset = current.index + current.segment.length
+  while (offset < text.length) {
+    const next = segments.containing(offset)!
+    if (!/^\s+$/u.test(next.segment)) break
+    offset = next.index + next.segment.length
+  }
+  return offset
 }
 
 // --- vim normal-mode helpers -----------------------------------------------
@@ -2502,16 +2512,19 @@ export function PromptInput({
       }
       return
     }
-    if (isMod(key) && key.leftArrow) {
-      // Jump to the previous word boundary (readline alt+b). Must precede the
-      // bare-arrow arms: Ctrl+Left arrives as leftArrow + ctrl. An active
-      // selection collapses to its START edge first (editor semantics).
+    // Legacy ESC b/f already arrive as Meta arrows; CSI-u/modifyOtherKeys
+    // report Alt+B/F as character keys instead. Both belong to word editing.
+    const altWordKey = key.meta && !key.ctrl && !key.super && !key.shift
+    if (((isMod(key) || altWordKey) && key.leftArrow) || (altWordKey && input === 'b')) {
+      // Modified word moves precede bare arrows, including on an empty draft:
+      // Option+Left must not trigger the session-background action. A selection
+      // collapses to its START edge first (editor semantics).
       const sel = selectionRef.current
       setInput(value, sel ? sel.start : wordBoundaryLeft(value, cursor))
       return
     }
-    if (isMod(key) && key.rightArrow) {
-      // Jump to the next word boundary (readline alt+f).
+    if (((isMod(key) || altWordKey) && key.rightArrow) || (altWordKey && input === 'f')) {
+      // Jump to the next word boundary, or collapse to the selection's END.
       const sel = selectionRef.current
       setInput(value, sel ? sel.end : wordBoundaryRight(value, cursor))
       return
@@ -2585,15 +2598,11 @@ export function PromptInput({
       return
     }
     if (isMod(key) && input === 'w') {
-      // Delete the word before the cursor: skip
-      // trailing whitespace, then the whitespace-delimited word. The
-      // deletion start never crosses into the block.
-      const before = value.slice(0, cursor)
-      let end = before.length
-      while (end > 0 && /\s/.test(before[end - 1]!)) end--
-      let start = end
-      while (start > 0 && !/\s/.test(before[start - 1]!)) start--
-      deleteInputRange(clampRowStart(start), cursor)
+      // Share the jump-left boundary: whitespace-only splitting deletes an
+      // entire unspaced Chinese draft. Keep fold and staged-image atomicity.
+      const sel = selectionRef.current
+      if (sel) deleteInputRange(sel.start, sel.end)
+      else deleteInputRange(clampRowStart(wordBoundaryLeft(value, cursor)), cursor)
       return
     }
     // ── vim mode (`/vim`) ──────────────────────────────────────────────

@@ -1,4 +1,5 @@
 let graphemeSegmenter: Intl.Segmenter | undefined
+let wordSegmenter: Intl.Segmenter | undefined
 
 /**
  * Memoized `Intl.Segmenter` with grapheme granularity for width-aware string
@@ -7,4 +8,9 @@ let graphemeSegmenter: Intl.Segmenter | undefined
  */
 export function getGraphemeSegmenter(): Intl.Segmenter {
   return (graphemeSegmenter ??= new Intl.Segmenter('en', { granularity: 'grapheme' }))
+}
+
+/** Shared Unicode word boundaries, including languages without spaces. */
+export function getWordSegmenter(): Intl.Segmenter {
+  return (wordSegmenter ??= new Intl.Segmenter('en', { granularity: 'word' }))
 }

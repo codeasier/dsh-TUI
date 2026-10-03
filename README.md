@@ -187,6 +187,8 @@ Tool cards have a subtle background by default (`toolBackground: subtle`), a con
 
 While the model is working: `Enter` steers, `Tab` queues a follow-up, `Ctrl+Enter` interrupts and sends.
 
+Text editing: `Ctrl+←/→` or `Alt+←/→` (`Option` on macOS; `Alt+B/F` also works) jumps by Unicode word boundaries, including Chinese without spaces. `Ctrl+W` deletes the preceding word and trailing whitespace, or the active selection—not the conversation history. Punctuation and emoji are separate editing units; a draft containing only one word can still be deleted completely.
+
 On native Windows, fragmented Win32 input records are reassembled across short input delays instead of appearing as numeric protocol text. The platform check only reports that this machine might run the private mode (win32-input-mode); a bare `ESC[` fragment is held only after one record has actually been decoded, while a fragment whose own shape is already record-specific holds on its own (which is how even the first record can survive a split). Windows terminals that never enter the mode (mintty, GitBash) therefore keep the classic VT path: a lone `Esc` keeps its normal response time, and a letter typed after a timed-out `ESC[` is not swallowed.
 
 Incomplete records are held for a bounded recovery window (1 second from first capture, never extended by later input; 64 bytes max); past either bound the hold ends and input is handled as before. Unrecognized complete CSI sequences are not inserted as text; after a damaged CSI prefix, a bare ASCII letter can be consumed as its terminator, while normal Win32 key records and bracketed-paste text retain their own boundaries.

@@ -316,6 +316,16 @@ function makeHarness(cols: number, rows: number): Harness {
       await settled(() => screenHas(' world') && !screenHas('hello')),
     )
 
+    // A4b: Ctrl+W deletes the selection, not the larger word before its end.
+    controllerBox.current?.clear()
+    stdin.write('hello world')
+    await settle(() => screenHas('hello world'))
+    dragRange(c0 + 1, c0 + 4, r0)
+    await settle(() => inverseAt(c0 + 1, r0) && inverseAt(c0 + 3, r0))
+    stdin.write('\x17')
+    check('A4b Ctrl+W 只删除选区，不扩大到整词',
+      await settled(() => controllerBox.current?.text() === 'ho world'))
+
     // A5: Shift+click 扩展 + 控制器复制 + Esc 分层
     stdin.write('\x1b')
     await settle(() => !screenHas(' world'))

@@ -25,6 +25,7 @@
  *
  * Run after build: `node scripts/verify-keymap.mjs`
  */
+import './lib/fake-home.mjs'
 import { Writable, PassThrough } from 'node:stream'
 import React from 'react'
 import xtermHeadless from '@xterm/headless'
@@ -97,6 +98,10 @@ check('other actions keep their defaults reserved', reserved.has('ctrl+o') && re
 check('fixed: ctrl+u kill-line reserved', isFixedReserved('ctrl+u'))
 check('fixed: ctrl+return reserved', isFixedReserved('ctrl+return'))
 check('fixed: ctrl+w reserved', isFixedReserved('ctrl+w'))
+for (const combo of ['alt+left', 'alt+right', 'alt+b', 'alt+f', 'option+left', 'meta+right']) {
+  check(`fixed: ${combo} word editing reserved`, isFixedReserved(combo))
+  check(`conflict: history cannot claim ${combo}`, draftComboConflicts('history', [combo]))
+}
 check('fixed: ctrl+j newline fallback reserved', isFixedReserved('ctrl+j'))
 check('free combo not reserved', !isFixedReserved('ctrl+n'))
 
@@ -179,6 +184,7 @@ function makeStreams() {
 const listeners = new Set()
 const notifications = []
 const rows = []
+let clearCalls = 0
 const channel = {
   version: 0,
   rows,
@@ -222,7 +228,7 @@ const channel = {
   removePending: () => true,
   cancel() {},
   interruptAndDeliver: () => 0,
-  clear() {},
+  clear() { clearCalls += 1 },
   loadOlder: () => 0,
   listModels: async () => [],
   listFiles: async () => [],
@@ -282,6 +288,32 @@ check('plain v types', await settled(() => promptText() === 'v'), JSON.stringify
 // Ctrl+C clears the non-empty prompt (idle single press).
 stdin.write('\x03')
 check('ctrl+c clears the prompt', await settled(() => promptText() === ''), JSON.stringify(promptText()))
+
+// Word editing must reach the composer through Chat's global listener, without
+// invoking conversation actions or losing text after the caret.
+const savedRow = { id: 1, kind: 'assistant', text: 'word-editing history', seq: 1, fresh: false }
+rows.push(savedRow)
+channel.emit()
+await settle(() => screen().includes(savedRow.text))
+stdin.write('你好世界')
+await settle(() => promptText() === '你好世界')
+stdin.write('\x17')
+check('Chat: Ctrl+W deletes a Chinese word, not the entire draft',
+  await settled(() => promptText() === '你好'), JSON.stringify(promptText()))
+check('Chat: word deletion leaves the transcript untouched',
+  rows.length === 1 && rows[0] === savedRow && clearCalls === 0 && screen().includes(savedRow.text))
+stdin.write('\x03')
+await settle(() => promptText() === '')
+stdin.write('hello world\x1b[1;3DX')
+check('Chat: Option+Left reaches word movement before single-character movement',
+  await settled(() => promptText() === 'hello Xworld'), JSON.stringify(promptText()))
+stdin.write('\x03')
+await settle(() => promptText() === '')
+stdin.write('hello world\x1bbX')
+check('Chat: legacy Option+B reaches word movement',
+  await settled(() => promptText() === 'hello Xworld'), JSON.stringify(promptText()))
+stdin.write('\x03')
+await settle(() => promptText() === '')
 
 // Alt+V arrives as ESC v. Whatever the clipboard holds, the paste branch
 // must consume the key: a prompt change or a clipboard notification are

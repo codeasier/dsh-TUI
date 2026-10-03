@@ -341,6 +341,10 @@ export const FIXED_RESERVED_COMBOS: readonly string[] = [
   'ctrl+j', // newline fallback (legacy LF / extended key reporting)
   'ctrl+left', // word jump
   'ctrl+right', // word jump
+  'alt+left', // macOS Option word jump
+  'alt+right', // macOS Option word jump
+  'alt+b', // readline word-left (including extended key protocols)
+  'alt+f', // readline word-right (including extended key protocols)
   'ctrl+return', // newline (multi-line input)
   'ctrl+shift+return', // shift+Enter newline (CSI 13;6u) — same editor binding
   'alt+return', // newline fallback on terminals without shift reporting
