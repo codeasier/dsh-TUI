@@ -1,6 +1,7 @@
 /**
  * Sharp sharing regression with isolated host/profile dependency trees.
- * No real native module is loaded: the unwanted second copy throws on import.
+ * Real workers exercise separate module caches; fake sharp factories avoid
+ * native dependencies and distinguish the host build from the local copy.
  * Run: node --import tsx/esm scripts/verify-sharp-loader.mjs
  * Also runs in a fresh child of verify-image-downsample.tsx.
  */
@@ -10,6 +11,29 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { Worker } from 'node:worker_threads'
+
+async function workerSharp(source, workerData) {
+  const api = pathToFileURL(createRequire(import.meta.url).resolve('tsx/esm/api')).href
+  const loader = pathToFileURL(join(source, 'dsh-adapter', 'sharp.ts')).href
+  const code = `
+    import { parentPort } from 'node:worker_threads'
+    import { tsImport } from ${JSON.stringify(api)}
+    const { loadSharp } = await tsImport(${JSON.stringify(loader)}, ${JSON.stringify(import.meta.url)})
+    const sharp = await loadSharp()
+    parentPort.postMessage(sharp?.versions.fixture)
+  `
+  const worker = new Worker(new URL(`data:text/javascript,${encodeURIComponent(code)}`), { workerData })
+  try {
+    return await new Promise((resolve, reject) => {
+      worker.once('message', resolve)
+      worker.once('error', reject)
+      worker.once('exit', code => reject(new Error(`worker exited before replying: ${code}`)))
+    })
+  } finally {
+    await worker.terminate()
+  }
+}
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-sharp-loader-')))
 
@@ -67,7 +91,7 @@ try {
     { name: 'local-fallback', local: 'working', selected: 'local' },
     { name: 'broken-host', host: 'broken', local: 'working', selected: 'local' },
     { name: 'missing', selected: undefined },
-    { name: 'already-loaded', local: 'broken', selected: 'cached' },
+    { name: 'already-loaded', local: 'working', selected: 'cached' },
   ]) {
     const source = fixture(scenario.name, scenario)
     let cached
@@ -75,7 +99,7 @@ try {
       const entry = fakeSharp(join(root, 'preloaded', 'node_modules', 'sharp'), 'already-loaded-cached', { cjs: true })
       cached = createRequire(import.meta.url)(entry)
     }
-    const { loadSharp, sharpCandidatePaths } = await import(pathToFileURL(join(source, 'dsh-adapter', 'sharp.ts')).href)
+    const { loadSharp, loadSharpWorkerData, sharpCandidatePaths } = await import(pathToFileURL(join(source, 'dsh-adapter', 'sharp.ts')).href)
     const first = loadSharp()
     assert.equal(loadSharp(), first, `${scenario.name}: concurrent calls share the promise`)
     const sharp = await first
@@ -102,7 +126,17 @@ try {
         assert.ok(!sharpCandidatePaths()[0].includes(`${join('plugin', 'node_modules')}`))
       }
     }
-    console.log(`PASS: sharp sharing ${scenario.name}`)
+    assert.equal(await workerSharp(source, await loadSharpWorkerData()), sharp?.versions.fixture,
+      `${scenario.name}: a real worker must use the parent's selected native build`)
+    if (cached) {
+      assert.equal(await workerSharp(source, {}), 'already-loaded-local',
+        'control: a worker without the pin cannot see the parent cache')
+      assert.equal(await workerSharp(source, { dshTuiSharpPath: null }), undefined,
+        'parent degradation must not load a working local copy')
+      assert.equal(await workerSharp(source, { dshTuiSharpPath: join(root, 'missing.cjs') }), undefined,
+        'a failed pinned import must not fall back to a different native build')
+    }
+    console.log(`PASS: sharp sharing ${scenario.name} (main + worker)`)
   }
 } finally {
   // Only remove the freshly created fixture root, never a derived install path.

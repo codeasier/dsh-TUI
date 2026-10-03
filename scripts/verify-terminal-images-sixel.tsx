@@ -215,6 +215,20 @@ await delay(20)
 assert.equal(notifications, beforeClose, 'closed preview must not be resurrected by an old job')
 manager.dispose()
 
+// Disposal can land while the worker path is awaiting the shared sharp loader.
+{
+  let repaints = 0
+  const closing = new SixelGraphicsManager(() => repaints++)
+  closing.beginFrame(40, 16)
+  closing.prepare(placement)
+  closing.reconcile(screen(), screen())
+  assert.ok(Reflect.get(closing, 'active'), 'encoding starts before disposal')
+  closing.dispose()
+  await until(() => Reflect.get(closing, 'active') === undefined, 'pending initialization settles after disposal')
+  assert.equal(Reflect.get(closing, 'worker'), undefined, 'disposal must not resurrect a worker after the await')
+  assert.equal(repaints, 0, 'disposed encoding must not request a repaint')
+}
+
 // The image raster must fit its source aspect, not pad the rounded cell box.
 for (const [sourceWidth, sourceHeight] of [[16, 9], [9, 16], [17, 11], [255, 113]]) {
   const data = new Uint8Array(sourceWidth * sourceHeight * 4)
