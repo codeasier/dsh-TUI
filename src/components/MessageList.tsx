@@ -10,7 +10,7 @@ import { Divider } from './design-system/Divider.js'
 import { UserPromptMessage } from './messages/UserPromptMessage.js'
 import { AssistantTextMessage } from './messages/AssistantTextMessage.js'
 import { AssistantThinkingMessage } from './messages/AssistantThinkingMessage.js'
-import { AssistantToolUseMessage } from './messages/AssistantToolUseMessage.js'
+import { AssistantToolUseMessage, isInlineToolSummary } from './messages/AssistantToolUseMessage.js'
 import { MachineRail } from './messages/MachineRail.js'
 import { SubagentMessage } from './Chat/SubagentMessage.js'
 import { JobCard } from './Chat/JobCard.js'
@@ -283,21 +283,22 @@ function signatureParts(
 /**
  * Visual layer of a transcript row — what the block-gap pre-pass groups by.
  *
- * Tool calls own independent cards, separated from both prose and machine
- * activity. Reasoning, subagent/job updates and local shell rows still form
- * tight runs. Compute gaps before windowing so scroll offsets stay stable.
+ * Compact tool summaries form tight runs. Output cards and reasoning are
+ * separated from prose; subagent/job updates and local shell rows stay tight.
+ * Compute gaps before windowing so scroll offsets stay stable.
  */
-type BlockLayer = 'user' | 'prose' | 'tool' | 'machine' | 'notice' | 'interrupt' | 'compact'
+type BlockLayer = 'user' | 'prose' | 'tool' | 'summary' | 'reasoning' | 'machine' | 'notice' | 'interrupt' | 'compact'
 
-function blockLayer(kind: ChatRow['kind']): BlockLayer {
-  switch (kind) {
+function blockLayer(row: ChatRow, expanded: boolean): BlockLayer {
+  switch (row.kind) {
     case 'user':
       return 'user'
     case 'assistant':
       return 'prose'
     case 'tool':
-      return 'tool'
+      return !expanded && row.tool && isInlineToolSummary(row.tool) ? 'summary' : 'tool'
     case 'reasoning':
+      return 'reasoning'
     case 'subagent':
     case 'job':
     case 'local':
@@ -464,14 +465,18 @@ export function MessageList({
     thinkingVisible: boolean
     out: readonly ChatRow[]
     margins: ReadonlyMap<number, boolean>
-    /** Per-row `streaming === true` bits. The settle flip (streaming cleared
-     * in place, rows identity/length unchanged) changes empty-assistant
-     * filtering below, so the cache must rebuild on any bit change. */
+    /** Per-row streaming and compact-summary bits. In-place changes affect
+     * both filtering and block spacing, even when rows identity is stable. */
     streamBits: Uint8Array
   } | null>(null)
   /** Generation counter for the visibleRows cache (timeline memo key). */
   const visGenRef = React.useRef(0)
   const visibleCache = visibleRowsCacheRef.current
+  // Include presentation changes in the allocation-free fingerprint: tools
+  // settle in place, and expansion changes compact runs into spaced cards.
+  const rowLayoutBits = (row: ChatRow): number =>
+    (row.streaming === true ? 1 : 0) |
+    (row.kind === 'tool' && blockLayer(row, expanded || expandedRows?.has(row.id) === true) === 'summary' ? 2 : 0)
   // Streaming-bit fingerprint: in-place `streaming = false` writes (turn
   // settle) are invisible to the rows-identity/length key above, but an
   // assistant row that settles with EMPTY text crosses the empty-assistant
@@ -481,7 +486,7 @@ export function MessageList({
   if (streamBitsSame) {
     const bits = visibleCache!.streamBits
     for (let i = 0; i < rows.length; i++) {
-      if (bits[i] !== (rows[i]!.streaming === true ? 1 : 0)) { streamBitsSame = false; break }
+      if (bits[i] !== rowLayoutBits(rows[i]!)) { streamBitsSame = false; break }
     }
   }
   if (
@@ -530,20 +535,20 @@ export function MessageList({
       : thinkingVisible
         ? sliced
         : sliced.filter(row => row.kind !== 'reasoning')
-    // Independent tool cards keep a blank line on either side. Only machine
-    // runs remain tight. Pre-pass over the FULL list so a windowed row keeps
-    // the exact spacing it would have in a fully-mounted list.
+    // Output cards keep a blank line on either side. Compact tool summaries
+    // and machine updates each form tight runs. Pre-pass over the FULL list
+    // so windowed rows keep the spacing of a fully-mounted list.
     const margins = new Map<number, boolean>()
     {
       let prev: BlockLayer | undefined
       for (const row of out) {
-        const layer = blockLayer(row.kind)
-        margins.set(row.id, prev !== undefined && !(prev === 'machine' && layer === 'machine'))
+        const layer = blockLayer(row, expanded || expandedRows?.has(row.id) === true)
+        margins.set(row.id, prev !== undefined && !((prev === 'machine' && layer === 'machine') || (prev === 'summary' && layer === 'summary')))
         prev = layer
       }
     }
     const streamBits = new Uint8Array(rows.length)
-    for (let i = 0; i < rows.length; i++) streamBits[i] = rows[i]!.streaming === true ? 1 : 0
+    for (let i = 0; i < rows.length; i++) streamBits[i] = rowLayoutBits(rows[i]!)
     visibleRowsCacheRef.current = {
       rows,
       rowsLength: rows.length,

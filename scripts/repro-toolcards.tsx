@@ -6,8 +6,8 @@
  * tool-message dump. Exercises the pure component with fabricated ToolRows
  * (no channel needed: views are plain data on the row).
  *
- * Cards preview three output lines by default; click / Ctrl+O expands the
- * full result. Fixtures default to verbose; scenario #7 covers the preview.
+ * Terminal/error cards preview three output lines; ordinary tools collapse
+ * to inline summaries. Click / Ctrl+O expands the full result. Fixtures default to verbose; scenario #7 covers the preview.
  */
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
@@ -331,7 +331,7 @@ for (const width of [20, 55, 90]) {
     check(`${name} width=${width}: tail remains detail`, !screen().includes('COMMAND_END') && !screen().includes('SCRIPT_END') && !screen().includes('ARGS_END'))
     const row = rowOf(label)
     const x = row < 0 ? -1 : lines()[row]!.indexOf(label)
-    check(`${name} width=${width}: readable, non-bold header`, x >= 0 && fgAt(x, row) === 0xe8e6e0 && !term.buffer.active.getLine(row)?.getCell(x)?.isBold())
+    check(`${name} width=${width}: readable, non-bold header`, x >= 0 && fgAt(x, row) === (tool.name === 'read' ? 0x8d95a6 : 0xe8e6e0) && !term.buffer.active.getLine(row)?.getCell(x)?.isBold())
   }
 }
 show('long-command-open', { name: 'bash', callView: { card: 'terminal', title: longCommand } }, true)
@@ -365,6 +365,21 @@ show('error-preview', {
 }, false)
 check('multiline error remains bounded and expandable', await settled(() =>
   rowOf('ERROR_THIRD') >= 0 && rowOf('ERROR_LAST') === -1 && screen().includes('… +2 lines')))
+
+// Successful read/search/generic tools are quiet summaries, not output cards.
+for (const [name, marker] of [['read', '→'], ['grep', '*'], ['todo_write', '→']] as const) {
+  const tool = {
+    name, callView: { card: 'generic', title: `${name} INLINE_SUMMARY` },
+    resultFull: 'HIDDEN_RESULT\nSECOND_RESULT',
+  }
+  show(`inline-${name}`, tool, false)
+  check(`${name}: compact summary hides output and elapsed chrome`, await settled(() =>
+    screen().includes(`${marker} ${name} INLINE_SUMMARY`) && !screen().includes('HIDDEN_RESULT') && !screen().includes('· 0s')))
+  const y = rowOf('INLINE_SUMMARY')
+  check(`${name}: no rail or background`, !lines()[y]?.includes('│') && term.buffer.active.getLine(y)?.getCell(5)?.isBgDefault() === true)
+  show(`inline-open-${name}`, tool, true)
+  check(`${name}: expansion restores full output`, await settled(() => screen().includes('HIDDEN_RESULT') && screen().includes('SECOND_RESULT')))
+}
 
 app.unmount()
 // 固定窗:pacing unmount 后输出 flush 无可观测条件。

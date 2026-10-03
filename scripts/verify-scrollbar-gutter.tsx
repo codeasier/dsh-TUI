@@ -118,9 +118,8 @@ function cellAt(y: number, col: number): string {
 /**
  * gutter 区域：置顶头之下、prompt 输入框 margin 之上。返回 [top, bottom)。
  *
- * Anchored on the prompt BOX's top border (`╭`), not on a `❯` row: the input
- * row now leads with the session-entry affordance (`⌸ ❯ …`) while transcript
- * user rows start with `❯`, so that glyph identifies neither end reliably.
+ * Anchor at the composer rail's top padding row, one row above its
+ * session-entry control. Search backwards so transcript text cannot win.
  */
 function gutterRange(): [number, number] {
   const lines = screenLines()
@@ -130,7 +129,7 @@ function gutterRange(): [number, number] {
   const top = /^❯/.test(lines[0]!.trimEnd()) || bottomPillVisible() ? 1 : 0
   let boxTop = -1
   for (let y = ROWS - 1; y >= 0; y--) {
-    if (lines[y]!.trimEnd().endsWith('╭') || lines[y]!.trimStart().startsWith('╭')) { boxTop = y; break }
+    if (/^\s*│⌸ /.test(lines[y]!)) { boxTop = y - 1; break }
   }
   return [top, boxTop >= 0 ? boxTop - 2 : ROWS - 4]
 }
