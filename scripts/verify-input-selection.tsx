@@ -519,14 +519,14 @@ function makeHarness(cols: number, rows: number): Harness {
     check('A9 大段粘贴折叠成 chip', await settled(() => screenHas('▸ 12 lines') && screenHas('TAIL')))
     // 奇数（13）次 ↑ 停在 block.start（偶数次回到 block.end），窗口回顶且
     // caret 行稳定在 head——空 tail 行的 caret 消失后该行塌缩、布局下移一行；
-    // 塌缩前/后布局里 chip 都紧贴 PRE，必须等到底边框紧贴 chip（塌缩后布局）
+    // 塌缩前/后布局里 chip 都紧贴 PRE，必须等到底部留白竖条紧贴 chip（塌缩后布局）
     // 再取坐标，否则后续拖拽全部落空一格。
     stdin.write('\x1b[A'.repeat(13))
     await settle(() => {
       const pp = findText('PRE')
       const cc = findText('▸ 12 lines')
       if (pp === null || cc === null || cc.row !== pp.row + 1) return false
-      return (termTest.viewportLines(h.term)[cc.row + 1] ?? '').includes('╰')
+      return /^\s*│\s*$/u.test(termTest.viewportLines(h.term)[cc.row + 1] ?? '')
     })
     const hd = findText('PRE')!
     press(hd.col, hd.row)

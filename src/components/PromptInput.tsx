@@ -575,8 +575,8 @@ export interface PromptInputProps {
 }
 
 /**
- * dsh-TUI prompt input: rounded border box (top+bottom borders
- * only), `❯ ` prompt char (dimmed while a turn is working), the text with a
+ * dsh-TUI prompt input: filled block with a single left accent rail,
+ * `❯ ` prompt char (dimmed while a turn is working), the text with a
  * block cursor at the cursor position, and above it the slash-command /
  * file-completion suggestion card (SuggestionCard: rounded panel with the
  * selected row behind a `❯` pointer in the theme's `suggestion` color).
@@ -2975,13 +2975,13 @@ export function PromptInput({
   // 展开态布局参数：编辑器独占整屏 —— 行号槽（宽度随逻辑行数伸缩）+
   // 圆角边框 2 + 两侧 padding 各 1 占列，⌸ 入口 / ❯ 前缀 / vim 徽标 /
   // ⛶ 按钮全部让位；收起态额外扣掉行首 ⌸ 入口（未渲染时 0 列）与行尾
-  // ⛶ 按钮的 2 列。
+  // ⛶ 按钮的 2 列，以及块状输入左竖条的 1 列。
   const editorLogicalLines = expanded ? value.split('\n').length : 1
   const editorNoWidth = Math.max(2, String(editorLogicalLines).length)
   const editorGutterCols = editorNoWidth + 3
   const inputWidth = expanded
     ? Math.max(1, columns - 4 - editorGutterCols)
-    : Math.max(1, columns - 3 - vimBadgeCols - homeButtonCols - (expandEnabled ? 2 : 0))
+    : Math.max(1, columns - 4 - vimBadgeCols - homeButtonCols - (expandEnabled ? 2 : 0))
   // 展开态无视折叠块：全屏编辑就是为了看全文（foldBlock 状态保留，
   // 收起后折叠显示恢复）。
   const block = expanded ? null : foldBlock
@@ -3868,10 +3868,8 @@ export function PromptInput({
           </Box>
         </Box>
       )}
-      {/* The prompt's own top/bottom border rows, self-drawn so the effort
-          overlay can play on them (sweep → tier name → fade; see
-          EffortInputBorder). Idle colour keeps the plan-mode accent the old
-          Box border carried. */}
+      {/* Filled composer block: the left rail retains session/plan accents
+          and effort ignition; permanent padding rows keep overlay anchors. */}
       <EffortInputBorder
         effort={channel.reasoningEffort}
         levels={channel.effortLevels}
@@ -3933,14 +3931,14 @@ export function PromptInput({
                 <Text inverse> </Text>
                 {/* 三幕点焰第二幕：空输入行居中短暂浮现档名大写（纯文
                     本流自带偏移空格——不引入嵌套 Box，行数恒定；有文字
-                    时不显示）。3 = 行内 `❯ `（2 列）+ 空输入块光标（1
+                    时不显示）。4 = 左竖条（1 列）+ `❯ `（2 列）+ 空输入块光标（1
                     列）；行首 ⌂ 入口渲染时徽标之前还要多占它的列数。 */}
                 <EffortTierBadge
                   effort={channel.reasoningEffort}
                   levels={channel.effortLevels}
                   onLight={isLightThemeActive(themeName)}
                   columns={columns}
-                  leadingColumns={3 + homeButtonCols}
+                  leadingColumns={4 + homeButtonCols}
                 />
               </>
             ) : (

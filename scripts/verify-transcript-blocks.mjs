@@ -11,12 +11,12 @@
  *   1. USER TURN — a full-width band (`userPromptBackground`) whose left edge
  *      is `▌ ❯` at the page-margin column, the turn anchor for scrolling back.
  *   2. ASSISTANT PROSE — col 0 (page margin only), NO prefix marker.
- *   3. TOOL CARDS — full-width surface and continuous border, independent
- *      from reasoning/subagent/job activity (which keeps its dim rail).
- *   4. Vertical rhythm — tool cards have padding and a blank line between
- *      them; only other consecutive machine updates remain tight.
+ *   3. TOOLS — quiet, unrailed summaries; terminal/diff/error output keeps
+ *      a full-width surface and continuous border. Thinking has no rail.
+ *   4. Vertical rhythm — consecutive summaries stay tight; output cards have
+ *      padding and a blank separator. Reasoning separates tool runs.
  *
- * Run after build: `node scripts/verify-transcript-blocks.mjs`
+ * Run after build: `node scripts/verify-transcript-blocks.mjs [--inline] [--narrow]`
  */
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
@@ -39,8 +39,9 @@ const [{ Writable, PassThrough }, React, xtermHeadless, { render, ThemeProvider,
 
 const { Terminal: XTerm } = xtermHeadless.default ?? xtermHeadless
 
-const COLS = 100
-const ROWS = 40
+const fullscreen = !process.argv.includes('--inline')
+const COLS = process.argv.includes('--narrow') ? 52 : 100
+const ROWS = fullscreen ? 40 : 80
 /** PageMargin's left inset — every transcript row starts here at the latest. */
 const MARGIN = 3
 const RAIL = '│ '
@@ -69,6 +70,7 @@ const rows = [
   row(0, 'user', { text: '清幽灵行' }),
   toolRow(1, 'edit', `Edit ${HANDOFF}`),
   toolRow(2, 'read', `Read ${HANDOFF} (63 - 82)`),
+  toolRow(8, 'read', 'Read /tmp/next.ts'),
   row(3, 'assistant', { text: '编号从 3 跳到 5。补上 4。' }),
   row(4, 'reasoning', { text: '先核对编号，再看 remaining work。', durationMs: 4_200 }),
   toolRow(5, 'bash', 'Bash(ls -la)'),
@@ -160,14 +162,16 @@ stdin.setEncoding = () => stdin
 stdin.ref = () => stdin
 stdin.unref = () => stdin
 
+const channel = makeChannel()
 const chat = React.createElement(Chat, {
-  channel: makeChannel(),
+  channel,
   questionStore: { subscribe: () => () => {}, getSnapshot: () => null, answerCurrent() {}, arm() {}, disarm() {} },
-  fullscreen: true,
+  fullscreen,
   onExit() {},
 })
+const page = React.createElement(PageMargin, null, chat)
 const tree = React.createElement(ThemeProvider, {
-  children: React.createElement(AlternateScreen, null, React.createElement(PageMargin, null, chat)),
+  children: fullscreen ? React.createElement(AlternateScreen, null, page) : page,
 })
 const instance = await render(tree, { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false })
 
@@ -190,7 +194,7 @@ function bandCells(y) {
 }
 
 // ── 1. the user turn: band + `▌ ❯` at the page margin ─────────────────────
-check('user turn paints', await settled(() => rowOf('清幽灵行') >= 0))
+check('user turn paints', await settled(() => rowOf('清幽灵行') >= 0 && rowOf('记忆已写入。') >= 0))
 const promptIdx = rowOf('清幽灵行')
 const promptLine = lines()[promptIdx] ?? ''
 check('user turn leads with the `▌ ❯` bar at the page margin',
@@ -213,9 +217,9 @@ const thinkIdx = rowOf('思考 · 4s')
 const bashIdx = rowOf('Bash(ls -la)')
 check('tool card renders', editIdx >= 0)
 check('thinking row renders', thinkIdx >= 0)
-check('tool card and thinking rows carry the machine rail',
+check('output cards retain the rail but thinking is flush left',
   (lines()[editIdx] ?? '').startsWith(`${' '.repeat(MARGIN)}${RAIL}`)
-  && (lines()[thinkIdx] ?? '').startsWith(`${' '.repeat(MARGIN)}${RAIL}`),
+  && (lines()[thinkIdx] ?? '').startsWith(`${' '.repeat(MARGIN)}+ 思考`),
   JSON.stringify((lines()[editIdx] ?? '').slice(0, 12)))
 check('the railed content sits two columns right of prose',
   (lines()[editIdx] ?? '').indexOf('Edit') === MARGIN + RAIL.length + 2,
@@ -223,8 +227,8 @@ check('the railed content sits two columns right of prose',
 
 // ── 4. vertical rhythm ───────────────────────────────────────────────────
 const readIdx = rowOf('Read /tmp/handoff.md (63 - 82)')
-check('consecutive tool cards have padding and a blank separator',
-  readIdx === editIdx + 4, `edit=${editIdx} read=${readIdx}`)
+check('card to summary keeps a blank separator without summary padding',
+  readIdx === editIdx + 3, `edit=${editIdx} read=${readIdx}`)
 check('the separator has no card background or rail',
   (lines()[editIdx + 2] ?? '').trim() === '' && bandCells(editIdx + 2) === 0)
 check('card border spans top padding, title and bottom padding',
@@ -233,10 +237,39 @@ check('tool card surface fills the content width', bandCells(editIdx) > COLS - M
   `cells=${bandCells(editIdx)}`)
 check('reasoning is separated from the next tool card', thinkIdx === bashIdx - 3,
   `think=${thinkIdx} bash=${bashIdx}`)
-check('a prose row keeps its blank line after card padding', proseIdx === readIdx + 3,
+check('a prose row keeps its blank line after a summary run', proseIdx === rowOf('Read /tmp/next.ts') + 2,
   `read=${readIdx} prose=${proseIdx}`)
 check('a second user turn keeps its blank line after card padding',
   rowOf('记录下来') === bashIdx + 3, `bash=${bashIdx}`)
+
+check('consecutive read summaries occupy adjacent rows', rowOf('Read /tmp/next.ts') === readIdx + 1)
+check('read summary has an arrow and no surface',
+  (lines()[readIdx] ?? '').startsWith(`${' '.repeat(MARGIN)}→ Read`) && bandCells(readIdx) === 0)
+check('thinking has no surface or italic header', bandCells(thinkIdx) === 0 &&
+  !term.buffer.active.getLine(thinkIdx)?.getCell(MARGIN + 2)?.isItalic())
+// Status and presentation mutate in place: the gap cache must notice a
+// formerly compact row turning into an error card, then returning to compact.
+const nextTool = rows.find(row => row.id === 8).tool
+nextTool.status = 'error'
+nextTool.errorText = 'READ_FAILED'
+channel.emit()
+check('in-place error shows its output card', await settled(() => rowOf('READ_FAILED') >= 0))
+check('error card gains a blank separator', rowOf('Read /tmp/next.ts') === rowOf('Read /tmp/handoff.md (63 - 82)') + 3)
+nextTool.status = 'ok'
+nextTool.errorText = undefined
+channel.emit()
+check('in-place recovery restores tight summaries', await settled(() =>
+  rowOf('READ_FAILED') === -1 && rowOf('Read /tmp/next.ts') === rowOf('Read /tmp/handoff.md (63 - 82)') + 1))
+
+stdin.write('\x0f')
+check('Ctrl+O expands summaries into separated cards', await settled(() =>
+  rowOf('Read /tmp/handoff.md (63 - 82)') >= 0 &&
+  rowOf('Read /tmp/next.ts') === rowOf('Read /tmp/handoff.md (63 - 82)') + 4 &&
+  bandCells(rowOf('Read /tmp/next.ts')) > COLS - MARGIN - 8))
+stdin.write('\x0f')
+check('Ctrl+O collapse restores tight unfilled summaries', await settled(() =>
+  rowOf('Read /tmp/next.ts') === rowOf('Read /tmp/handoff.md (63 - 82)') + 1 &&
+  bandCells(rowOf('Read /tmp/next.ts')) === 0))
 
 await instance.unmount()
 term.dispose()

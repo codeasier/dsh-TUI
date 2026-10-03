@@ -12,7 +12,6 @@ import {
 } from '../../terminal-utils/figures.js'
 import { BRAND, ICE } from '../shimmer.js'
 import { interpolateColor } from '../Spinner/spinnerUtils.js'
-import { MachineRail } from './MachineRail.js'
 import { isMinimalUiMode } from '../../minimalUiMode.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
 
@@ -121,10 +120,10 @@ export function AssistantThinkingMessage({
       <Box flexDirection="row">
         <Text>{minimalUi ? frameText : chalk.rgb(pulseColor.r, pulseColor.g, pulseColor.b).bold(frameText)}</Text>
         {/* 流式行同样可点击折叠（hover 提亮标签给出指示，与落定态一致） */}
-        <Text color={minimalUi ? undefined : hovered ? 'text' : 'warning'} italic>{` ${label}`}</Text>
+        <Text color={minimalUi ? undefined : hovered ? 'text' : 'warning'}>{` ${label}`}</Text>
       </Box>
     ) : (
-      <Text italic color={minimalUi ? undefined : hovered ? 'text' : 'warning'}>{`${minimalUi ? '*' : verbose ? THINKING_EXPANDED_MARKER : THINKING_SETTLED_MARKER} ${label}`}</Text>
+      <Text color={minimalUi ? undefined : hovered ? 'text' : 'warning'}>{`${minimalUi ? '*' : verbose ? THINKING_EXPANDED_MARKER : THINKING_SETTLED_MARKER} ${label}`}</Text>
     )
 
   if (preview) {
@@ -145,7 +144,7 @@ export function AssistantThinkingMessage({
       (_, i) => visible[i] ?? ' ',
     )
     return (
-      <RailedRow
+      <ThinkingRow
         marginTop={marginTopOnTurn ? 1 : 0}
         isSelected={isSelected}
         onClick={onClick}
@@ -177,25 +176,25 @@ export function AssistantThinkingMessage({
             </Box>
           ))}
         </Box>
-      </RailedRow>
+      </ThinkingRow>
     )
   }
 
   if (!verbose) {
     return (
-      <RailedRow
+      <ThinkingRow
         marginTop={marginTopOnTurn ? 1 : 0}
         isSelected={isSelected}
         onClick={onClick}
         hoverProps={hoverProps}
       >
         {header}
-      </RailedRow>
+      </ThinkingRow>
     )
   }
 
   return (
-    <RailedRow
+    <ThinkingRow
       marginTop={marginTopOnTurn ? 1 : 0}
       isSelected={isSelected}
       onClick={onClick}
@@ -209,21 +208,12 @@ export function AssistantThinkingMessage({
           cost at O(new content) instead of re-laying out the whole block. */}
         <StreamingMarkdown>{thinking}</StreamingMarkdown>
       </Box>
-    </RailedRow>
+    </ThinkingRow>
   )
 }
 
-/**
- * Reasoning-row shell: the machine rail plus a content column that absorbs
- * whatever width the rail leaves. One place for the margin / selection fill /
- * click and hover wiring the three view modes share, so the rail can never
- * drift out of alignment with the header it prefixes.
- *
- * `flexGrow` rather than `width="100%"` on the column: the rail is a sibling
- * inside the same row, and a percentage width would resolve against the row's
- * full width and overflow by exactly the rail's two columns.
- */
-function RailedRow({
+/** Shared unrailed shell for collapsed, preview and expanded reasoning. */
+function ThinkingRow({
   marginTop,
   isSelected,
   onClick,
@@ -247,7 +237,6 @@ function RailedRow({
       onClick={onClick}
       {...hoverProps}
     >
-      <MachineRail />
       <Box flexDirection="column" flexGrow={1} flexShrink={1} gap={gap}>
         {children}
       </Box>

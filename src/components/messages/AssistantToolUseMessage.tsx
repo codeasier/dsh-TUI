@@ -543,8 +543,16 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
   )
 }
 
-/** Independent tool card with a continuous left border and bounded preview.
- * Structured views remain channel-owned; expansion only changes presentation. */
+/** Ordinary calls collapse to quiet inline summaries; output-heavy and failed
+ * calls retain their cards. Shared with the transcript's spacing pre-pass. */
+export function isInlineToolSummary(tool: ToolRow): boolean {
+  const card = (tool.resultView ?? tool.callView)?.card
+  return tool.status !== 'error' && !tool.errorText && card !== 'terminal' && card !== 'diff'
+    && !TOOL_NAME_EXEC.has(tool.name.toLowerCase()) && tool.name !== 'powershell'
+    && !TOOL_NAME_MUTATE.has(tool.name.toLowerCase())
+}
+
+/** Structured views remain channel-owned; expansion only changes presentation. */
 export function AssistantToolUseMessage({
   tool,
   marginTopOnTurn,
@@ -560,6 +568,7 @@ export function AssistantToolUseMessage({
 }: Props): React.ReactNode {
   const isRunning = tool.status === 'running'
   const isError = tool.status === 'error'
+  const inlineSummary = !verbose && isInlineToolSummary(tool)
   const displayArgs = verbose ? tool.argsFull ?? tool.argsText : tool.argsText
   const result = tool.resultFull ?? tool.resultText
   const name = displayName(tool.name)
@@ -613,8 +622,8 @@ export function AssistantToolUseMessage({
   const interactive = onClick !== undefined
   // TerminalSize is already page-margin adjusted. Reserve the card border,
   // padding, status dot, hover indicator and settled elapsed chip.
-  const headerTextBudget = Math.max(0, columns - CARD_CHROME_WIDTH - 2 - (interactive ? 2 : 0)
-    - (!isRunning && elapsedText !== '' ? stringWidth(elapsedText) : 0))
+  const headerTextBudget = Math.max(0, columns - (inlineSummary ? 0 : CARD_CHROME_WIDTH) - 2 - (interactive ? 2 : 0)
+    - (!inlineSummary && !isRunning && elapsedText !== '' ? stringWidth(elapsedText) : 0))
   const bodyWidth = Math.max(1, columns - CARD_CHROME_WIDTH - BODY_INDENT)
   const splitPreviewSafe = React.useMemo(
     () => view?.card === 'diff' && canPreviewSplitDiff(view.diffs),
@@ -626,7 +635,7 @@ export function AssistantToolUseMessage({
   let body: BodyLine[] = []
   if (isError && tool.errorText) {
     body = tool.errorText.trimEnd().split('\n').map(text => ({ text, tone: 'error' }))
-  } else if (!useSplitDiff) {
+  } else if (!useSplitDiff && !inlineSummary) {
     if (view !== undefined) body = viewLines(view)
     if (body.length === 0 && result) {
       body = result.trimEnd().split('\n').map(plain)
@@ -676,32 +685,36 @@ export function AssistantToolUseMessage({
     <Box
       ref={viewportRef}
       flexDirection="column"
-      borderStyle="single"
+      borderStyle={inlineSummary ? undefined : 'single'}
       borderTop={false}
       borderBottom={false}
       borderRight={false}
       borderColor={isError ? 'error' : isRunning ? 'accent' : 'subtle'}
-      paddingX={1}
-      paddingY={1}
+      paddingX={inlineSummary ? 0 : 1}
+      paddingY={inlineSummary ? 0 : 1}
       marginTop={marginTopOnTurn ? 1 : 0}
       width="100%"
       onClick={onClick}
       // Only selection paints a highlight; the configured treatment applies
       // to an ordinary card. Diff line tints stay - they are content, not chrome.
-      backgroundColor={isSelected ? 'messageActionsBackground' : hoverTint ? 'toolCardBackground' : ordinaryBackground}
+      backgroundColor={isSelected ? 'messageActionsBackground' : inlineSummary ? undefined : hoverTint ? 'toolCardBackground' : ordinaryBackground}
       onMouseEnter={interactive ? () => setHovered(true) : undefined}
       onMouseLeave={interactive ? () => setHovered(false) : undefined}
     >
       <Box flexDirection="column" flexGrow={1} minWidth={0}>
         <Box flexDirection="row" flexWrap="nowrap" minWidth={verbose ? minWidth : 0}>
-          <ToolUseLoader
-            shouldAnimate={isRunning}
-            isUnresolved={isRunning}
-            isError={isError}
-            toolName={tool.name}
-          />
-          <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} folded={foldedHeader} displayArgs={displayArgs} argsLanguage={argsLanguage} nameColor={toolNameColor(tool.name)} filePath={filePath} onOpenFile={onOpenFile} metaTooltip={() => toolCardMetaTooltip(tool, isRunning, isError)} headerTextBudget={headerTextBudget} compact={!verbose} headerColor={isError ? 'error' : 'text'} />
-          {!isRunning && (
+          {inlineSummary && !isRunning ? (
+            <Text color={hovered ? 'text' : 'inactive'}>{view?.card === 'search' || tool.name === 'grep' || tool.name === 'glob' ? '* ' : '→ '}</Text>
+          ) : (
+            <ToolUseLoader
+              shouldAnimate={isRunning}
+              isUnresolved={isRunning}
+              isError={isError}
+              toolName={tool.name}
+            />
+          )}
+          <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} folded={foldedHeader} displayArgs={displayArgs} argsLanguage={argsLanguage} nameColor={toolNameColor(tool.name)} filePath={filePath} onOpenFile={onOpenFile} metaTooltip={() => toolCardMetaTooltip(tool, isRunning, isError)} headerTextBudget={headerTextBudget} compact={!verbose} headerColor={isError ? 'error' : inlineSummary && !hovered && !isRunning ? 'inactive' : 'text'} />
+          {!isRunning && !inlineSummary && (
             // flexShrink={0}: the elapsed chip is two cells of chrome and must
             // never be the thing that yields. Without it a long title pushed
             // the chip past the row and `· 0s` wrapped onto a second line,
