@@ -280,6 +280,7 @@ dsh-tui
 |---|---|---|
 | `/provider` | 无 | 交互式管理模型提供方（添加 / 编辑 / 删除；标准 profile 的账号登录含 DSH 0.2.0-rc.1+ 的 DeepSeek，以及 ChatGPT/Codex / Claude / Grok；宿主 pi-ai 支持时还有 OpenAI 直连 / Meta Muse） |
 | `/auth` | `status` / `login [provider]` / `logout <provider>` | 查看账号状态、登录或登出（DeepSeek 用 `deepseek-account`；pi-ai 订阅用 `openai-codex` / `anthropic` / `xai`，较新 pi-ai 另有 `openai` / `meta`） |
+| `/fast` | 无 / `toggle` / `on` / `off` / `status` | OAuth 插件注册的 fast 开关：空参/`toggle` 切换，`on` 设 `priority`，`off` 设 `default`，`status` 报告；下一次模型请求生效，`effort` 不变 |
 | `/login` | 无 | 凭证状态（来源、存储可写性、base URL；OAuth 模块挂载时另列账号状态） |
 | `/logout` | 无 | 登出说明（env 来源需删环境变量并重启） |
 | `/permission` | 无 / `<preset>` / `status` | 查看/切换权限预设与策略（无参打开选择器） |
@@ -290,6 +291,12 @@ dsh-tui
 | `/plugins` | `check <dsh-plugin.json 路径>` | 插件诊断：信任横幅 + host 描述符 + 授权矩阵 + 台账；`check` 校验清单文件并给兼容状态 |
 | `/update` | 无 | 更新 TUI 并自动重启恢复会话（仅 `dsh --profile` 启动可用；回合运行中会拒绝） |
 | `/terminal-setup` | 无 | 终端配置建议（Windows Terminal ≥110 列、粘贴键位） |
+
+`/fast` 作用于当前 TUI 进程中本插件自注册的所有支持 OAuth 路由
+（`openai-codex-responses` / `openai-responses`），不限当前模型或会话；其他协议与
+其他插件的路由不变。开关不持久化，重启恢复可选的 `config.serviceTier` 启动默认，
+未配置时关闭/使用供应商默认。未挂载 OAuth 入口时不提供命令；入口已挂载但没有成功
+注册支持路由时明确报不可用错误。后端决定档位是否接受及额度。详见[内置订阅 OAuth](configuration.md#内置订阅-oauth)。
 
 ### 3.5 技能
 

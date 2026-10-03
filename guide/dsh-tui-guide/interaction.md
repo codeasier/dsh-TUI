@@ -70,12 +70,12 @@
 | 按键 | 行为 |
 | --- | --- |
 | `Left/Right` | 按字符移动光标；**有选区时坍缩到选区对应边缘** |
-| `Ctrl+Left/Right` | 按单词移动 |
+| `Ctrl+Left/Right` / `Alt+Left/Right` / `Alt+B/F` | 按 Unicode 词边界移动，支持无空格中文；macOS 的 `Option` 即 `Alt`；有选区时先坍缩到对应边缘 |
 | `Home/End` | 移到当前逻辑行首/行尾 |
 | `Ctrl+A` / `Ctrl+E` | `Ctrl+A` 打开子代理面板（编辑器内 `Mod+A` 仍移到行首）；`Ctrl+E` 移到行尾，还会展开或折叠长会话中隐藏的旧消息 |
 | `Ctrl+U` | 删除光标前内容 |
 | `Ctrl+K` | 删除光标后内容 |
-| `Ctrl+W` | 删除前一个单词 |
+| `Ctrl+W` | 删除前一个 Unicode 分词单元及其尾随空白；支持无空格中文，标点和 emoji 是独立单元；有选区时只删除选区 |
 | `Backspace` / `Delete` | 删前一 / 后一字符；**有选区时删除整个选区** |
 | 打字 | **有选区时替换整个选区**，光标落在插入文本之后 |
 
@@ -657,6 +657,7 @@ Windows `dsh-tui.cmd --resume` 使用 `~/.dsh-tui/resume.txt` 中最后选择的
 **模型与显示**
 
 - `/model`、`/effort`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`。
+- `/fast`：本插件 OAuth 入口注册的交互 fast 开关，语法与范围见下。
 - `/color`：会话强调色。
   - 无参打开调色板选择器，`<名>` 直接设置，`status`/`reset`。
   - 输入框边框 + 右上角会话名标签，按会话保存。
@@ -698,6 +699,17 @@ dsh-TUI 不预装通用技能；技能内容与发现规则由 DSH 及当前组�
 - `/preset <id>` 与 `/preset status` 见配置文档。
 - `/effort` 打开推理强度滑杆（←/→ 实时调整）；`/effort <id>` 直接设定，
   `/effort status` 查看当前档位。
+- `/fast` 或 `/fast toggle` 切换 fast；`/fast on` 设置 `priority`，
+  `/fast off` 设置 `default`，`/fast status` 只报告当前状态。
+  - 下一次模型请求生效，不改变已发出的请求或推理强度 `effort`，无需重启。
+  - 作用于当前 TUI 进程中本插件自注册的所有支持 OAuth 路由
+    （`openai-codex-responses` / `openai-responses`），不限当前会话或模型；
+    其他协议与其他插件注册的路由不受影响。
+  - 不写配置或持久化文件；重启恢复可选的 `config.serviceTier` 启动默认，
+    未配置时关闭/使用供应商默认。交互 `/fast` 优先于启动默认。
+  - 未挂载 OAuth 入口时不提供命令；入口已挂载但没有成功注册支持路由时，
+    明确报不可用错误。后端决定是否接受档位及额度，TUI 不保证加速获准或额外额度。
+    详见[内置订阅 OAuth](configuration.md#内置订阅-oauth)。
 - `/theme <name>` 与 `/theme status` 见主题文档。
 - `/permission` 的名册来自 DSH `permissionPresets` registry。
   - 按声明顺序显示，参与补全与 `Shift+Tab` 循环。

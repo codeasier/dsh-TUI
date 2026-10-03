@@ -603,6 +603,7 @@ The command menu merges local commands with the DSH command registry. Type `/` t
   input border + session-name chip at the top-right, per-session; chip off by default, enable
   in `/settings`.
 - `/lang`.
+- `/fast` — interactive fast switch registered by this plugin's OAuth entry; forms and scope below.
 
 **Account and policy**
 
@@ -638,6 +639,20 @@ Additional forms:
 - `/activity status` reports the current choice.
 - `/preset <id>` and `/preset status` are described in the configuration guide.
 - `/effort` opens the reasoning-effort slider (←/→ adjusts live); `/effort <id>` sets a level directly; `/effort status` reports the current one.
+- Bare `/fast` or `/fast toggle` switches fast; `/fast on` sets `priority`,
+  `/fast off` sets `default`, and `/fast status` only reports the current state.
+  - Applies from the next model request, without changing already-sent requests
+    or reasoning `effort`; no restart needed.
+  - Covers all supported OAuth routes registered by this plugin in the current
+    TUI process (`openai-codex-responses` / `openai-responses`), not just the
+    current session or model; other protocols and other plugins' routes are unaffected.
+  - Writes neither config nor persistent files; restart restores the optional
+    `config.serviceTier` startup default (unset: off/provider default).
+    Interactive `/fast` takes precedence over that startup default.
+  - An unmounted OAuth entry does not provide the command; a mounted entry
+    with no successfully registered supported route gives a clear unavailable
+    error. The backend owns tier acceptance and quota; the TUI guarantees
+    neither approval nor additional quota. See [built-in subscription OAuth](configuration.en.md#built-in-subscription-oauth).
 - `/model` opens a two-level picker:
   - A pinned **Recently used** group first — the last 10 switched models, persisted at `~/.dsh-tui/model-recents.json` — then provider groups.
   - `Enter` drills into a group's models, and a single provider with no recents skips straight to the list.
