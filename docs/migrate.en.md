@@ -2,19 +2,19 @@
 
 [Documentation index](README.md) · [简体中文](migrate.md)
 
-Bring Claude Code, Codex, OMP, zcode, and Grok Build conversation histories
+Bring Claude Code, Codex, OMP, zcode, Grok Build, and OpenCode conversation histories
 into the DSH session store. After importing, `/resume` browses and restores
 them by their original working directory — switching agents no longer costs
 your history.
 
 ```sh
-dsh-tui migrate                # list per-agent scannable file counts (writes nothing)
+dsh-tui migrate                # list per-agent candidate-session counts (writes nothing)
 dsh-tui migrate claude-code    # import every Claude Code conversation
 dsh-tui migrate codex --dry-run  # preview what would land, write nothing
 ```
 
 In-TUI equivalent: `/migrate`. Bare `/migrate` opens a **multi-select source
-picker** — one row per agent (checkbox + scannable file count + an "active X
+picker** — one row per agent (checkbox + candidate-session count + an "active X
 min ago" badge, most recently active first): Space toggles, `a` selects
 all/none, Enter opens the **confirmation layer** (one line per checked
 source with its count and the "existing sessions are skipped automatically,
@@ -36,6 +36,52 @@ row. Both entry points share the same import logic and idempotency rules.
 | `omp` | `~/.omp/agent/sessions/` | DSH-lineage store, a near-direct mapping (text and thinking) |
 | `zcode` | `~/.zcode/v2/sessions/` | Single-JSON-object format; only user/assistant text is mapped, `meta.title` becomes the title |
 | `grok-build` | `~/.grok/sessions/` (relocatable via `GROK_HOME`) | Reasoning rows attach to the assistant step that follows; tool calls and results (images as placeholders), compaction summaries, interrupted turns and the `session_summary` title migrate; `<user_query>` and similar wrappers keep only the body; synthetic rows and `<user_info>` do not migrate |
+| `opencode` | `$XDG_DATA_HOME/opencode/*.db` / `OPENCODE_DB` | SQLite v1-compatible sessions verified against 1.18.34; effective context, tools, reasoning, compaction tails and revert boundaries; see limitations below |
+
+## OpenCode support boundary
+
+`dsh-tui migrate opencode` (or `/migrate opencode`) reads local SQLite directly;
+no export command, OpenCode process, credentials or source cleanup is invoked.
+The supported format is the v1-compatible `session`, `message`, `part` schema
+verified against **OpenCode 1.18.34**, commit
+[`aec0b9a6`](https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/core/src/session/sql.ts).
+Other releases are not version-certified: compatible schema is required, and
+unknown schemas or semantic parts are rejected with diagnostics rather than guessed.
+The same release also has native `session_message` / `session_input` storage;
+sessions using those tables are **not supported**, even if legacy rows coexist.
+Their metadata can be browsed, but import explains the limitation. Old JSON
+`storage/` is not imported; a legacy-only store reports that explicitly.
+
+- Default discovery uses `$XDG_DATA_HOME/opencode` (otherwise
+  `~/.local/share/opencode`), including `opencode.db` and `opencode-<channel>.db`.
+  `OPENCODE_DB` selects one database instead; relative paths resolve against the
+  OpenCode data directory, matching OpenCode itself. SQLite takes precedence over leftover JSON data.
+- Reads use read-only SQLite transactions and include committed WAL data; do not
+  copy just the `.db` file from an active OpenCode store. Counts and recent activity
+  come from session rows, not database file counts or mtimes. Each list refresh
+  rereads metadata, so unchanged main-file stats cannot hide WAL updates.
+- Text, readable reasoning, model-call steps and tool call IDs/arguments/results
+  survive. Pending/running tools become interrupted error results, never executions.
+  Pruned output stays `[Old tool result content cleared]`, even if the disk still
+  contains the original output. Provider reasoning signatures are not replayed.
+- Import projects the **effective context**, not the raw export: the last successful
+  compaction summary, its `tail_start_id` retained tail, then subsequent messages.
+  Compacted-away history is omitted, not archived in the imported log. Revert
+  `messageID` / `partID` boundaries exclude undone content; ambiguous boundaries
+  reject the session. Failed compactions do not replace usable history.
+- Child sessions with a session-level `parentID` are excluded. Independent forks
+  import their copied history; assistant-level `parentID` links replies to users,
+  not subagents. Subtask records do not recursively import child sessions.
+- Attachments become safe descriptions where applicable; attachment URIs are never
+  read. Snapshot/patch/retry/agent bookkeeping is not restored; unknown part types
+  fail closed. No credentials, approvals, MCP/plugin instances or filesystem state
+  migrate. This is a one-time snapshot, not two-way synchronization.
+- Malformed, unsupported and oversized sessions are skipped with CLI diagnostics
+  and exit code 1; supported sessions in the same batch still import. A source-tab
+  import reports the selected session's error. Bounds: 32 databases, 10,000 session
+  candidates per scan, 64 MiB / 20,000 messages / 100,000 parts per session, and
+  128 MiB of raw transcript data per bulk discovery. Verification uses synthetic
+  data, not private OpenCode sessions or live model calls.
 
 ## Behavior contract
 
@@ -55,18 +101,20 @@ row. Both entry points share the same import logic and idempotency rules.
   step; an unanswered call gets an empty result, a result with no call is
   dropped and counted, and a call id reused across steps is renamed. On
   resume every tool_call is followed by its tool message. One result keeps
-  at most 64KB (the rest is cut and noted); images always become an
-  `[image]` placeholder.
+  at most 64KB (the rest is cut and noted); images become placeholders or safe
+  descriptions, never attachment reads.
 - **Compaction checkpoints**: a context-compaction boundary in the source is
   written as the same native compaction transaction `/compact` produces. The
   raw events stay in the log; the model sees "summary + what followed", the
-  context the source agent itself continued with.
+  context the source agent itself continued with. OpenCode instead imports only
+  its effective snapshot, as described above.
 - **Injection filtering**: machine text a harness writes into the user role
   (environment blocks, AGENTS.md instructions, system reminders, local-command
   echoes) opens no turn and never titles a session; `<user_query>`, pasted
   envelopes and similar wrappers keep only their body. Model-visible machine
   context mid-turn (Claude's `isMeta`, Codex sub-agent reports) is kept as
-  the next step's input.
+  the next step's input. OpenCode instead follows its own model projection,
+  retaining non-ignored user text, including synthetic context.
 - **Titles**: a title the source owns (`/rename`, generated titles,
   `session_summary`, `meta.title`) is written as `session/title`; without
   one the first real prompt serves as a fallback but is not written, so DSH
@@ -106,15 +154,15 @@ with conversations, and selecting one **imports just that conversation** and
 opens it.
 
 - Parsing is exactly `/migrate`'s, and the session id is derived from the source conversation the same way: both entries land a conversation on the same DSH session, and one already imported simply opens.
-- Opening the session screen only checks whether each source has any conversation (each source's walk stops at its first candidate); a source's list is read when its tab is opened, from a summary scan (file heads/tails only). Within one run an unchanged conversation is not read again; no cache file is written.
+- Opening the session screen only probes source presence; lists load when their tabs open. File sources scan heads/tails and reuse unchanged summaries. OpenCode queries session metadata from a fresh SQLite snapshot on each refresh; no cache file is written.
 - A conversation whose working directory no longer exists is not imported; the screen says so, and `/migrate` still imports it in bulk.
 - The tabs do not change how `/migrate` or `dsh-tui migrate` behave.
 
 ## Smart migration hint
 
 About 12 seconds after the TUI starts, one background pass checks whether any
-source saw file writes within the last 20 minutes (newest file mtime per
-source) and surfaces a single notification: "Just came from <agent>?
+source was active within the last 20 minutes (newest file mtime, or OpenCode
+session-row activity) and surfaces a single notification: "Just came from <agent>?
 /migrate imports it quickly". The scan is off the render path (sub-second)
 and fires at most once per session; a source with no data stays silent. While
 the hint is up, Enter (with an empty prompt) jumps straight into the picker
@@ -127,8 +175,8 @@ with that source pre-checked; any other key dismisses it.
 - **`needs the profile's compiled copy`**: the profile's compiled output is
   missing or too old — run `dsh-tui update` first.
 - **Imports fewer than the scan count**: the scan count matches candidate
-  files by name; import additionally filters unreadable and empty
-  conversations, so landing slightly lower is expected.
+  files by name, or OpenCode session rows; import additionally filters unreadable,
+  unsupported and empty conversations, so landing lower is expected.
 - **Fresh `DSH_HOME` first run reports installation rejected**: profile
   bootstrap hit a stale npm tarball; upgrading dsh heals it, or use an
   existing profile meanwhile.
@@ -141,7 +189,7 @@ with that source pre-checked; any other key dismisses it.
 - Parsing is separate from IO: `adapters/<source>.parse.ts` are pure
   functions (raw text → turn model) over shared rules in `parse/` (jsonl
   bad-line counting, injection recognition and unwrapping, title
-  normalization, tool-call pairing); adapters only discover files. OMP still
+  normalization, tool-call pairing); adapters own storage discovery and reads. OMP still
   produces a role list, folded into turns mechanically by `fromRoleTurns`.
 - grok's `synthetic_reason` filter: only default and explicitly `human`
   user rows migrate; the summary row among `compaction_meta` becomes a
@@ -163,4 +211,7 @@ Implementation and verification live in `src/dsh-adapter/migrate/`,
 fixtures), `scripts/verify-migrate.mjs` (event synthesis and the round trip
 through the official read chain, wire legality and compaction checkpoints
 included) and `scripts/verify-migrate-command.tsx` (the `/migrate` interaction
-regression, mounted against the real Chat screen).
+regression, mounted against the real Chat screen). OpenCode-specific coverage is in
+`scripts/verify-migrate-opencode-parse.mjs`, `scripts/verify-migrate-opencode-db.mjs`
+and `scripts/verify-migrate-opencode.mjs` (synthetic semantic, SQLite/WAL and
+official persistence/continuation fixtures).

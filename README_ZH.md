@@ -131,23 +131,24 @@ TUI 启动后会在后台检查新版本，不阻塞首帧。有更新时输入 
 
 ### 迁移其他编程代理的对话（`dsh-tui migrate`）
 
-把 Claude Code、Codex、OMP、zcode、Grok Build 的本地对话历史导入 DSH 会话库，之后用 `/resume` 按原工作目录浏览与恢复：
+把 Claude Code、Codex、OMP、zcode、Grok Build、OpenCode 的本地对话历史导入 DSH 会话库，之后用 `/resume` 按原工作目录浏览与恢复：
 
 ```sh
 dsh-tui migrate                # 列出各代理可迁移的对话数量（不写入）
-dsh-tui migrate claude-code    # 导入 Claude Code 的全部对话（codex / omp / zcode / grok-build 同理）
+dsh-tui migrate claude-code    # 导入 Claude Code 的全部对话（codex / omp / zcode / grok-build / opencode 同理）
 dsh-tui migrate codex --dry-run  # 只预览将落盘的内容，不写入
 ```
 
 - **只读源**：迁移只读取源代理的本地存储，绝不修改；产物经官方 `JsonlSessionPersistence` 后端写入 `$DSH_HOME/sessions`——导入的会话是一等公民（可打开、可续聊）
 - **幂等**：同一源对话命中同一确定性 UUID——重复导入跳过已存在项，不堆叠重复
-- **保留结构**：按轮次还原用户/助手消息、思考过程（reasoning）、工具调用及其结果，以及源里的上下文压缩（写为原生压缩检查点）；harness 注入的机器文本不开轮。导入的会话可以直接接着做事
+- **保留结构**：按轮次还原用户/助手消息、思考过程（reasoning）、工具调用及其结果，以及源里的上下文压缩（原生压缩检查点，或 OpenCode 的有效上下文快照）；过滤遵循各源的模型上下文规则。导入的会话可以直接接着做事
 TUI 内浏览：会话管理界面（`/resume`）为每个有会话的代理显示一个标签，选中一条即只导入这一条并直接打开。
 TUI 内：`/migrate`（或 `/migrate <agent> [--dry-run]`）以子进程运行同一导入，经通知流汇报，不卡界面。
 CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一套导入。
 完整指南：[会话迁移](docs/migrate.md)。
 
-- pi / opencode 等其他代理经 adapter 注册表逐步扩展；grok-build 支持读 `GROK_HOME` 环境变量
+- **OpenCode**：支持按 1.18.34 核对的 `session/message/part` SQLite 格式，处理 WAL 更新、压缩保留尾部与撤销边界。暂不支持原生 `session_message/session_input` 与旧 JSON 存储，跳过的数据有明确诊断。遵循 `XDG_DATA_HOME` / `OPENCODE_DB`；channel 数据库与限制见指南。
+- pi 等其他代理经 adapter 注册表逐步扩展；grok-build 支持读 `GROK_HOME` 环境变量
 
 **VS Code**：用集成终端，或用 `dsh-tui-vscode` 扩展。见 [VS Code 使用指南](docs/vscode.md)。**Herdr**：在 [Herdr](https://herdr.dev) 窗格运行 `dsh-tui`，经其本地集成 API 报告 `idle` / `working` / `blocked`。
 

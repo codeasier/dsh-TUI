@@ -155,23 +155,24 @@ Safe mode: [Getting started](docs/getting-started.en.md).
 
 ### Importing conversations from other agents (`dsh-tui migrate`)
 
-Bring Claude Code, Codex, OMP, zcode, or Grok Build conversation histories into the DSH session store, then browse and resume them by their original working directory via `/resume`:
+Bring Claude Code, Codex, OMP, zcode, Grok Build, or OpenCode conversation histories into the DSH session store, then browse and resume them by their original working directory via `/resume`:
 
 ```sh
 dsh-tui migrate                # list importable counts per agent (writes nothing)
-dsh-tui migrate claude-code    # import every Claude Code conversation (likewise codex / omp / zcode / grok-build)
+dsh-tui migrate claude-code    # import every Claude Code conversation (likewise codex / omp / zcode / grok-build / opencode)
 dsh-tui migrate codex --dry-run  # preview what would land, write nothing
 ```
 
 - **Read-only source**: migration only reads the foreign agent's local store; artifacts are written through the official `JsonlSessionPersistence` backend, so imported sessions are first-class (openable, continuable).
 - **Idempotent**: one deterministic UUID per source conversation — re-importing skips what is already present instead of stacking duplicates.
-- **Structure preserved**: user/assistant messages, reasoning traces, tool calls with their results, and the source's context compactions (as native compaction checkpoints) are rebuilt turn by turn; harness-injected machine text opens no turn. An imported session can pick the work straight up.
+- **Structure preserved**: user/assistant messages, reasoning traces, tool calls with their results, and the source's context compactions (native checkpoints, or OpenCode’s effective-context snapshot) are rebuilt turn by turn; filtering follows each source’s model context. An imported session can pick the work straight up.
 In-TUI browsing: the session screen (`/resume`) shows a tab per agent that has conversations; picking one imports just that conversation and opens it.
 In-TUI: `/migrate` (optionally `/migrate <agent> [--dry-run]`) runs the same import in a child process and reports through the notification flow.
 CLI alternative: `dsh-tui migrate ...` from any shell runs the same import.
 Full guide: [Session migration](docs/migrate.en.md).
 
-- More agents (pi, opencode, …) extend the adapter registry as adapters land; grok-build reads `GROK_HOME` when set.
+- **OpenCode**: supports the `session/message/part` SQLite format verified against 1.18.34, including WAL updates, retained compaction tails and revert boundaries. Native `session_message/session_input` and old JSON storage are not supported; diagnostics explain skipped data. Uses `XDG_DATA_HOME` / `OPENCODE_DB`; see the guide for channel databases and limitations.
+- More agents (pi, …) extend the adapter registry as adapters land; grok-build reads `GROK_HOME` when set.
 
 **VS Code**: use the integrated terminal or the `dsh-tui-vscode` extension. See [VS Code guide](docs/vscode.en.md). **Herdr**: run `dsh-tui` in a [Herdr](https://herdr.dev) pane; `idle` / `working` / `blocked` are reported through its local integration API.
 

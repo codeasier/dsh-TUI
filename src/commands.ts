@@ -62,7 +62,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'settings', description: 'View and edit plugin settings' },
   { name: 'star', description: 'Star this project on GitHub (one-key via the gh CLI)' },
   { name: 'doctor', description: 'Run environment checks' },
-  { name: 'migrate', description: 'Import conversations from other coding agents (claude-code / codex / omp / zcode / grok-build)' },
+  { name: 'migrate', description: 'Import conversations from other coding agents (claude-code / codex / omp / zcode / grok-build / opencode)' },
   { name: 'init', description: 'Create AGENTS.md in the working directory' },
   { name: 'agents', description: 'Show subagents of this session' },
   { name: 'jobs', description: 'Show background jobs of this session' },
