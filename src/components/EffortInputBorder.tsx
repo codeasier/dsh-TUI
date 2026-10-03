@@ -1,5 +1,5 @@
 /**
- * Filled composer surface with a single accent rail. The permanent top and
+ * Filled composer surface with a heavy accent rail. The permanent top and
  * bottom rows preserve the prompt's height and suggestion-overlay anchor.
  * Effort ignition pulses the rail while EffortTierBadge handles the tier name;
  * only colours change, and the shared clock is subscribed only while active.
@@ -87,7 +87,7 @@ export function EffortInputBorder({
       width="100%"
       flexShrink={0}
       backgroundColor="userPromptBackground"
-      borderStyle="single"
+      borderStyle="bold"
       borderColor={railColor}
       borderTop={false}
       borderBottom={false}

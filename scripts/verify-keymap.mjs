@@ -270,12 +270,12 @@ const promptText = () => {
   // Anchored at line start: the input border rows and hint lines can carry
   // a mid-line '>', but only the prompt row carries the '❯' glyph.
   //
-  // The row now begins with the ⌸ session-entry control, which sits BEFORE the
+  // The row begins with the heavy rail, then the ⌸ session entry BEFORE the
   // ❯ caret, so the anchor has to allow that leading cell or `^[❯]` never
   // matches and every draft reads as empty. The EMPTY prompt renders box-drawing
   // decoration on the same row and the row ends with the ⛶ expand-editor
   // affordance — strip those before comparing content, along with the ⌸ itself.
-  const match = screen().match(/^\s*⌸?\s*[❯]\s*(.*)$/m)
+  const match = screen().match(/^\s*┃\s*⌸?\s*[❯]\s*(.*)$/m)
   const raw = match === null ? '' : (match[1] ?? '')
   return raw.replace(/[╭╮╰╯─│═║⛶⌸]+/g, '').trim()
 }

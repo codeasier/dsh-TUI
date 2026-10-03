@@ -129,7 +129,7 @@ function gutterRange(): [number, number] {
   const top = /^❯/.test(lines[0]!.trimEnd()) || bottomPillVisible() ? 1 : 0
   let boxTop = -1
   for (let y = ROWS - 1; y >= 0; y--) {
-    if (/^\s*│⌸ /.test(lines[y]!)) { boxTop = y - 1; break }
+    if (/^\s*┃⌸ /.test(lines[y]!)) { boxTop = y - 1; break }
   }
   return [top, boxTop >= 0 ? boxTop - 2 : ROWS - 4]
 }

@@ -83,6 +83,15 @@ for (const theme of ['dark', 'light'] as const) {
           const card = rowOf('TOOL_MARK'), input = rowOf('⌸')
           return card >= 0 && input >= 0 && edges(card, toolBg) !== '' && edges(card, toolBg) === edges(input - 1, inputBg)
         }))
+        check(`${label}: heavy yellow composer rail differs from the thin tool border`, await settled(() => {
+          const card = rowOf('TOOL_MARK'), input = rowOf('⌸'), bounds = edges(card, toolBg)
+          if (card < 0 || input < 0 || bounds === '') return false
+          const left = Number(bounds.split(':')[0])
+          const cellAt = (y: number) => term.buffer.active.getLine(term.buffer.active.baseY + y)?.getCell(left)
+          const yellow = theme === 'dark' ? 0xffdf80 : 0xa67600
+          return cellAt(card)?.getChars() === '│' && [input - 1, input, input + 1].every(y =>
+            cellAt(y)?.getChars() === '┃' && cellAt(y)?.getFgColor() === yellow)
+        }))
         const draft = '中文草稿'.repeat(12) + 'DRAFT_END'
         stdin.write(`\x1b[200~${draft}\x1b[201~`)
         check(`${label}: wrapped CJK draft tail and aligned edges remain visible`, await settled(() => {

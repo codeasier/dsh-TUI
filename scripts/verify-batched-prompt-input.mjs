@@ -265,13 +265,13 @@ check(
   'consecutive Option+Enter keeps both blank prompt lines visible',
   await settled(() => {
     const lines = viewportLines(term)
-    const first = lines.findIndex(line => /^\s*│\s*❯\s*a/u.test(line))
+    const first = lines.findIndex(line => /^\s*┃\s*❯\s*a/u.test(line))
     return first > 0
-      && /^\s*│\s*$/u.test(lines[first - 1] ?? '')
-      && /^\s*│\s*$/u.test(lines[first + 1] ?? '')
-      && /^\s*│\s*b/u.test(lines[first + 2] ?? '')
-      && /^\s*│\s*$/u.test(lines[first + 3] ?? '')
-      && !/^\s*│/u.test(lines[first + 4] ?? '')
+      && /^\s*┃\s*$/u.test(lines[first - 1] ?? '')
+      && /^\s*┃\s*$/u.test(lines[first + 1] ?? '')
+      && /^\s*┃\s*b/u.test(lines[first + 2] ?? '')
+      && /^\s*┃\s*$/u.test(lines[first + 3] ?? '')
+      && !/^\s*┃/u.test(lines[first + 4] ?? '')
   }),
   viewportLines(term).join('\n'),
 )

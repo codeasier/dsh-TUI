@@ -394,11 +394,11 @@ function inputRange(app: Harness): { top: number; bottom: number } | null {
   const rows = screen(app)
   // Chat always provides the session entry; requiring it excludes the
   // selected ❯ row inside an open slash-completion card.
-  const first = rows.findIndex(row => /^\s*│\s*⌸\s*❯/u.test(row))
-  if (first < 1 || !/^\s*│/u.test(rows[first - 1])) return null
+  const first = rows.findIndex(row => /^\s*┃\s*⌸\s*❯/u.test(row))
+  if (first < 1 || !/^\s*┃/u.test(rows[first - 1])) return null
   let bottom = first
-  while (bottom + 1 < rows.length && /^\s*│/u.test(rows[bottom + 1])) bottom += 1
-  if (bottom === first || !/^\s*│\s*$/u.test(rows[bottom])) return null
+  while (bottom + 1 < rows.length && /^\s*┃/u.test(rows[bottom + 1])) bottom += 1
+  if (bottom === first || !/^\s*┃\s*$/u.test(rows[bottom])) return null
   return { top: first - 1, bottom }
 }
 
@@ -428,7 +428,7 @@ function promptRow(app: Harness): string {
  *  ❯ prompt, and a vim badge sits before the text when the mode is on. */
 function draftText(app: Harness): string {
   return promptRow(app)
-    .replace(/^\s*│\s*/, '')
+    .replace(/^\s*┃\s*/, '')
     .replace(/^[⌸⌂]\s*/, '')
     .replace('❯', '')
     .replace('⛶', '')

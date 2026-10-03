@@ -147,7 +147,7 @@ async function verify(fullscreen: boolean, columns: number, entry: 'slash' | 'es
   const shows = (text: string) => viewportLines(terminal).some(line => line.includes(text))
   /** Match the composer row, not transcript text: its left rail precedes
    * the optional session-entry control and the effort/caret glyph. */
-  const promptShows = (text: string) => viewportLines(terminal).some(line => /^\s*│\s*(?:⌸\s*)?❯/u.test(line) && line.includes(text))
+  const promptShows = (text: string) => viewportLines(terminal).some(line => /^\s*┃\s*(?:⌸\s*)?❯/u.test(line) && line.includes(text))
   const enter = async () => {
     await sleep(120) // 固定窗:墙钟 Enter deduplication is 80 ms in both Chat and PromptInput
     stdin.write('\r')

@@ -83,7 +83,7 @@ function check(name: string, condition: boolean, detail = ''): void {
 /** Composer top padding row, immediately above the session-entry control. */
 function borderRow(): { y: number; text: string } | undefined {
   const lines = viewportLines(term, ROWS)
-  const input = lines.findLastIndex(line => /^\s*│⌸ /.test(line))
+  const input = lines.findLastIndex(line => /^\s*┃⌸ /.test(line))
   const y = input - 1
   return y < 0 ? undefined : { y, text: lines[y]! }
 }
@@ -98,7 +98,7 @@ function borderFgColor(): number | undefined {
     const cell = line.getCell(col)
     if (cell === undefined) continue
     const ch = cell.getChars()
-    if (ch === '│') {
+    if (ch === '┃') {
       const fg = cell.getFgColor()
       if (fg !== 0xffffff) return fg
     }
@@ -244,7 +244,13 @@ const instance = await render(
 // ── 1. session 名标签显示在输入框顶边框右上角（开关开启时）────────────
 check('输入框顶边框存在', await settled(() => borderRow() !== undefined))
 check('顶部留白右侧渲染会话名标签（右侧四列留白）', await settled(() => / 我的会话 {4}$/.test(borderRow()?.text ?? '')), borderRow()?.text ?? '')
-check('未设置颜色时边框为主题 promptBorder 灰蓝', await settled(() => borderFgColor() === 0x55606f), `0x${borderFgColor()?.toString(16) ?? '?'}`)
+check('未设置颜色时粗条带为醒目黄色', await settled(() => borderFgColor() === 0xffdf80), `0x${borderFgColor()?.toString(16) ?? '?'}`)
+channel.mode.plan = true
+channel.emit()
+check('计划模式覆盖默认黄色条带', await settled(() => borderFgColor() === 0x7fae99))
+channel.mode.plan = false
+channel.emit()
+check('退出计划模式恢复黄色条带', await settled(() => borderFgColor() === 0xffdf80))
 
 // ── 1b. 开关关闭时标签隐藏（默认关，settings `promptSessionLabel`）────
 channel.promptSessionLabel = false
@@ -291,7 +297,7 @@ stdin.write('\r')
 await settle(() => screenText().includes('已清除会话颜色'))
 check('/color reset 调用 setSessionColor(\'\')', channel.setColorCalls.length === 2 && channel.setColorCalls[1] === '', JSON.stringify(channel.setColorCalls))
 check('会话颜色清空', channel.sessionColor === '', channel.sessionColor)
-check('边框恢复主题色', await settled(() => borderFgColor() === 0x55606f), `0x${borderFgColor()?.toString(16) ?? '?'}`)
+check('颜色重置后恢复默认黄色条带', await settled(() => borderFgColor() === 0xffdf80), `0x${borderFgColor()?.toString(16) ?? '?'}`)
 
 // ── 5. 无参 /color 打开调色板选择器，方向键 + Enter 应用 ──────────────
 stdin.write('/color')

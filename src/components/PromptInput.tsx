@@ -3884,14 +3884,14 @@ export function PromptInput({
           </Box>
         </Box>
       )}
-      {/* Filled composer block: the left rail retains session/plan accents
-          and effort ignition; permanent padding rows keep overlay anchors. */}
+      {/* Heavy yellow composer rail; session/plan accents and effort ignition
+          still override it. Permanent padding rows keep overlay anchors. */}
       <EffortInputBorder
         effort={channel.reasoningEffort}
         levels={channel.effortLevels}
         columns={columns}
         onLight={isLightThemeActive(themeName)}
-        idleColor={promptAccent}
+        idleColor={channel.mode.plan === true || sessionAccent !== undefined ? promptAccent : 'userPromptLabel'}
         topRightLabel={topRightLabel}
       >
         <Box flexDirection="row" alignItems="flex-start" width="100%">

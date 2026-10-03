@@ -159,7 +159,7 @@ function railRange(): [number, number] {
   const top = headerVisible() ? 1 : 0
   let boxTop = -1
   for (let y = ROWS - 1; y >= 0; y--) {
-    if (/^\s*│⌸ /.test(lines[y]!)) { boxTop = y - 1; break }
+    if (/^\s*┃⌸ /.test(lines[y]!)) { boxTop = y - 1; break }
   }
   return [top, boxTop >= 0 ? boxTop - 2 : ROWS - 4]
 }

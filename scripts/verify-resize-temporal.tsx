@@ -116,7 +116,7 @@ function doResize(app: { stdout: any; term: typeof XTerm.prototype }, w: number,
 // ================= 1+2. 时间稳定性 & 往返循环 =================
 const app = await mountChat(makeRows())
 const composerY = (lines: string[]) => {
-  const input = lines.findLastIndex(line => /^\s*│⌸ /.test(line))
+  const input = lines.findLastIndex(line => /^\s*[│┃]⌸ /.test(line))
   return input < 0 ? -1 : input - 1
 }
 const sentinelY = (lines: string[]) => lines.findIndex(l => l.includes('SENTINEL-TAIL'))
