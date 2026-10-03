@@ -16,8 +16,8 @@
  *   7. 自定义规格：`NxM` 解析/边界/规范化单元检查，3x1 与单值 5（→5x1）
  *      实时重布局，非法值回退 normal；
  *   8. 出血契约：页面级分割线（bleed）自第 0 列画满整个终端、文本仍在
- *      第 3 列；Chat 冒烟里滚动轨贴 98/99 列（右缘），转录文本不越
- *      内容列（0/1/2 列恒空白）；
+ *      第 3 列；独立 prompt 默认不出血，竖条留在第 3 列；Chat prompt
+ *      竖条出血至第 1 列、pointer 第 3 列、文字第 5 列，滚动轨贴 98/99 列；
  *   9. 对照组（无 PageMargin）：内容仍全宽、inset=0 —— 既有 verify
  *      直接挂 Chat 的「全宽」契约不变。
  *
@@ -157,12 +157,14 @@ check('恢复 normal：内容区回到 34x10', screenLines().some(l => l.include
 // ── 出血（full-bleed）契约：结构线直通终端边缘，文本留在内容列 ──
 // 页面级分割线从第 0 列画到最后一列；文本行仍从内容列开始。
 const { Divider } = await import('../src/components/design-system/Divider.js')
+const { UserPromptMessage } = await import('../src/components/messages/UserPromptMessage.js')
 function BleedProbe() {
   return (
     <Box flexDirection="column" flexGrow={1} width="100%">
       <Text>{'line-content'}</Text>
       <Divider bleed />
       <Text>{'tail'}</Text>
+      <UserPromptMessage text={'standalone\n独立续行'} marginTopOnTurn={false} />
     </Box>
   )
 }
@@ -192,7 +194,20 @@ check('分割线出血：─ 行自第 0 列画满 40 列', linesBNow.some(l => 
 check('分割线出血：文本行仍在第 3 列（内容留边距）', linesBNow.some(l => l.includes('line-content') && l.startsWith('   line-content')), JSON.stringify(linesBNow.find(l => l.includes('line-content'))))
 check('分割线出血：行高仍占 1 行（flow 不塌）', linesBNow.filter(l => l.trimStart() === '─'.repeat(COLS)).length >= 1)
 
-// ── Chat 冒烟：滚动轨贴右缘（98/99 列），转录文本不越内容列 ──
+const standaloneRow = linesBNow.findIndex(l => l.includes('standalone'))
+const cellB = (x: number, y: number) => termB.buffer.active.getLine(termB.buffer.active.baseY + y)?.getCell(x)
+check('独立 prompt：默认不出血，竖条第 3 列、pointer 第 5 列、文字第 7 列',
+  standaloneRow >= 0 && linesBNow[standaloneRow]!.startsWith('   ┃ ❯ standalone'))
+check('独立 prompt：续行只有两格 pointer 缩进，竖条跨上下 padding 连续且为黄色',
+  linesBNow[standaloneRow + 1]?.startsWith('   ┃   独立续行') === true &&
+  [standaloneRow - 1, standaloneRow, standaloneRow + 1, standaloneRow + 2].every(y =>
+    cellB(3, y)?.getChars() === '┃' && cellB(3, y)?.getFgColor() === 0xffdf80) &&
+  [standaloneRow - 1, standaloneRow + 2].every(y => linesBNow[y]?.trim() === '┃'))
+check('独立 prompt：表面留在内容区（3..36），左右页边距保留会话底色',
+  [3, 36].every(x => cellB(x, standaloneRow)?.getBgColor() === 0x303030) &&
+  [0, 1, 2, 37, 38, 39].every(x => cellB(x, standaloneRow)?.getBgColor() === 0x191919))
+
+// ── Chat 冒烟：滚动轨贴右缘（98/99 列），prompt 表面与输入框共享出血边缘 ──
 const { Chat } = await import('../src/screens/Chat.js')
 const { QuestionStore } = await import('../src/dsh-adapter/questions.js')
 const { LOCAL_COMMANDS, completeCommands } = await import('../src/commands.js')
@@ -243,23 +258,43 @@ function cellAtC(y: number, col: number): string {
 function linesC(): string[] {
   return Array.from({ length: CHAT_ROWS }, (_, y) => termC.buffer.active.getLine(termC.buffer.active.baseY + y)?.translateToString(true) ?? '')
 }
-await settle(() => linesC().some(l => l.includes('▌ ❯')))
-// 固定窗:待迁移 等整帧（含滚动轨）画完；同一个窗口服务下面 4 条断言与
+await settle(() => linesC().some(l => l.includes('┃ ❯')))
+// 固定窗:待迁移 等整帧（含滚动轨）画完；同一个窗口服务下面布局断言与
 // railRows 快照，拆成单条 settled 会改语义
 await sleep(250)
 const railRows = Array.from({ length: CHAT_ROWS }, (_, y) => cellAtC(y, 98) !== '' || cellAtC(y, 99) !== '')
-// 转录里的用户回合是 `▌ ❯ …`（只有机器活动缩进），左边距的锚点就是那条
-// 竖条：它必须落在第 3 列——输入框的 `❯` 前面还有 `⌸ `，不是边距信号。
-const promptRow = linesC().findIndex(l => l.includes('▌ ❯'))
-const promptCol = promptRow >= 0 ? linesC()[promptRow]!.indexOf('▌') : -1
-check('Chat：用户回合竖条在第 3 列（内容不越左缘）', promptCol === 3, `col=${promptCol}`)
+// 转录 prompt 的边框与输入框表面出血到第 1 列；pointer 与正文分别在 3/5 列。
+const promptRow = linesC().findIndex(l => l.includes('┃ ❯'))
+const promptLine = linesC()[promptRow] ?? ''
+const promptCol = promptLine.indexOf('┃')
+const cellC = (x: number, y: number) => termC.buffer.active.getLine(termC.buffer.active.baseY + y)?.getCell(x)
+check('Chat：用户回合竖条第 1 列、pointer 第 3 列、正文第 5 列',
+  promptCol === 1 && promptLine.indexOf('❯') === 3 && promptLine.indexOf('问题') === 5,
+  `rail=${promptCol} pointer=${promptLine.indexOf('❯')} text=${promptLine.indexOf('问题')}`)
+check('Chat：黄色粗竖条连续跨越文字与上下各一行 padding',
+  [promptRow - 1, promptRow, promptRow + 1].every(y =>
+    cellC(1, y)?.getChars() === '┃' && cellC(1, y)?.getFgColor() === 0xffdf80) &&
+  [promptRow - 1, promptRow + 1].every(y => linesC()[y]?.trim() === '┃'))
+const composerRow = linesC().findIndex(l => l.includes('⌸'))
+const surfaceEdgesC = (y: number) => Array.from({ length: CHAT_COLS }, (_, x) => x).filter(x =>
+  cellC(x, y)?.getBgColor() === 0x303030)
+check('Chat：prompt 文字/padding 与输入框表面同宽（1..97）且底色一致',
+  composerRow >= 0 && [promptRow - 1, promptRow, promptRow + 1, composerRow].every(y => {
+    const edges = surfaceEdgesC(y)
+    return edges.length === CHAT_COLS - 3 && edges[0] === 1 && edges.at(-1) === CHAT_COLS - 3
+  }))
+check('Chat：prompt 左一格/右两格 padding 不写文字',
+  [2, CHAT_COLS - 4, CHAT_COLS - 3].every(x => cellAtC(promptRow, x).trim() === '' &&
+    cellC(x, promptRow)?.getBgColor() === 0x303030))
 check('Chat：滚动轨在 98/99 列（贴终端右缘）', railRows.some(Boolean))
 check('Chat：右缘 98/99 列只有滚动轨占用（无其他内容越界）',
   Array.from({ length: CHAT_ROWS }, (_, y) => (cellAtC(y, 98) === '' && cellAtC(y, 99) === '') || railRows[y]!).every(Boolean))
-check('Chat：正文留白不越界，只有输入框表面允许出血',
+check('Chat：正文不越左缘，只有输入框图标和 prompt 黄色竖条允许出血',
   Array.from({ length: CHAT_ROWS }, (_, y) => [0, 1, 2].every(x => {
-    const cell = termC.buffer.active.getLine(termC.buffer.active.baseY + y)?.getCell(x)
-    return cellAtC(y, x).trim() === '' || (x > 0 && cell?.getBgColor() === 0x303030)
+    const cell = cellC(x, y)
+    const chars = cellAtC(y, x).trim()
+    return chars === '' || (x > 0 && cell?.getBgColor() === 0x303030 &&
+      (chars === '⌸' || (x === 1 && chars === '┃' && cell.getFgColor() === 0xffdf80)))
   })).every(Boolean))
 
 // 对照组：无 PageMargin 的树 —— 尺寸不收敛、inset=0（verify 直挂契约不变）。

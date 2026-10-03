@@ -8,8 +8,8 @@
  * blank line between everything (user report, 2026-09-30).
  *
  * Contract under test:
- *   1. USER TURN — a full-width band (`userPromptBackground`) whose left edge
- *      is `▌ ❯` at the page-margin column, the turn anchor for scrolling back.
+ *   1. USER TURN — a padded full-width band (`userPromptBackground`) with a
+ *      continuous gold `┃` at the shared panel edge and an inset `❯` pointer.
  *   2. ASSISTANT PROSE — col 0 (page margin only), NO prefix marker.
  *   3. TOOLS — quiet, unrailed summaries; terminal/diff/error output keeps
  *      a full-width surface and continuous border. Thinking has no rail.
@@ -194,14 +194,28 @@ function bandCells(y) {
   return filled
 }
 
-// ── 1. the user turn: band + `▌ ❯` at the page margin ─────────────────────
+const cell = (x, y) => term.buffer.active.getLine(term.buffer.active.baseY + y)?.getCell(x)
+
+// ── 1. the user turn: continuous border + padded shared panel surface ─────
 check('user turn paints', await settled(() => rowOf('清幽灵行') >= 0 && rowOf('记忆已写入。') >= 0))
 const promptIdx = rowOf('清幽灵行')
 const promptLine = lines()[promptIdx] ?? ''
-check('user turn leads with the `▌ ❯` bar at the page margin',
-  promptLine.startsWith(`${' '.repeat(MARGIN)}▌ ${'❯'} `), JSON.stringify(promptLine.slice(0, 12)))
-check('user turn band fills the content width', bandCells(promptIdx) > COLS - MARGIN - 8,
+check('user turn rail bleeds to the panel edge; pointer stays at the prose column',
+  promptLine.startsWith(`${' '.repeat(CARD_EDGE)}┃ ❯ `) && promptLine.indexOf('清') === MARGIN + 2,
+  JSON.stringify(promptLine.slice(0, 12)))
+check('user turn has one top and bottom padding row with a continuous yellow rail',
+  [promptIdx - 1, promptIdx, promptIdx + 1].every(y =>
+    cell(CARD_EDGE, y)?.getChars() === '┃' && cell(CARD_EDGE, y)?.getFgColor() === 0xffdf80) &&
+  [promptIdx - 1, promptIdx + 1].every(y => (lines()[y] ?? '').trim() === '┃'))
+check('user turn band fills the shared panel width', bandCells(promptIdx) === COLS - 3,
   `cells=${bandCells(promptIdx)}`)
+check('user turn padding rows carry the same neutral surface as its text row',
+  [promptIdx - 1, promptIdx, promptIdx + 1].every(y =>
+    bandCells(y) === bandCells(promptIdx) && cell(MARGIN + 10, y)?.getBgColor() === 0x303030))
+check('user turn keeps one left padding cell and two right padding cells',
+  cell(CARD_EDGE + 1, promptIdx)?.getChars().trim() === '' &&
+  [COLS - 4, COLS - 3].every(x => cell(x, promptIdx)?.getChars().trim() === '' &&
+    cell(x, promptIdx)?.getBgColor() === 0x303030))
 
 // ── 2. assistant prose: col 0, no marker ─────────────────────────────────
 const proseIdx = rowOf('编号从 3 跳到 5。补上 4。')
@@ -236,7 +250,6 @@ check('card border spans top padding, title and bottom padding',
   [editIdx - 1, editIdx, editIdx + 1].every(y => (lines()[y] ?? '').startsWith(`${' '.repeat(CARD_EDGE)}│`)))
 check('tool card surface is wider than the prose column', bandCells(editIdx) > COLS - 2 * MARGIN,
   `cells=${bandCells(editIdx)}`)
-const cell = (x, y) => term.buffer.active.getLine(term.buffer.active.baseY + y)?.getCell(x)
 check('canvas fills the top margin, left edge and prose background',
   [cell(0, 0), cell(0, proseIdx), cell(MARGIN, proseIdx)].every(c => c?.isBgRGB() && c.getBgColor() === CANVAS_BG))
 check('card leaves one canvas column left and the gutter clear right',
@@ -250,9 +263,10 @@ const surfaceEdges = y => {
     cell(x, y) !== undefined && !cell(x, y).isBgDefault() && cell(x, y).getBgColor() !== CANVAS_BG)
   return [occupied[0], occupied.at(-1)]
 }
-check('composer and tool card have identical left/right surface edges',
-  composerIdx >= 0 && JSON.stringify(surfaceEdges(composerIdx)) === JSON.stringify(surfaceEdges(editIdx)),
-  `composer=${surfaceEdges(composerIdx)} card=${surfaceEdges(editIdx)}`)
+check('user turn, composer and tool card have identical left/right surface edges',
+  composerIdx >= 0 && [promptIdx, composerIdx].every(y =>
+    JSON.stringify(surfaceEdges(y)) === JSON.stringify(surfaceEdges(editIdx))),
+  `prompt=${surfaceEdges(promptIdx)} composer=${surfaceEdges(composerIdx)} card=${surfaceEdges(editIdx)}`)
 check('card and composer use neutral gray backgrounds without blue tint',
   cell(MARGIN + 10, editIdx)?.getBgColor() === 0x2a2a2a &&
   cell(MARGIN + 10, composerIdx)?.getBgColor() === 0x303030)
@@ -260,8 +274,11 @@ check('reasoning is separated from the next tool card', thinkIdx === bashIdx - 3
   `think=${thinkIdx} bash=${bashIdx}`)
 check('a prose row keeps its blank line after a summary run', proseIdx === rowOf('Read /tmp/next.ts') + 2,
   `read=${readIdx} prose=${proseIdx}`)
-check('a second user turn keeps its blank line after card padding',
-  rowOf('记录下来') === bashIdx + 3, `bash=${bashIdx}`)
+const secondPromptIdx = rowOf('记录下来')
+check('a second user turn keeps its blank separator plus top padding after card padding',
+  secondPromptIdx === bashIdx + 4 && (lines()[bashIdx + 2] ?? '').trim() === '' &&
+  bandCells(bashIdx + 2) === 0 && (lines()[secondPromptIdx - 1] ?? '').trim() === '┃',
+  `bash=${bashIdx} prompt=${secondPromptIdx}`)
 
 check('consecutive read summaries occupy adjacent rows', rowOf('Read /tmp/next.ts') === readIdx + 1)
 check('read summary has an arrow and no surface',

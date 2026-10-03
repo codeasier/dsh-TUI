@@ -1,5 +1,5 @@
 /**
- * Screenshot regression: composer/card edges and neutral surfaces in full Chat.
+ * Screenshot regression: history/composer/card edges and neutral surfaces in full Chat.
  * Run: node --import tsx/esm scripts/verify-session-surfaces.tsx
  * Covers dark/light, inline/fullscreen, 40/100 columns, margin and gutter modes,
  * plus CJK draft wrapping. No API credentials or real sessions are used.
@@ -43,7 +43,7 @@ for (const theme of ['dark', 'light'] as const) {
         const channel = {
           version: 0, agentId: 'surface-probe', sessionTitle: 'surface-probe', status: 'idle',
           rows: [
-            { id: 1, kind: 'user', text: '问题' },
+            { id: 1, kind: 'user', text: `历史问题${'中英文Mixed'.repeat(8)}\nPROMPT_END` },
             { id: 2, kind: 'assistant', text: '正文标记' },
             { id: 3, kind: 'tool', text: '', tool: {
               callId: 'probe', name: 'bash', argsText: '{}', status: 'ok', startedAt: 0, durationMs: 12,
@@ -82,6 +82,19 @@ for (const theme of ['dark', 'light'] as const) {
         check(`${label}: card/composer paint aligned neutral surfaces`, await settled(() => {
           const card = rowOf('TOOL_MARK'), input = rowOf('⌸')
           return card >= 0 && input >= 0 && edges(card, toolBg) !== '' && edges(card, toolBg) === edges(input - 1, inputBg)
+        }))
+        check(`${label}: history prompt matches composer fill, padding and continuous yellow rail`, await settled(() => {
+          const prompt = rowOf('历史问题'), tail = rowOf('PROMPT_END'), input = rowOf('⌸')
+          if (prompt < 0 || tail < prompt || input < 0) return false
+          const bounds = edges(input - 1, inputBg)
+          if (bounds === '') return false
+          const left = Number(bounds.split(':')[0])
+          const yellow = theme === 'dark' ? 0xffdf80 : 0xa67600
+          return Array.from({ length: tail - prompt + 3 }, (_, i) => prompt - 1 + i).every(y => {
+            const rail = term.buffer.active.getLine(term.buffer.active.baseY + y)?.getCell(left)
+            return edges(y, inputBg) === bounds && rail?.getChars() === '┃' && rail.getFgColor() === yellow
+          }) && lines()[prompt - 1]?.trim() === '┃' && lines()[tail + 1]?.trim() === '┃' &&
+            lines()[prompt]?.indexOf('❯') === left + 2 && lines()[tail]?.indexOf('PROMPT_END') === left + 4
         }))
         check(`${label}: heavy yellow composer rail differs from the thin tool border`, await settled(() => {
           const card = rowOf('TOOL_MARK'), input = rowOf('⌸'), bounds = edges(card, toolBg)

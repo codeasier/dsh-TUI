@@ -1553,6 +1553,7 @@ function TranscriptRow({
               text={displayText}
               marginTopOnTurn={marginTopOnTurn}
               isSelected={isSelected}
+              bleed
             />
           )}
           {images !== undefined && (

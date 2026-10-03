@@ -170,7 +170,7 @@ function atBottomEnd(): boolean {
   const lines = screenLines()
   let promptRow = -1
   // 输入框行是 `⌸ ❯ …`（`❯` 不再是行首非空字符），转录里的用户回合则是
-  // `▌ ❯ …`：按「含 ❯ 的最低一行」定位输入框，两者都不会误判成别的东西。
+  // `┃ ❯ …`（边框绘制连续竖条）：按「含 ❯ 的最低一行」定位输入框，不会混淆。
   for (let y = ROWS - 1; y >= 0; y--) {
     if (lines[y]!.includes('❯')) { promptRow = y; break }
   }

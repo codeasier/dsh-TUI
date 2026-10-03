@@ -1,6 +1,7 @@
 /**
  * User prompt fidelity at the terminal/context width boundary (issue #3).
- * Run after pnpm build: node scripts/verify-user-prompt-wrap.mjs
+ * Run after pnpm build: node --import tsx/esm scripts/verify-user-prompt-wrap.mjs
+ * The product imports compiled lib; the modern emoji-width helper imports src.
  * --repro limits the matrix to independent 80/78 component and real Chat cases.
  * Reads painted xterm cells and the production screen-selection extractor;
  * source/DOM text is used only to locate the block, never as the copy oracle.
@@ -14,10 +15,10 @@ process.env.DSH_TUI_LANG = 'zh'
 delete process.env.TERM_PROGRAM
 delete process.env.TMUX
 
-const [React, { default: xterm }, { render, AlternateScreen, ThemeProvider, Box },
+const [React, xterm, { render, AlternateScreen, ThemeProvider, Box },
   { UserPromptMessage }, { PageMargin }, { applyPageMargin, resolvePageMargin },
   { TerminalSizeContext }, { Chat }, { QuestionStore }, { default: instances },
-  { createSelectionState, getSelectedText }, { settled, writeParsed },
+  { createSelectionState, getSelectedText }, { stringWidth }, { activateModernEmojiWidths }, { settled, writeParsed },
 ] = await Promise.all([
   import('react'),
   import('@xterm/headless'),
@@ -30,11 +31,13 @@ const [React, { default: xterm }, { render, AlternateScreen, ThemeProvider, Box 
   import('../lib/types/dsh-adapter/questions.js'),
   import('../lib/types/ink/instances.js'),
   import('../lib/types/ink/selection.js'),
+  import('../lib/types/ink/stringWidth.js'),
+  import('./lib/modern-widths.mjs'),
   import('./lib/term-test.mjs'),
 ])
 
 const h = React.createElement
-const { Terminal } = xterm
+const { Terminal } = xterm.default ?? xterm
 const ROWS = 40
 const inputs = {
   english: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.repeat(8),
@@ -84,7 +87,7 @@ function textOf(node) {
   return node.nodeName === '#text' ? node.nodeValue : node.childNodes.map(textOf).join('')
 }
 function findPrompt(node, text) {
-  if (node.nodeName === 'ink-text' && textOf(node).startsWith(`▌ ❯ ${text.slice(0, 8)}`)) return node.parentNode
+  if (node.nodeName === 'ink-text' && textOf(node).startsWith(`❯ ${text.slice(0, 8)}`)) return node.parentNode
   for (const child of node.childNodes ?? []) {
     const found = findPrompt(child, text)
     if (found) return found
@@ -102,6 +105,7 @@ function position(node) {
 
 async function run({ mode, text, label, cols = 80, margin = 'none', gutter = 'timeline', history = true, resize = false, foldRoundTrip = false }) {
   const term = new Terminal({ cols, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  activateModernEmojiWidths(term)
   const stdout = new Writable({ write(chunk, _encoding, callback) { term.write(String(chunk), callback) } })
   Object.assign(stdout, { columns: cols, rows: ROWS, isTTY: true })
   const stdin = new PassThrough()
@@ -124,16 +128,22 @@ async function run({ mode, text, label, cols = 80, margin = 'none', gutter = 'ti
     if (!band) return null
     const { x, y } = position(band)
     const width = Math.round(band.yogaNode.getComputedWidth())
+    const height = Math.round(band.yogaNode.getComputedHeight())
     const lines = band.childNodes.map((node, index) => {
-      const row = position(node).y
-      const painted = (term.buffer.active.getLine(term.buffer.active.baseY + row)?.translateToString(true, x, x + width) ?? '').trimEnd()
-      const prefix = index === 0 ? '▌ ❯ ' : painted.match(/^ */)[0]
+      const { x: textX, y: row } = position(node)
+      const textWidth = Math.round(node.yogaNode.getComputedWidth())
+      const painted = (term.buffer.active.getLine(term.buffer.active.baseY + row)?.translateToString(true, textX, textX + textWidth) ?? '').trimEnd()
+      const prefix = index === 0 ? '❯ ' : '  '
       const selection = createSelectionState()
-      selection.anchor = { col: x + prefix.length, row }
-      selection.focus = { col: x + width - 1, row }
-      return { painted, prefix, payload: painted.slice(prefix.length), copied: getSelectedText(selection, ink.frontFrame.screen).trimEnd() }
+      selection.anchor = { col: textX + prefix.length, row }
+      selection.focus = { col: x + width - 3, row }
+      return {
+        painted, prefix, row, textX, textWidth, nodeName: node.nodeName,
+        emittedPrefix: textOf(node).slice(0, prefix.length),
+        payload: painted.slice(prefix.length), copied: getSelectedText(selection, ink.frontFrame.screen).trimEnd(),
+      }
     })
-    return { x, y, width, lines }
+    return { x, y, width, height, lines }
   }
 
   async function verify(stage) {
@@ -157,15 +167,46 @@ async function run({ mode, text, label, cols = 80, margin = 'none', gutter = 'ti
     check(`${name}: every source character is painted in order`, shown === text,
       `${[...shown.replaceAll('…', '')].length}/${[...text].length} chars`)
     check(`${name}: screen selection retains every payload character`, copied === text)
-    check(`${name}: first and continuation prefixes both occupy four cells`, snap.lines.every(line => line.prefix.length === 4))
+    check(`${name}: every payload fits panel width minus six chrome cells`,
+      snap.lines.every(line => stringWidth(line.payload) <= snap.width - 6))
+    if (channel && label === 'english') {
+      check(`${name}: uninterrupted Chat text uses the full panel-minus-six wrap budget`,
+        snap.lines.slice(0, -1).every(line => stringWidth(line.payload) === snap.width - 6))
+    }
+    check(`${name}: first pointer and continuation indent both occupy two cells`,
+      snap.lines.every(line => line.prefix.length === 2 && line.emittedPrefix === line.prefix))
+    check(`${name}: wrapped Text nodes remain direct band children`,
+      snap.lines.every(line => line.nodeName === 'ink-text'))
+    check(`${name}: border and padding leave Text inset by two cells and two blank rows`,
+      snap.height === snap.lines.length + 2 && snap.lines.every((line, index) =>
+        line.textX === snap.x + 2 && line.textWidth === snap.width - 4 && line.row === snap.y + index + 1))
+    const cell = (x, y) => term.buffer.active.getLine(term.buffer.active.baseY + y)?.getCell(x)
+    const visibleRows = Array.from({ length: snap.height }, (_, index) => snap.y + index).filter(y => y >= 0 && y < ROWS)
+    check(`${name}: yellow border is continuous across padding and every visible wrapped row`,
+      visibleRows.length > 0 && visibleRows.every(y =>
+        cell(snap.x, y)?.getChars() === '┃' && cell(snap.x, y)?.getFgColor() === 0xffdf80))
+    const badFill = visibleRows.flatMap(y => Array.from({ length: snap.width }, (_, index) => snap.x + index)
+      .filter(x => cell(x, y)?.getBgColor() !== 0x303030)
+      .map(x => ({ x, y, width: cell(x, y)?.getWidth(), chars: cell(x, y)?.getChars(), bg: cell(x, y)?.getBgColor() })))
+    check(`${name}: left/right padding and the whole band use the prompt background`,
+      badFill.length === 0 &&
+      visibleRows.every(y => [snap.x + 1, snap.x + snap.width - 2, snap.x + snap.width - 1].every(x =>
+        (cell(x, y)?.getChars() ?? '').trim() === '')), JSON.stringify(badFill.slice(0, 3)))
+    check(`${name}: top and bottom padding contain only the border`,
+      [snap.y, snap.y + snap.height - 1].filter(y => y >= 0 && y < ROWS).every(y =>
+        term.buffer.active.getLine(term.buffer.active.baseY + y)?.translateToString(true, snap.x + 1, snap.x + snap.width).trim() === ''))
     if (channel) {
       const inset = resolvePageMargin(margin).x
-      // Chat bleeds the transcript row through the right page inset. The
-      // rail/scrollbar both disappear below the 60-column terminal threshold.
+      // Chat reserves its transcript gutter even before the rail paints; the
+      // prompt extends that context by the shared page-panel bleed on both sides.
       const gutterVisible = history && stdout.columns >= 60 && gutter !== 'hidden'
-      const expectedWidth = stdout.columns - inset - (gutterVisible ? 2 : 0)
-      check(`${name}: real Chat content geometry`, snap.x === inset && snap.width === expectedWidth,
-        `x=${snap.x} width=${snap.width} expected=${expectedWidth}`)
+      const leftBleed = Math.max(0, inset - 1)
+      const rightBleed = Math.max(0, inset - 2)
+      const transcriptColumns = stdout.columns - 2 * inset - Math.max(0, (gutter === 'hidden' ? 0 : 2) - inset)
+      const expectedX = inset - leftBleed
+      const expectedWidth = transcriptColumns + leftBleed + rightBleed
+      check(`${name}: real Chat content geometry`, snap.x === expectedX && snap.width === expectedWidth,
+        `x=${snap.x} expectedX=${expectedX} width=${snap.width} expectedWidth=${expectedWidth}`)
       if (gutterVisible) {
         check(`${name}: two-column gutter is actually painted`, Array.from({ length: ROWS }, (_, row) =>
           term.buffer.active.getLine(term.buffer.active.baseY + row)?.translateToString(true, stdout.columns - 2, stdout.columns).trim() ?? '').some(Boolean))
@@ -175,7 +216,7 @@ async function run({ mode, text, label, cols = 80, margin = 'none', gutter = 'ti
       check(`${name}: independent component has two fewer columns than its context`, snap.width === cols - 2)
     }
     if (mode === 'chat' && label === 'english' && stdout.columns === 80 && margin === 'none' && gutter === 'timeline' && history) {
-      console.log(`RENDERED SCREEN (${name}):\n${snap.lines.map((_, index) => (term.buffer.active.getLine(term.buffer.active.baseY + snap.y + index)?.translateToString(true) ?? '').trimEnd()).join('\n')}`)
+      console.log(`RENDERED SCREEN (${name}):\n${snap.lines.map((_, index) => (term.buffer.active.getLine(term.buffer.active.baseY + snap.lines[index].row)?.translateToString(true) ?? '').trimEnd()).join('\n')}`)
     }
   }
   try {
