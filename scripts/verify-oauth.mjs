@@ -54,6 +54,7 @@ const { Context } = await import('@deepseek-ai/cordis')
 const { QuestionStore } = await import('../lib/types/dsh-adapter/questions.js')
 const { createDeepSeekCallbackOriginResolver } = await import('../lib/types/dsh-adapter/oauth/deepseek.js')
 const { setLang } = await import('../lib/types/i18n.js')
+const { createFastControl } = await import('../lib/types/dsh-adapter/oauth/fast.js')
 
 /** Adapter options over one profile — enough for listModels/resolveModel offline. */
 function gateAdapterOptions() {
@@ -427,6 +428,61 @@ try {
     'existing async hooks see the tier and their replacement bodies retain it without mutation')
   ok(tierCalls[5][2] === undefined, 'an absent options object stays absent on an incapable model')
 
+  // ── runtime /fast control ────────────────────────────────────────────────
+  console.log('fast switch')
+  const invocation = rawInput => ({ rawInput, signal: new AbortController().signal })
+  let fastSupported = true
+  const fast = createFastControl(undefined, () => fastSupported)
+  ok((await fast.handler(invocation('status'))).kind === 'success'
+    && fast.getServiceTier() === undefined,
+  '/fast status reports the startup state without enabling priority')
+  const runtimeProvider = withServiceTier(baseProvider, fast.getServiceTier)
+  runtimeProvider.stream(capableModel, null, sharedOptions)
+  ok(tierCalls.at(-1)[2] === sharedOptions, 'an unset runtime tier keeps request options untouched')
+  await fast.handler(invocation('on'))
+  runtimeProvider.streamSimple(capableModel, null, sharedOptions)
+  const inFlightOptions = tierCalls.at(-1)[2]
+  await fast.handler(invocation('off'))
+  ok((await inFlightOptions.onPayload({}, capableModel)).service_tier === 'priority',
+    'an in-flight request retains its priority snapshot after /fast off')
+  runtimeProvider.streamSimple(capableModel, null, sharedOptions)
+  ok(tierCalls.at(-1)[2].serviceTier === 'default', '/fast off changes the next request to default')
+  runtimeProvider.stream(incapableModel, null, sharedOptions)
+  ok(tierCalls.at(-1)[2] === sharedOptions, 'switching to another protocol does not inject fast options')
+  await fast.handler(invocation(''))
+  ok(fast.getServiceTier() === 'priority', 'bare /fast toggles on')
+  await fast.handler(invocation('on'))
+  ok(fast.getServiceTier() === 'priority', '/fast on is idempotent')
+  await fast.handler(invocation('toggle'))
+  await fast.handler(invocation('off'))
+  ok(fast.getServiceTier() === 'default', '/fast toggle toggles off and /fast off is idempotent')
+  for (const invalid of ['maybe', 'on extra', 'off extra', 'status extra']) {
+    ok((await fast.handler(invocation(invalid))).kind === 'error'
+      && fast.getServiceTier() === 'default', `invalid /fast ${invalid} does not change state`)
+  }
+  const cancelledFast = { rawInput: 'on', signal: AbortSignal.abort() }
+  ok((await fast.handler(cancelledFast)).kind === 'error' && fast.getServiceTier() === 'default',
+    'a cancelled /fast invocation does not enable priority')
+  fastSupported = false
+  ok((await fast.handler(invocation('on'))).kind === 'error' && fast.getServiceTier() === 'default',
+    '/fast refuses when no supporting route is registered')
+  fastSupported = true
+  for (const lang of ['zh', 'en']) {
+    setLang(lang)
+    const languageFast = createFastControl('flex', () => true)
+    const status = await languageFast.handler(invocation('status'))
+    ok(status.kind === 'success' && status.text.includes('flex')
+      && languageFast.getServiceTier() === 'flex',
+    `${lang}: /fast status preserves and reports a non-priority startup tier`)
+    const enabled = await languageFast.handler(invocation('on'))
+    ok(enabled.text.includes('priority') && enabled.text.includes('effort')
+      && enabled.text.includes(lang === 'zh' ? '开启' : 'Fast is on'),
+    `${lang}: /fast feedback is localized and explains the unchanged effort`)
+  }
+  setLang('en')
+  ok(createFastControl(undefined, () => true).getServiceTier() === undefined,
+    'a fresh process controller restores the configured startup default, not the last toggle')
+
   // Composition with model overrides, plus the tier reaching the assembled
   // Codex request body through the real pi-ai implementation — captured by
   // onPayload before any transport work, so the probe stays offline.
@@ -499,7 +555,9 @@ try {
     throw new Error('offline-tier-request-capture')
   }
   try {
-    const profiles = new Map([['openai-codex', { ...tieredProfile, transport: 'sse' }]])
+    const harnessFast = createFastControl(undefined, () => true)
+    const runtimeProfile = buildOAuthProfile('openai-codex', undefined, harnessFast.getServiceTier)
+    const profiles = new Map([['openai-codex', { ...runtimeProfile, transport: 'sse' }]])
     const adapter = new PiAiAdapter({
       profiles: () => profiles,
       resolveApiKey: async () => undefined,
@@ -516,17 +574,21 @@ try {
         authContext: { env: async () => undefined, fileExists: async () => false },
       },
     })
-    for await (const _chunk of adapter.stream({
-      provider: 'openai-codex', model: 'gpt-5.6-sol', messages: [],
-      reasoningEffort: 'high', sessionId: 'tier-session', signal: AbortSignal.timeout(3000),
-    })) { /* fetch capture terminates the offline stream */ }
-    ok(outgoingRequest?.body.service_tier === 'priority'
-      && outgoingRequest.body.reasoning?.effort === 'high'
-      && outgoingRequest.body.prompt_cache_key === 'tier-session',
-    'real Harness streamSimple dispatch preserves priority, high effort and session')
-    ok(credentialReads > 0 && outgoingRequest?.headers.get('authorization') === `Bearer ${fakeToken}`
-      && outgoingRequest?.headers.get('chatgpt-account-id') === 'tier-account',
-    'real Harness dispatch still authenticates through stored OAuth credentials')
+    for (const [action, expectedTier] of [['status', undefined], ['on', 'priority'], ['off', 'default'], ['on', 'priority']]) {
+      await harnessFast.handler(invocation(action))
+      outgoingRequest = undefined
+      for await (const _chunk of adapter.stream({
+        provider: 'openai-codex', model: 'gpt-5.6-sol', messages: [],
+        reasoningEffort: 'high', sessionId: 'tier-session', signal: AbortSignal.timeout(3000),
+      })) { /* fetch capture terminates the offline stream */ }
+      ok(outgoingRequest !== undefined && outgoingRequest.body.service_tier === expectedTier
+        && outgoingRequest.body.reasoning?.effort === 'high'
+        && outgoingRequest.body.prompt_cache_key === 'tier-session',
+      `real cached Harness dispatch after /fast ${action}: tier changes while effort/session survive`)
+      ok(credentialReads > 0 && outgoingRequest?.headers.get('authorization') === `Bearer ${fakeToken}`
+        && outgoingRequest?.headers.get('chatgpt-account-id') === 'tier-account',
+      `real Harness /fast ${action} dispatch still uses stored OAuth credentials`)
+    }
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -1124,8 +1186,15 @@ try {
       'the public ./oauth entry exposes the compatible Cordis plugin contract')
     ok(registeredRoutes.length === 1 && registeredRoutes[0].ids[0] === 'openai-codex',
       'the internal entry registers the configured llm route')
-    ok(registeredCommands.length === 1 && registeredCommands[0].name === 'auth',
-      'the internal entry registers /auth')
+    ok(registeredCommands.length === 2 && registeredCommands[0].name === 'auth'
+      && registeredCommands[1].name === 'fast',
+    'the internal entry registers /auth and /fast for command discovery')
+    const fastCommand = registeredCommands[1]
+    ok((await fastCommand.handler(invocation('status'))).text.includes('priority'),
+      '/fast starts with the trimmed serviceTier configuration')
+    ok((await fastCommand.handler(invocation('off'))).text.includes('default')
+      && (await fastCommand.handler(invocation('on'))).text.includes('priority'),
+    'registered /fast handler switches without remounting the OAuth plugin')
     const service = ctx.get('dshAuth')
     const mountedRows = await service?.api?.providers()
     ok(mountedRows?.[0]?.provider === DEEPSEEK_ACCOUNT_PROVIDER
@@ -1147,17 +1216,48 @@ try {
     ok(ctx.get('webServer') === sharedWebServer,
       'DeepSeek sign-in reuses an existing Web callback listener')
     await fiber.dispose()
-    ok(released.length === 2 && released.includes('llm') && released.includes('commands'),
-      'Cordis teardown unregisters both the route and /auth')
+    ok(released.length === 3 && released.includes('llm') && released.includes('commands'),
+      'Cordis teardown unregisters the route, /auth and /fast')
+    ok((await fastCommand.handler(invocation('on'))).kind === 'error',
+      'a stale /fast handler refuses after its supporting route was disposed')
     const previousRoutes = registeredRoutes.length
     const defaultFiber = await ctx.plugin(oauthModule, {
       credentialsFile: join(root, 'mount-default', 'credentials.json'),
     })
     ok(JSON.stringify(registeredRoutes.slice(previousRoutes).map(route => route.ids[0])) === JSON.stringify(available),
       'omitted providers config mounts exactly the installed pi-ai OAuth flows')
+    ok(!(await registeredCommands.at(-1).handler(invocation('status'))).text.includes('priority'),
+      'remounting without serviceTier resets the runtime fast choice')
     await defaultFiber.dispose()
   } finally {
     await ctx.fiber.dispose()
+  }
+
+  for (const conflict of [false, true]) {
+    const unsupportedCtx = new Context()
+    const discovered = []
+    unsupportedCtx.provide('llm', {
+      registerAdapter: () => {
+        if (conflict) throw new Error('route already registered by another adapter')
+        return () => {}
+      },
+    })
+    unsupportedCtx.provide('commands', {
+      register: descriptor => { discovered.push(descriptor); return () => {} },
+    })
+    try {
+      const fiber = await unsupportedCtx.plugin(oauthModule, {
+        providers: [conflict ? 'openai-codex' : 'anthropic'],
+        credentialsFile: join(root, `fast-unavailable-${conflict}`, 'credentials.json'),
+      })
+      const result = await discovered.find(command => command.name === 'fast').handler(invocation('on'))
+      ok(result.kind === 'error' && result.text.includes('no OAuth routes'),
+        conflict ? '/fast refuses when the capable route registration failed'
+          : '/fast refuses when only non-supporting routes are mounted')
+      await fiber.dispose()
+    } finally {
+      await unsupportedCtx.fiber.dispose()
+    }
   }
 
   // The v0.11.2 global patch still mounts ./oauth but lacks its new

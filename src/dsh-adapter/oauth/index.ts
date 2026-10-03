@@ -56,6 +56,7 @@ import { CredentialFile, defaultCredentialsFile } from './credentials.js'
 import { availableOAuthProviderIds, buildOAuthProfile, OAUTH_PROVIDER_IDS, SERVICE_TIER_APIS, type ModelOverride } from './profiles.js'
 import { createDshAuthApi, DshAuthService } from './service.js'
 import { createAuthCommandHandler } from './command.js'
+import { createFastControl } from './fast.js'
 import type { PiAiAuthContext } from './pi-ai.js'
 import { createDeepSeekCallbackOriginResolver, deepSeekAccountFrom } from './deepseek.js'
 import { WhaleCouponStore } from './bonus.js'
@@ -92,7 +93,8 @@ export interface Config {
   /** Credential file override; default `$DSH_HOME/dsh-auth/credentials.json`. */
   credentialsFile?: string
   /**
-   * Request-body `service_tier` carried by every stream call on a model
+   * Startup default for the request-body `service_tier`; `/fast` can override
+   * it at runtime without changing this configuration. Carried on models
    * whose wire protocol has the field (`openai-codex-responses` /
    * `openai-responses` — the ChatGPT/Codex and OpenAI direct routes; other
    * mounted protocols ignore it). Trimmed passthrough: OpenAI documents
@@ -204,7 +206,9 @@ export function apply(ctx: Context, config: Config): void {
   // Profile construction validates the installed catalog loudly: a pi-ai
   // downgrade that dropped a provider fails the boot that asked for it, and
   // a per-model miss is refused per route (see buildOAuthProfile).
-  const profiles = new Map(configured.map(id => [id, buildOAuthProfile(id, overrides[id], serviceTier)]))
+  let supportsFast = false
+  const fast = createFastControl(serviceTier, () => supportsFast)
+  const profiles = new Map(configured.map(id => [id, buildOAuthProfile(id, overrides[id], fast.getServiceTier)]))
   // A tier nothing can carry is refused at boot too: silently skipping it
   // would leave the config looking applied while no request ever changed.
   if (serviceTier !== undefined
@@ -281,6 +285,9 @@ export function apply(ctx: Context, config: Config): void {
       for (const id of configured) {
         try {
           releases.push(llm.registerAdapter([id], adapter))
+          if ((profiles.get(id)?.piProvider?.getModels() ?? []).some(model => SERVICE_TIER_APIS.has(model.api))) {
+            supportsFast = true
+          }
         } catch (error: unknown) {
           ctx.logger.error(
             `dsh-auth: route "${id}" was not registered: ${error instanceof Error ? error.message : String(error)} `
@@ -291,7 +298,7 @@ export function apply(ctx: Context, config: Config): void {
     }
     const active = new Set<Promise<unknown>>()
     if (commands === undefined) {
-      ctx.logger.warn('dsh-auth: no commands service mounted — the /auth command stays unregistered')
+      ctx.logger.warn('dsh-auth: no commands service mounted — /auth and /fast stay unregistered')
     } else {
       const handler = createAuthCommandHandler(api)
       releases.push(commands.register({
@@ -304,11 +311,17 @@ export function apply(ctx: Context, config: Config): void {
           return operation
         },
       }))
+      releases.push(commands.register({
+        name: 'fast',
+        description: 'Toggle the OAuth fast service tier: on, off, status',
+        handler: fast.handler,
+      }))
     }
     // Drain before releasing: LIFO composite teardown lets no new invocation
     // enter while already-started logins finish their final write.
     yield async () => { await Promise.allSettled([...active]) }
     yield () => {
+      supportsFast = false
       for (const release of releases) release()
     }
   }, 'dsh-auth lifecycle')

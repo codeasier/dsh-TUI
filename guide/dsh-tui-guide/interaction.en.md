@@ -73,12 +73,12 @@ subagent dashboard, show-all, and todo fold are remappable in `/settings` → `d
 | Key | Behavior |
 | --- | --- |
 | `Left/Right` | Move by character; **with a selection, collapse to the corresponding edge** |
-| `Ctrl+Left/Right` | Move by word |
+| `Ctrl+Left/Right` / `Alt+Left/Right` / `Alt+B/F` | Move by Unicode word boundaries, including Chinese without spaces; macOS `Option` is `Alt`; with a selection, collapse to the corresponding edge first |
 | `Home/End` | Move to the start/end of the current logical line |
 | `Ctrl+A` / `Ctrl+E` | `Ctrl+A` opens the subagent dashboard (`Mod+A` in the editor still moves to line start); `Ctrl+E` moves to line end and also expands or folds hidden older rows in long transcripts |
 | `Ctrl+U` | Delete before the caret |
 | `Ctrl+K` | Delete after the caret |
-| `Ctrl+W` | Delete the preceding word |
+| `Ctrl+W` | Delete the preceding Unicode word segment and trailing whitespace; supports Chinese without spaces, with punctuation and emoji as separate units; with a selection, delete only that selection |
 | `Backspace` / `Delete` | Delete the character before / after the caret; **with a selection, delete the whole selection** |
 | Typing | **Replaces an active selection** (standard editor semantics), caret after the inserted text |
 
@@ -603,6 +603,7 @@ The command menu merges local commands with the DSH command registry. Type `/` t
   input border + session-name chip at the top-right, per-session; chip off by default, enable
   in `/settings`.
 - `/lang`.
+- `/fast` — interactive fast switch registered by this plugin's OAuth entry; forms and scope below.
 
 **Account and policy**
 
@@ -638,6 +639,20 @@ Additional forms:
 - `/activity status` reports the current choice.
 - `/preset <id>` and `/preset status` are described in the configuration guide.
 - `/effort` opens the reasoning-effort slider (←/→ adjusts live); `/effort <id>` sets a level directly; `/effort status` reports the current one.
+- Bare `/fast` or `/fast toggle` switches fast; `/fast on` sets `priority`,
+  `/fast off` sets `default`, and `/fast status` only reports the current state.
+  - Applies from the next model request, without changing already-sent requests
+    or reasoning `effort`; no restart needed.
+  - Covers all supported OAuth routes registered by this plugin in the current
+    TUI process (`openai-codex-responses` / `openai-responses`), not just the
+    current session or model; other protocols and other plugins' routes are unaffected.
+  - Writes neither config nor persistent files; restart restores the optional
+    `config.serviceTier` startup default (unset: off/provider default).
+    Interactive `/fast` takes precedence over that startup default.
+  - An unmounted OAuth entry does not provide the command; a mounted entry
+    with no successfully registered supported route gives a clear unavailable
+    error. The backend owns tier acceptance and quota; the TUI guarantees
+    neither approval nor additional quota. See [built-in subscription OAuth](configuration.en.md#built-in-subscription-oauth).
 - `/model` opens a two-level picker:
   - A pinned **Recently used** group first — the last 10 switched models, persisted at `~/.dsh-tui/model-recents.json` — then provider groups.
   - `Enter` drills into a group's models, and a single provider with no recents skips straight to the list.

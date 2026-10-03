@@ -117,6 +117,9 @@ type PiAiModel = ReturnType<PiAiProvider['getModels']>[number]
 
 type PiAiPayloadOptions = Pick<NonNullable<Parameters<PiAiProvider['streamSimple']>[2]>, 'onPayload'>
 
+/** A fixed startup tier or a runtime switch sampled once per request. */
+export type ServiceTierSource = string | (() => string | undefined)
+
 /**
  * pi-ai 0.87.1's streamSimple drops provider-specific options while
  * normalizing reasoning. Its common onPayload hook survives that conversion,
@@ -126,17 +129,21 @@ type PiAiPayloadOptions = Pick<NonNullable<Parameters<PiAiProvider['streamSimple
 function withServiceTierOptions<TOptions extends PiAiPayloadOptions>(
   model: PiAiModel,
   options: TOptions | undefined,
-  serviceTier: string,
+  serviceTier: ServiceTierSource,
 ): TOptions | undefined {
   if (!SERVICE_TIER_APIS.has(model.api)) return options
+  // Snapshot before awaiting caller hooks: toggles affect subsequent requests,
+  // never the payload of one already in progress.
+  const tier = typeof serviceTier === 'function' ? serviceTier() : serviceTier
+  if (tier === undefined) return options
   const inject = (payload: unknown): Record<string, unknown> => {
     if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
       throw new Error('dsh-auth: serviceTier requires an object request payload')
     }
-    return { ...payload, service_tier: serviceTier }
+    return { ...payload, service_tier: tier }
   }
   return Object.assign({}, options, {
-    serviceTier,
+    serviceTier: tier,
     onPayload: async (payload: unknown, requestModel: PiAiModel) => {
       const body = inject(payload)
       const replacement = await options?.onPayload?.(body, requestModel)
@@ -154,7 +161,7 @@ function withServiceTierOptions<TOptions extends PiAiPayloadOptions>(
  * object is never mutated — the clone mirrors {@link withModelOverrides}.
  * Exported as the request-shaping seam beside {@link buildOAuthProfile}.
  */
-export function withServiceTier(catalog: PiAiProvider, serviceTier: string): PiAiProvider {
+export function withServiceTier(catalog: PiAiProvider, serviceTier: ServiceTierSource): PiAiProvider {
   return {
     ...catalog,
     stream: (model, context, options) =>
@@ -180,7 +187,7 @@ export function withServiceTier(catalog: PiAiProvider, serviceTier: string): PiA
 export function buildOAuthProfile(
   id: string,
   modelOverrides?: Readonly<Record<string, ModelOverride>>,
-  serviceTier?: string,
+  serviceTier?: ServiceTierSource,
 ): ResolvedPiAiProviderProfile {
   if (!(OAUTH_PROVIDER_IDS as readonly string[]).includes(id)) {
     throw new Error(`dsh-auth: "${id}" is not an OAuth provider this build mounts (${OAUTH_PROVIDER_IDS.join(', ')})`)

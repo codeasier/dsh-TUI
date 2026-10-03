@@ -429,7 +429,7 @@
 
     # Built-in subscription OAuth sign-in: mounts available pi-ai routes
     # (ChatGPT/Codex, Claude, Grok; newer pi-ai adds OpenAI direct and Meta)
-    # plus the /auth command. Its facade also delegates DeepSeek sign-in to
+    # plus the /auth and /fast commands. Its facade also delegates DeepSeek sign-in to
     # the Host-owned account service when available. The TUI's /provider
     # wizard gains its OAuth branch from ctx.dshAuth. Entry-level inject only —
     # the internal module's own inject is empty so a stale patch cannot
@@ -437,9 +437,13 @@
     - id: dsh-tui-auth
       name: '@deepseek-harness-tui/dsh-tui/oauth'
       inject: [llm, commands]
+      # Use /fast on|off|status interactively; bare /fast or toggle switches it.
+      # Applies from the next request across this plugin's supported OAuth
+      # routes in the current TUI process; effort and other protocols stay unchanged.
+      # Not persisted: restart restores the optional serviceTier startup default.
       # config:
-      #   serviceTier: priority # ChatGPT/Codex fast; independent of effort.
-      # Backend decides acceptance and quota; other protocols are unaffected.
+      #   serviceTier: priority # Optional startup default; interactive /fast wins.
+      # Unset means off/provider default. Backend decides acceptance and quota.
       # Profile overrides replace config: retain existing modelOverrides and
       # any other fields you need. See docs/configuration.en.md.
 

@@ -282,25 +282,35 @@ Claude（`anthropic`）、Grok（`xai`）订阅账号登录。宿主 pi-ai catal
 
 `dsh-tui-auth` 行可配置 `providers`（默认安装版 pi-ai catalog 中所有受支持的流程；
 显式指定时必须是其中的非空子集）、`credentialsFile`（自定义凭据文件）、
-`serviceTier`（请求体 `service_tier`，见下）和
+`serviceTier`（可选启动默认，对应请求体 `service_tier`，见下）和
 `modelOverrides.<provider>.<model>`（可选的 `contextWindow`、`maxTokens`）。
 profile 覆盖的 `config` 是整段替换，覆盖时保留所需的每个字段，尤其是已有的
 `modelOverrides`（以及自定义的 `providers`、`credentialsFile`）。OAuth 流程使用宿主
 `dsh-llm-pi-ai` 所带的 pi-ai 实现；这不是通用 API key 登录，订阅账号只走相应的
 订阅后端。
 
-`serviceTier` 会注入 wire 协议携带 `service_tier` 字段的每个请求（即
-`openai-codex` 的 ChatGPT/Codex 后端与 `openai` 直连路由；SSE 与 WebSocket 传输
-都生效），其他挂载协议（`anthropic`、`xai`、`meta`）不受影响。
-`serviceTier: priority` 请求 ChatGPT/Codex 的 **fast 服务档位**，与推理强度
-`effort` 无关，不会降低或覆盖它。是否接受该档位、可用额度及限额由订阅后端决定，
-TUI 不保证请求获准或获得额外额度。
+**优先用 `/fast` 交互控制 fast 服务档位**，无需修改 YAML 或重启。该命令由本插件的
+OAuth 入口注册：空参 `/fast` 或 `/fast toggle` 切换，`/fast on` 设置 `priority`，
+`/fast off` 设置 `default`，`/fast status` 只报告当前状态。
+改变从**下一次模型请求**开始生效，不改变已发出的请求，也不改变推理强度 `effort`。
+它作用于**当前 TUI 进程中本插件自注册的所有支持 OAuth 路由**，不限于当前会话或模型：
+支持的 wire 协议为 `openai-codex-responses` 与 `openai-responses`（`openai-codex`
+ChatGPT/Codex 后端及可用时的 `openai` 直连路由；SSE 与 WebSocket 均生效）。
+其他协议（`anthropic`、`xai`、`meta`）与其他插件注册的路由不受影响。
+未挂载 OAuth 入口时不提供 `/fast` 命令；入口已挂载但没有成功注册支持路由时，
+`/fast` 给出明确不可用错误，不会静默修改其他路由。
+是否接受 `priority` 档位、可用额度及限额由后端决定，TUI 不保证请求获准或获得额外额度。
 
-取值去除首尾空白后透传给后端，不作枚举映射：OpenAI 文档值为 `auto` / `default` /
+`config.serviceTier` 只是**可选启动默认**，交互 `/fast` 优先。开关不写入配置或其他
+持久化文件；重启恢复配置的启动值。未配置时 fast 默认关闭，不发送 `service_tier`，
+由供应商采用默认档位（而 `/fast off` 明确发送 `default`）。
+`serviceTier: priority` 可使启动时默认请求 fast，不降低或覆盖 `effort`。
+配置值去除首尾空白后透传给后端，不作枚举映射：OpenAI 文档值为 `auto` / `default` /
 `flex` / `scale` / `priority`，其他值同样由后端裁决。配置了 `serviceTier` 但挂载的
-路由中没有任何携带该字段的模型时，启动直接报错而不是静默忽略；空白字符串同样
-报错。下面示例同时保留一个 `modelOverrides`；请换成自己的已有覆盖，模型 ID
-必须存在于安装版 catalog 中，并一并保留其他所需配置：
+路由中没有任何支持模型时，启动直接报错而不是静默忽略；空白字符串同样报错。
+下面示例选择可选的 `priority` 启动默认，同时保留一个 `modelOverrides`；无需启动时
+开启 fast 可省略 `serviceTier`。请换成自己的已有覆盖，模型 ID 必须存在于安装版
+catalog 中，并一并保留其他所需配置：
 
 ```yaml
 - id: dsh-tui-auth

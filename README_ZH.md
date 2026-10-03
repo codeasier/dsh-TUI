@@ -35,7 +35,7 @@
 - **会话工作流** — `/new` `/compact` `/export` `/btw`、模型热切换、fork、回溯、vim、全屏草稿编辑器。
 - **IDE 选区通道** — VS Code 里选中的代码进 prompt。
 - **DSH 集成** — presets、技能、MCP、目标、待办、子代理、问卷。
-- **账号登录** — 标准 profile 提供 pi-ai 的 ChatGPT/Codex、Claude、Grok OAuth（可用时还有 OpenAI 直连与 Meta Muse）；DSH 0.2.0-rc.1+ 还通过宿主服务提供 DeepSeek 浏览器登录，路由为 `deepseek-account`。通过 `/provider` 或 `/auth` 使用，无需另装插件。ChatGPT/Codex fast 可配置 [`serviceTier: priority`](docs/configuration.md#内置订阅-oauth)，不改变 `effort`；是否接受及额度由后端决定。
+- **账号登录** — 标准 profile 提供 pi-ai 的 ChatGPT/Codex、Claude、Grok OAuth（可用时还有 OpenAI 直连与 Meta Muse）；DSH 0.2.0-rc.1+ 还通过宿主服务提供 DeepSeek 浏览器登录，路由为 `deepseek-account`。通过 `/provider` 或 `/auth` 使用，无需另装插件。ChatGPT/Codex fast 可用 [`/fast on|off|status`](docs/configuration.md#内置订阅-oauth) 交互控制（空参或 `toggle` 切换）：从下一次请求起作用于当前 TUI 进程中本插件自注册的所有支持 OAuth 路由，不改变 `effort`。开关不持久化；重启恢复可选的 `config.serviceTier` 启动默认（未配置即关闭/供应商默认）。是否接受及额度由后端决定。
   仅更新 profile 而留下已挂载 `dsh-tui-auth` 的旧全局 TUI 补丁时，本地登录也会按需启动官方 loopback 回调监听器；SSH 固定端口转发仍需对齐全局安装包。
 - **扩展** — 浏览器交互、computer use 等。
 - **为长会话设计** — 事件驱动投影、虚拟化、有界缓存。

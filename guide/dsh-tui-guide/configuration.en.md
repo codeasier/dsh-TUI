@@ -324,8 +324,8 @@ interactive question surface refuses sign-in explicitly.
 
 The `dsh-tui-auth` row accepts `providers` (default: all supported flows present
 in the installed pi-ai catalog; an explicit non-empty subset must exist in
-that catalog), `credentialsFile` (custom file path), `serviceTier` (request
-body `service_tier`, see below), and
+that catalog), `credentialsFile` (custom file path), `serviceTier` (optional
+startup default for the request body `service_tier`, see below), and
 `modelOverrides.<provider>.<model>` (optional `contextWindow` and `maxTokens`).
 A profile override replaces the whole `config` block, so retain every field
 you need, especially existing `modelOverrides` (and any custom `providers` or
@@ -333,23 +333,37 @@ you need, especially existing `modelOverrides` (and any custom `providers` or
 installation. Subscription authentication uses its subscription backend; it
 is not a general-purpose API key.
 
-`serviceTier` rides every request whose wire protocol carries the
-`service_tier` field — the ChatGPT/Codex backend behind `openai-codex` and
-the OpenAI direct `openai` route, on both the SSE and WebSocket transports.
-Other mounted protocols (`anthropic`, `xai`, `meta`) are unaffected.
-`serviceTier: priority` requests the ChatGPT/Codex **fast service tier**;
-it is independent of reasoning `effort` and does not reduce or override it.
-The subscription backend decides tier acceptance, available quota, and limits;
-the TUI does not guarantee approval or additional quota.
+**Prefer the interactive `/fast` command for the fast service tier**, without
+editing YAML or restarting. This plugin's OAuth entry registers the command:
+bare `/fast` or `/fast toggle` switches it, `/fast on` sets `priority`,
+`/fast off` sets `default`, and `/fast status` only reports the current state.
+Changes apply from the **next model request**, leaving already-sent requests
+and reasoning `effort` unchanged. The switch covers **all supported OAuth
+routes registered by this plugin in the current TUI process**, not just the
+current session or model. Supported wire protocols are `openai-codex-responses`
+and `openai-responses` (the `openai-codex` ChatGPT/Codex backend and, when
+available, the OpenAI direct `openai` route), over both SSE and WebSocket.
+Other protocols (`anthropic`, `xai`, `meta`) and routes registered by other
+plugins are unaffected. An unmounted OAuth entry does not provide `/fast`.
+When the entry is mounted but has no successfully registered supported route,
+`/fast` gives a clear unavailable error rather than silently changing unrelated routes. The backend decides acceptance of `priority`, quota, and
+limits; the TUI does not guarantee approval or additional quota.
 
-The value passes through after trimming surrounding whitespace, without enum
-mapping: OpenAI documents `auto` / `default` / `flex` / `scale` / `priority`,
-and the backend also decides what any other value means. Setting `serviceTier`
-while no mounted route ships a model with the field fails at boot instead of
-being silently ignored; a whitespace-only value fails the same way. This
-example retains a `modelOverrides` entry too; substitute your existing
-overrides, use model IDs present in the installed catalog, and repeat any
-other config fields you need:
+`config.serviceTier` is only an **optional startup default**; interactive
+`/fast` takes precedence. The switch writes neither config nor other persistent
+files; restarting restores the configured startup value. With no configuration,
+fast starts off and `service_tier` is omitted, leaving the provider's default
+(whereas `/fast off` explicitly sends `default`). `serviceTier: priority` can
+request fast at startup without reducing or overriding `effort`.
+The configured value passes through after trimming surrounding whitespace,
+without enum mapping: OpenAI documents `auto` / `default` / `flex` / `scale` /
+`priority`, and the backend decides what any other value means. Setting
+`serviceTier` while no mounted route has a supported model fails at boot rather
+than being silently ignored; a whitespace-only value also fails. This example
+chooses the optional `priority` startup default and retains a `modelOverrides`
+entry; omit `serviceTier` if you do not need fast at startup. Substitute your
+existing overrides, use model IDs present in the installed catalog, and repeat
+any other config fields you need:
 
 ```yaml
 - id: dsh-tui-auth
