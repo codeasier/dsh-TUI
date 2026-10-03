@@ -176,16 +176,20 @@ function verify(layout, mode, options = {}) {
   if (success) {
     const installedManifest = JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8'))
     const newSpec = installedManifest.dependencies[packageName]
-    assert.equal(newSpec, 'file:' + oldTar)
+    assert.ok(newSpec.startsWith('file:'))
+    const newTar = newSpec.slice(5)
+    assert.equal(dirname(dirname(newTar)), packDir, 'install this run\'s unique pack artifact')
+    assert.match(dirname(newTar).split('/').at(-1), /^dsh-tui\./)
+    assert.equal(existsSync(newTar), true)
+    assert.notEqual(newTar, oldTar, 'never reuse the old referenced tarball path')
     assert.equal(readFileSync(join(profile, 'pnpm-lock.yaml'), 'utf8'), '# new lock ' + newSpec + '\n')
-    assert.notDeepEqual(readFileSync(oldTar), tarBytes)
   } else {
     assert.equal(readFileSync(join(profile, 'package.json'), 'utf8'), profileManifest)
     assert.equal(existsSync(join(profile, 'pnpm-lock.yaml')), !options.noLock)
     if (!options.noLock) assert.equal(readFileSync(join(profile, 'pnpm-lock.yaml'), 'utf8'), lock)
-    assert.deepEqual(readFileSync(oldTar), tarBytes, 'restore exact old tarball even if pack overwrote the same filename')
     if (mode !== 'restore-fail') assert.deepEqual(tree(join(profile, 'node_modules')), before)
   }
+  assert.deepEqual(readFileSync(oldTar), tarBytes, 'preserve exact old referenced bytes on success and failure')
   assert.equal(readFileSync(store, 'utf8'), oldModule, 'never mutate pnpm store/hardlink source')
   assert.equal(readFileSync(join(profile, 'node_modules/unrelated/keep.txt'), 'utf8'), 'unrelated installation\n')
   for (const name of untouched) assert.equal(readFileSync(join(profile, name), 'utf8'), `user-owned ${name}\n`)
