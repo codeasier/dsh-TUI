@@ -1,6 +1,10 @@
 # dsh-tui interactive front door over the agent-spine bundle.
 # Run with: dsh --config cordis.yml (或 npm 安装后走 dsh plugin 机制)
 # Requires DEEPSEEK_API_KEY; a terminal TTY is mandatory.
+# Subscription OAuth uses the standard profile's dsh-tui-auth row instead:
+# serviceTier: priority requests ChatGPT/Codex fast without changing effort;
+# acceptance and quota are backend-owned. See docs/configuration.en.md
+# (Built-in subscription OAuth); this bare example does not mount OAuth.
 
 # The user-interaction service: hosts `ctx.userQuestions`, the seam behind
 # the model-facing ask_user_question tool. dsh-tui uses the legacy provider

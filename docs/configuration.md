@@ -281,11 +281,36 @@ Claude（`anthropic`）、Grok（`xai`）订阅账号登录。宿主 pi-ai catal
 短码。无交互问卷服务的宿主会明确拒绝登录。
 
 `dsh-tui-auth` 行可配置 `providers`（默认安装版 pi-ai catalog 中所有受支持的流程；
-显式指定时必须是其中的非空子集）、`credentialsFile`（自定义凭据文件）和
+显式指定时必须是其中的非空子集）、`credentialsFile`（自定义凭据文件）、
+`serviceTier`（请求体 `service_tier`，见下）和
 `modelOverrides.<provider>.<model>`（可选的 `contextWindow`、`maxTokens`）。
-profile 覆盖的 `config` 是整段替换，覆盖时保留所需的每个字段。OAuth 流程使用宿主
+profile 覆盖的 `config` 是整段替换，覆盖时保留所需的每个字段，尤其是已有的
+`modelOverrides`（以及自定义的 `providers`、`credentialsFile`）。OAuth 流程使用宿主
 `dsh-llm-pi-ai` 所带的 pi-ai 实现；这不是通用 API key 登录，订阅账号只走相应的
 订阅后端。
+
+`serviceTier` 会注入 wire 协议携带 `service_tier` 字段的每个请求（即
+`openai-codex` 的 ChatGPT/Codex 后端与 `openai` 直连路由；SSE 与 WebSocket 传输
+都生效），其他挂载协议（`anthropic`、`xai`、`meta`）不受影响。
+`serviceTier: priority` 请求 ChatGPT/Codex 的 **fast 服务档位**，与推理强度
+`effort` 无关，不会降低或覆盖它。是否接受该档位、可用额度及限额由订阅后端决定，
+TUI 不保证请求获准或获得额外额度。
+
+取值去除首尾空白后透传给后端，不作枚举映射：OpenAI 文档值为 `auto` / `default` /
+`flex` / `scale` / `priority`，其他值同样由后端裁决。配置了 `serviceTier` 但挂载的
+路由中没有任何携带该字段的模型时，启动直接报错而不是静默忽略；空白字符串同样
+报错。下面示例同时保留一个 `modelOverrides`；请换成自己的已有覆盖，模型 ID
+必须存在于安装版 catalog 中，并一并保留其他所需配置：
+
+```yaml
+- id: dsh-tui-auth
+  config:
+    serviceTier: priority
+    modelOverrides:
+      openai-codex:
+        gpt-5.6-sol:
+          contextWindow: 1000000
+```
 
 默认凭据文件保持 `$DSH_HOME/dsh-auth/credentials.json`（未设置 `DSH_HOME` 时为
 `~/.dsh/dsh-auth/credentials.json`），也可用 `DSH_AUTH_CREDENTIALS` 覆盖；旧版登录

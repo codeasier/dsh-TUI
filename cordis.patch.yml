@@ -437,6 +437,11 @@
     - id: dsh-tui-auth
       name: '@deepseek-harness-tui/dsh-tui/oauth'
       inject: [llm, commands]
+      # config:
+      #   serviceTier: priority # ChatGPT/Codex fast; independent of effort.
+      # Backend decides acceptance and quota; other protocols are unaffected.
+      # Profile overrides replace config: retain existing modelOverrides and
+      # any other fields you need. See docs/configuration.en.md.
 
     # The interactive front door. The plugin creates/resumes its agent at
     # runtime, seeds the startup status line, and disposes the whole app tree

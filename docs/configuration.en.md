@@ -324,12 +324,42 @@ interactive question surface refuses sign-in explicitly.
 
 The `dsh-tui-auth` row accepts `providers` (default: all supported flows present
 in the installed pi-ai catalog; an explicit non-empty subset must exist in
-that catalog), `credentialsFile` (custom file path), and
+that catalog), `credentialsFile` (custom file path), `serviceTier` (request
+body `service_tier`, see below), and
 `modelOverrides.<provider>.<model>` (optional `contextWindow` and `maxTokens`).
 A profile override replaces the whole `config` block, so retain every field
-you need. The flow implementation comes from the host's `dsh-llm-pi-ai` / pi-ai
+you need, especially existing `modelOverrides` (and any custom `providers` or
+`credentialsFile`). The flow implementation comes from the host's `dsh-llm-pi-ai` / pi-ai
 installation. Subscription authentication uses its subscription backend; it
 is not a general-purpose API key.
+
+`serviceTier` rides every request whose wire protocol carries the
+`service_tier` field — the ChatGPT/Codex backend behind `openai-codex` and
+the OpenAI direct `openai` route, on both the SSE and WebSocket transports.
+Other mounted protocols (`anthropic`, `xai`, `meta`) are unaffected.
+`serviceTier: priority` requests the ChatGPT/Codex **fast service tier**;
+it is independent of reasoning `effort` and does not reduce or override it.
+The subscription backend decides tier acceptance, available quota, and limits;
+the TUI does not guarantee approval or additional quota.
+
+The value passes through after trimming surrounding whitespace, without enum
+mapping: OpenAI documents `auto` / `default` / `flex` / `scale` / `priority`,
+and the backend also decides what any other value means. Setting `serviceTier`
+while no mounted route ships a model with the field fails at boot instead of
+being silently ignored; a whitespace-only value fails the same way. This
+example retains a `modelOverrides` entry too; substitute your existing
+overrides, use model IDs present in the installed catalog, and repeat any
+other config fields you need:
+
+```yaml
+- id: dsh-tui-auth
+  config:
+    serviceTier: priority
+    modelOverrides:
+      openai-codex:
+        gpt-5.6-sol:
+          contextWindow: 1000000
+```
 
 The default credential file remains `$DSH_HOME/dsh-auth/credentials.json`
 (`~/.dsh/dsh-auth/credentials.json` when `DSH_HOME` is unset), with
