@@ -230,6 +230,16 @@ const tool1 = {
   },
 }
 channel.rows.push(tool1); bump(); await sleep(400) // 固定窗:pacing 工具 running 态的回放时长
+if (expandedTools) {
+  const beforeGrowth = fullBufferLines()
+  const markers = ['READ_RESULT_ONCE_7F31', ...Array.from({ length: 6 }, (_, i) => `READ_DETAIL_${i}_7F31`), 'READ_END_ONCE_7F31']
+  check('结果增长前：旧展开 READ 正文已完整到达且唯一',
+    markers.every(marker => beforeGrowth.filter(line => line.includes(marker)).length === 1))
+  const tailRows = ['READ_DETAIL_5_7F31', 'READ_END_ONCE_7F31'].map(marker => beforeGrowth.findIndex(line => line.includes(marker)))
+  check('结果增长前：READ 尾行仍处在原生视口，覆盖 spacer 清除边界',
+    tailRows.every(y => y >= term.buffer.active.baseY && y < term.buffer.active.baseY + ROWS),
+    `tailRows=${tailRows.join(',')} baseY=${term.buffer.active.baseY}`)
+}
 tool1.tool.status = 'ok'
 tool1.tool.durationMs = 42
 tool1.tool.resultText = Array.from({ length: 20 }, (_, i) => `工具结果行 ${i}`).join('\n')

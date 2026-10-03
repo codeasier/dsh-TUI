@@ -617,6 +617,7 @@ export function MessageList({
    *  scrollback and the diff skips them. */
   const lastStartRef = React.useRef<number>(-1)
   const holdFlushTickRef = React.useRef<number>(-1)
+  const geometryFlushPendingRef = React.useRef(false)
   /** True when frame-budgeted history painting still has batches left
    *  (main-screen open): the layout effect schedules the next slice. */
   const paintPendingRef = React.useRef(false)
@@ -680,6 +681,7 @@ export function MessageList({
   // render was O(rows) garbage per tick (3200-row session ⇒ several MB/s
   // into minor GC; the GC share of the scroll profile).
   const sigRef = React.useRef(new Map<number, Array<string | number | boolean>>())
+  let heightInputsChanged = false
   {
     const sigs = sigRef.current
     for (let i = 0; i < visibleRows.length; i++) {
@@ -715,6 +717,7 @@ export function MessageList({
         }
       }
       if (same) continue
+      heightInputsChanged = true
       if (sigs.size >= HEIGHTS_CACHE_MAX) {
         const oldest = sigs.keys().next().value
         if (oldest !== undefined) sigs.delete(oldest)
@@ -723,6 +726,22 @@ export function MessageList({
       sigs.set(row.id, parts.slice())
       heightsRef.current.delete(row.id)
       heightsVersionRef.current++
+    }
+  }
+
+  // Inline history must survive the first flush of changed row geometry,
+  // even when that commit did not widen the mount window. A measurement
+  // commit can otherwise replace still-visible rows with spacers BEFORE
+  // the growing frame pushes their complete text into native scrollback.
+  if (historyPaintEnabled) {
+    const flushTick = getTerminalFlushTick()
+    if (geometryFlushPendingRef.current) {
+      // Release the completed hold before arming another: continuous
+      // streaming must still be able to tighten its window at flush edges.
+      if (flushTick !== holdFlushTickRef.current) geometryFlushPendingRef.current = false
+    } else if (heightInputsChanged) {
+      holdFlushTickRef.current = flushTick
+      geometryFlushPendingRef.current = true
     }
   }
 
