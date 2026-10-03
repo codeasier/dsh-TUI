@@ -16,6 +16,7 @@ import type { ToolBackground } from '../../tuiDisplayPrefs.js'
 import type { Theme } from '../../theme.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
 import { primaryComboString } from '../../utils/keymap.js'
+import { usePageInset } from '../PageMargin.js'
 // Left border + horizontal padding; kept in sync with the card Box below.
 const CARD_CHROME_WIDTH = 3
 const BODY_INDENT = 2
@@ -49,6 +50,8 @@ type Props = {
   diffLayout?: 'auto' | 'split' | 'unified'
   /** Background treatment for the ordinary, unselected tool card surface. */
   toolBackground?: ToolBackground
+  /** Transcript surfaces extend into page margins, but never into the gutter. */
+  bleed?: boolean
   /**
    * Click-to-act (fullscreen): opens the file-action menu for the tool's
    * file path. When provided, the path in the card header (and diff path
@@ -563,6 +566,7 @@ export function AssistantToolUseMessage({
   footnote,
   diffLayout = 'auto',
   toolBackground = 'subtle',
+  bleed = false,
   onOpenFile,
   foldTerminalCommand = false,
 }: Props): React.ReactNode {
@@ -615,6 +619,12 @@ export function AssistantToolUseMessage({
   // source line per terminal row (truncate) keeps the panes row-aligned,
   // which the flat add/del line model cannot express.
   const { columns } = useTerminalSize()
+  const pageInset = usePageInset()
+  // Keep one canvas column on the left and two gutter columns on the right.
+  // Inline summaries remain prose-sized; standalone cards do not bleed.
+  const bleedLeft = bleed && !inlineSummary ? Math.max(0, pageInset.x - 1) : 0
+  const bleedRight = bleed && !inlineSummary ? Math.max(0, pageInset.x - 2) : 0
+  const cardColumns = columns + bleedLeft + bleedRight
   // Interactive rows grow a ▾/▴ disclose column while the pointer dwells
   // (fixed, no layout shift elsewhere). The tooltip resolves at show time —
   // i.e. exactly while that column is present — so the budget must reserve
@@ -622,9 +632,9 @@ export function AssistantToolUseMessage({
   const interactive = onClick !== undefined
   // TerminalSize is already page-margin adjusted. Reserve the card border,
   // padding, status dot, hover indicator and settled elapsed chip.
-  const headerTextBudget = Math.max(0, columns - (inlineSummary ? 0 : CARD_CHROME_WIDTH) - 2 - (interactive ? 2 : 0)
+  const headerTextBudget = Math.max(0, cardColumns - (inlineSummary ? 0 : CARD_CHROME_WIDTH) - 2 - (interactive ? 2 : 0)
     - (!inlineSummary && !isRunning && elapsedText !== '' ? stringWidth(elapsedText) : 0))
-  const bodyWidth = Math.max(1, columns - CARD_CHROME_WIDTH - BODY_INDENT)
+  const bodyWidth = Math.max(1, cardColumns - CARD_CHROME_WIDTH - BODY_INDENT)
   const splitPreviewSafe = React.useMemo(
     () => view?.card === 'diff' && canPreviewSplitDiff(view.diffs),
     [view],
@@ -693,7 +703,9 @@ export function AssistantToolUseMessage({
       paddingX={inlineSummary ? 0 : 1}
       paddingY={inlineSummary ? 0 : 1}
       marginTop={marginTopOnTurn ? 1 : 0}
-      width="100%"
+      width={bleedLeft > 0 || bleedRight > 0 ? cardColumns : '100%'}
+      marginLeft={-bleedLeft}
+      marginRight={-bleedRight}
       onClick={onClick}
       // Only selection paints a highlight; the configured treatment applies
       // to an ordinary card. Diff line tints stay - they are content, not chrome.

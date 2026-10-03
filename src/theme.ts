@@ -42,7 +42,10 @@ export type Theme = {
   subtle: string
   suggestion: string
   remember: string
+  /** Badge fill, distinct from the overall session surface. */
   background: string
+  /** Overall session canvas, including the PageMargin surface. */
+  sessionBackground: string
   // Semantic colors
   success: string
   error: string
@@ -274,6 +277,7 @@ const darkTheme: Theme = {
   suggestion: rgb('#ABC2EC'), // Border Blue — focus/selection
   remember: rgb('#ABC2EC'),
   background: rgb('#5E88CC'), // Accent Blue — badge fill
+  sessionBackground: rgb('#191919'), // Neutral gray session canvas
   success: rgb('#82B89D'), // Mist green (from #4E9675)
   error: rgb('#DA8A93'), // Soft rose
   warning: rgb('#D8B270'), // Soft amber
@@ -366,6 +370,7 @@ const lightTheme: Theme = {
   suggestion: rgb('#3F6CC4'), // Primary Blue — focus/selection
   remember: rgb('#27478C'), // Deep Outline — picker titles
   background: rgb('#3F6CC4'), // Primary Blue — badge fill
+  sessionBackground: rgb('#F2F2F2'), // Light gray session canvas
   success: rgb('#4E9675'),
   error: rgb('#C65D6B'), // Muted rose-red
   warning: rgb('#C08A3E'), // Muted amber
@@ -461,6 +466,7 @@ const darkAnsiTheme: Theme = {
   suggestion: 'ansi:blueBright',
   remember: 'ansi:blueBright',
   background: 'ansi:cyanBright',
+  sessionBackground: 'ansi:black', // Restrained 16-color compatibility surface
   success: 'ansi:greenBright',
   error: 'ansi:redBright',
   warning: 'ansi:yellowBright',

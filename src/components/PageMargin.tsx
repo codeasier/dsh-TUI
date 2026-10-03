@@ -54,9 +54,9 @@ export const PageInsetContext = React.createContext<PageInset>({ x: 0, y: 0 })
 
 /**
  * 内容区相对屏幕原点的偏移。供"出血"（full-bleed）chrome 使用：页面级
- * 分割线、右侧滚动轨这类结构性元素直通终端边缘，而内容（文本、卡片）
- * 保持页边距内缩——常规排版设计的做法（内容列留边距、横线/滚动轨出血
- * 到版面边缘）。无 PageMargin 时恒为 {x:0, y:0}。
+ * 分割线、右侧滚动轨这类结构性元素直通终端边缘，正文保持页边距内缩；
+ * 转录工具卡片表面可向两侧延伸，但保留底板边缘与滚动轨空间。
+ * 无 PageMargin 时恒为 {x:0, y:0}。
  */
 export function usePageInset(): PageInset {
   return React.useContext(PageInsetContext)
@@ -97,6 +97,7 @@ export function PageMargin({
           width="100%"
           paddingX={x}
           paddingY={y}
+          backgroundColor="sessionBackground"
         >
           {/* 内容盒：ink 的百分比宽度按父盒「全宽」（含 padding）解析——
               直接 padding 的盒子里 width="100%" 会始终宽出 2·inset×（滚动轨

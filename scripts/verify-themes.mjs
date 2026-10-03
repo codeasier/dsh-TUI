@@ -117,6 +117,26 @@ check('palette: light panels are white without changing accent or dark surfaces'
   assert.equal(getTheme('dark-ansi').toolCardBackground, 'ansi:blackBright')
 })
 
+check('palette: session canvas is neutral and badge fills stay unchanged', () => {
+  for (const [base, canvas, badge] of [
+    ['dark', 'rgb(25,25,25)', 'rgb(94,136,204)'],
+    ['light', 'rgb(242,242,242)', 'rgb(63,108,196)'],
+    ['dark-ansi', 'ansi:black', 'ansi:cyanBright'],
+  ]) {
+    assert.equal(getTheme(base).sessionBackground, canvas)
+    assert.equal(getTheme(base).background, badge)
+    const spec = parseCustomTheme(JSON.stringify({ base }), `${base}.json`)
+    assert.ok(spec)
+    assert.equal(buildTheme(spec).sessionBackground, canvas, `${base} custom-theme fallback`)
+  }
+  const spec = parseCustomTheme(JSON.stringify({
+    base: 'dark', colors: { sessionBackground: '#202020' },
+  }), 'canvas.json')
+  assert.ok(spec)
+  assert.equal(buildTheme(spec).sessionBackground, '#202020')
+  assert.equal(buildTheme(spec).background, getTheme('dark').background)
+})
+
 // --- parsing / validation --------------------------------------------------
 const goodText = FIXTURES['good.json']
 check('parse: valid theme fields', () => {

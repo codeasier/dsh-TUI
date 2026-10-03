@@ -96,6 +96,11 @@ const topBlank = lines[0]?.trim() === ''
 const bottomBlank = lines[ROWS - 1]?.trim() === ''
 check('顶行空白（上行边距）', topBlank, JSON.stringify(lines[0]))
 check('底行空白（下行边距）', bottomBlank, JSON.stringify(lines[ROWS - 1]))
+check('会话底色覆盖四角空白边距和正文',
+  [[0, 0], [COLS - 1, 0], [0, ROWS - 1], [COLS - 1, ROWS - 1], [3, 1]].every(([x, y]) => {
+    const cell = term.buffer.active.getLine(term.buffer.active.baseY + y!)?.getCell(x!)
+    return cell?.isBgRGB() === true && cell.getBgColor() === 0x191919
+  }))
 const sizeRow = lines.findIndex(l => l.includes('size='))
 const edgeRow = lines.findIndex(l => l.trimStart().startsWith('|'))
 const endRow = lines.findIndex(l => l.trimStart().startsWith('END'))
@@ -123,6 +128,8 @@ const none = screenLines()
 check('none：内容区 40x12（无内缩）', none.some(l => l.includes('size=40x12 inset=0,0')))
 check('none：首行即内容（无顶部边距）', none[0]!.includes('size=40x12'), JSON.stringify(none[0]))
 check('none：END 贴最后一行', none[ROWS - 1]!.trim() === 'END', JSON.stringify(none[ROWS - 1]))
+check('none：关闭边距后仍保留会话底色',
+  term.buffer.active.getLine(term.buffer.active.baseY)?.getCell(COLS - 1)?.getBgColor() === 0x191919)
 
 // ── 自定义规格：NxM（预设之外手动填数值）──
 const { parsePageMarginSpec, normalizePageMargin } = await import('../src/tuiDisplayPrefs.js')
@@ -250,7 +257,7 @@ check('Chat：滚动轨在 98/99 列（贴终端右缘）', railRows.some(Boolea
 check('Chat：右缘 98/99 列只有滚动轨占用（无其他内容越界）',
   Array.from({ length: CHAT_ROWS }, (_, y) => (cellAtC(y, 98) === '' && cellAtC(y, 99) === '') || railRows[y]!).every(Boolean))
 check('Chat：左缘 0/1/2 列恒空白（文本不越界）',
-  Array.from({ length: CHAT_ROWS }, (_, y) => cellAtC(y, 0) === '' && cellAtC(y, 1) === '' && cellAtC(y, 2) === '').every(Boolean))
+  Array.from({ length: CHAT_ROWS }, (_, y) => [0, 1, 2].every(x => cellAtC(y, x).trim() === '')).every(Boolean))
 
 // 对照组：无 PageMargin 的树 —— 尺寸不收敛、inset=0（verify 直挂契约不变）。
 // 先卸载带边距的应用再挂对照组：同一进程并存两个 Ink 实例时，第二个实例

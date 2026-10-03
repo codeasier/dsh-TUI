@@ -4538,15 +4538,17 @@ export function Chat({
           }}
         />
       )}
-      {/* Transcript row. Under PageMargin the negative right margin makes
-          the row stretch past the content column to the terminal edge —
-          the gutter (timeline rail / scrollbar) thus lands at the very
-          edge while the transcript TEXT stays inside the page margin
-          (structural chrome convention: dividers and the rail bleed, text
-          and cards keep the content column). No explicit width: cross-axis
-          stretch with the margin yields exactly content+margin. */}
-      <Box flexDirection="row" flexGrow={1} flexShrink={1} marginRight={-pageInsetX}>
+      {/* The viewport reaches both page edges so card surfaces can extend
+          into the margins without being clipped. Prose keeps its original
+          content column; the gutter still occupies the terminal's right edge. */}
+      <Box flexDirection="row" flexGrow={1} flexShrink={1} marginLeft={-pageInsetX} marginRight={-pageInsetX}>
         <ScrollBox ref={setHandle} flexDirection="column" flexGrow={1} flexShrink={1} stickyScroll>
+        <Box
+          flexDirection="column"
+          flexShrink={0}
+          marginLeft={pageInsetX}
+          width={Math.max(1, terminalColumns - Math.max(0, (normalizeScrollGutter(channel.scrollGutter) === 'hidden' ? 0 : 2) - pageInsetX))}
+        >
         <LogoHeader
           key={logoNonce}
           model={channel.model}
@@ -4617,6 +4619,7 @@ export function Chat({
           onPreviewImage={openImagePreview}
           suppressImageGraphics={activePreview !== null}
         />
+        </Box>
         </ScrollBox>
         {(() => {
           // Gutter mode (settings `dsh-tui.scrollGutter`): the timeline

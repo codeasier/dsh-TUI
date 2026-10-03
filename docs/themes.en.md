@@ -99,6 +99,7 @@ Available color keys by purpose:
 - Panels/borders: `permission`, `permissionShimmer`, `promptBorder`, `promptBorderShimmer`, `bashBorder`, `planMode`, `ide`, `background`
 - Body text: `text`, `inverseText`, `inactive`, `inactiveShimmer`, `subtle`
 - Tool names & status dots: `toolNameMutate`, `toolNameExec`, `toolDotExec`, `toolDotRead`, `toolDotWrite`, `toolDotWeb`, `toolDotTask`
+- Session canvas: `sessionBackground` (includes page margins; independent of badge fill `background`)
 - Tool card surfaces: `toolCardBackground`, `toolCardBackgroundDim`
 - Status: `autoAccept`, `success`, `error`, `warning`, `warningShimmer`, `merged`
 - Diff: `diffAdded`, `diffRemoved`, `diffAddedDimmed`, `diffRemovedDimmed`, `diffAddedWord`, `diffRemovedWord`

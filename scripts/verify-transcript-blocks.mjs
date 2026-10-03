@@ -42,9 +42,10 @@ const { Terminal: XTerm } = xtermHeadless.default ?? xtermHeadless
 const fullscreen = !process.argv.includes('--inline')
 const COLS = process.argv.includes('--narrow') ? 52 : 100
 const ROWS = fullscreen ? 40 : 80
-/** PageMargin's left inset — every transcript row starts here at the latest. */
+/** PageMargin's text inset; card surfaces extend closer to the canvas edges. */
 const MARGIN = 3
-const RAIL = '│ '
+const CARD_EDGE = 1
+const CANVAS_BG = 0x191919
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -182,13 +183,13 @@ const lines = () => Array.from(
 )
 /** First viewport row whose text contains `needle`, or -1. */
 const rowOf = needle => lines().findIndex(line => line.includes(needle))
-/** Cells on `y` whose background is not the terminal default. */
+/** Cells on `y` whose surface differs from the session canvas. */
 function bandCells(y) {
   const line = term.buffer.active.getLine(term.buffer.active.baseY + y)
   let filled = 0
   for (let x = 0; x < COLS; x += 1) {
     const cell = line?.getCell(x)
-    if (cell !== undefined && cell.getChars() !== '' && !cell.isBgDefault()) filled += 1
+    if (cell !== undefined && !cell.isBgDefault() && cell.getBgColor() !== CANVAS_BG) filled += 1
   }
   return filled
 }
@@ -211,18 +212,18 @@ check('prose is flush left with no prefix marker',
   JSON.stringify(proseLine.slice(0, 16)))
 check('prose carries no transcript band', bandCells(proseIdx) === 0, `cells=${bandCells(proseIdx)}`)
 
-// ── 3. machine activity: the rail, indented two columns ──────────────────
+// ── 3. machine activity: wider surfaces, inset card titles ───────────────
 const editIdx = rowOf('Edit /tmp/handoff.md')
 const thinkIdx = rowOf('思考 · 4s')
 const bashIdx = rowOf('Bash(ls -la)')
 check('tool card renders', editIdx >= 0)
 check('thinking row renders', thinkIdx >= 0)
-check('output cards retain the rail but thinking is flush left',
-  (lines()[editIdx] ?? '').startsWith(`${' '.repeat(MARGIN)}${RAIL}`)
+check('output cards extend left of prose but thinking is flush left',
+  (lines()[editIdx] ?? '').startsWith(`${' '.repeat(CARD_EDGE)}│ `)
   && (lines()[thinkIdx] ?? '').startsWith(`${' '.repeat(MARGIN)}+ 思考`),
   JSON.stringify((lines()[editIdx] ?? '').slice(0, 12)))
-check('the railed content sits two columns right of prose',
-  (lines()[editIdx] ?? '').indexOf('Edit') === MARGIN + RAIL.length + 2,
+check('tool title sits two columns right of prose',
+  (lines()[editIdx] ?? '').indexOf('Edit') === MARGIN + 2,
   `col=${(lines()[editIdx] ?? '').indexOf('Edit')}`)
 
 // ── 4. vertical rhythm ───────────────────────────────────────────────────
@@ -232,9 +233,17 @@ check('card to summary keeps a blank separator without summary padding',
 check('the separator has no card background or rail',
   (lines()[editIdx + 2] ?? '').trim() === '' && bandCells(editIdx + 2) === 0)
 check('card border spans top padding, title and bottom padding',
-  [editIdx - 1, editIdx, editIdx + 1].every(y => (lines()[y] ?? '').startsWith(`${' '.repeat(MARGIN)}│`)))
-check('tool card surface fills the content width', bandCells(editIdx) > COLS - MARGIN - 8,
+  [editIdx - 1, editIdx, editIdx + 1].every(y => (lines()[y] ?? '').startsWith(`${' '.repeat(CARD_EDGE)}│`)))
+check('tool card surface is wider than the prose column', bandCells(editIdx) > COLS - 2 * MARGIN,
   `cells=${bandCells(editIdx)}`)
+const cell = (x, y) => term.buffer.active.getLine(term.buffer.active.baseY + y)?.getCell(x)
+check('canvas fills the top margin, left edge and prose background',
+  [cell(0, 0), cell(0, proseIdx), cell(MARGIN, proseIdx)].every(c => c?.isBgRGB() && c.getBgColor() === CANVAS_BG))
+check('card leaves one canvas column left and the gutter clear right',
+  cell(0, editIdx)?.getBgColor() === CANVAS_BG &&
+  cell(1, editIdx)?.getBgColor() !== CANVAS_BG &&
+  cell(COLS - 3, editIdx)?.getBgColor() !== CANVAS_BG &&
+  [COLS - 2, COLS - 1].every(x => cell(x, editIdx)?.getBgColor() === CANVAS_BG))
 check('reasoning is separated from the next tool card', thinkIdx === bashIdx - 3,
   `think=${thinkIdx} bash=${bashIdx}`)
 check('a prose row keeps its blank line after a summary run', proseIdx === rowOf('Read /tmp/next.ts') + 2,
