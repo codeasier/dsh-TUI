@@ -87,6 +87,9 @@ const GROUPS = {
 // 左右 3 列上下 1 行内缩 + TerminalSize 收敛成内容区尺寸 + inset 坐标
 // 补偿，对照组保证无 PageMargin 时既有「全宽」契约不变。
     ["verify-page-margin", ['node', '--import', 'tsx/esm', 'scripts/verify-page-margin.tsx']],
+// User prompt character fidelity: component 80/78 geometry and real Chat with
+// timeline/scrollbar gutters, page margins, wide characters, resize and copy.
+    ['verify-user-prompt-wrap', ['node', 'scripts/verify-user-prompt-wrap.mjs']],
 // 滚动/pill/内联模式回归：新消息 pill 计数递减、Ctrl+C 交互、
 // 内联 scrollback 第三方终端适配。曾因 mock channel 缺新字段而
 // 静默冻结（render 期 TypeError 被 ink 吞掉），不在 CI 里烂了
