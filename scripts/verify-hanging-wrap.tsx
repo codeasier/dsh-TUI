@@ -218,3 +218,5 @@ check('empty opt-in Text paints safely', () => {
   assert.equal(copy(actual.screen), copy(legacy.screen))
 })
 console.log(`PASS ${checks} hanging-wrap checks`)
+
+await import('./verify-hanging-clip-budget.js')

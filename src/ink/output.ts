@@ -626,7 +626,7 @@ export default class Output {
   private readonly imagePlacements: TerminalImagePlacement[] = []
   private readonly imageNodes = new Set<DOMElement>()
   private readonly imageBackingEnds = new Map<DOMElement, number>()
-  private readonly imageClips: Clip[] = []
+  private readonly paintClips: Clip[] = []
   private imageDecodedBytes = 0
   private previousImages: readonly TerminalImagePlacement[]
 
@@ -723,7 +723,7 @@ export default class Output {
     this.imagePlacements.length = 0
     this.imageNodes.clear()
     this.imageBackingEnds.clear()
-    this.imageClips.length = 0
+    this.paintClips.length = 0
     this.imageDecodedBytes = 0
     resetScreen(screen, width, height)
     // Bounds are enforced at insertion time (CharCache.set); nothing to
@@ -775,20 +775,19 @@ export default class Output {
     this.operations.push({ type: 'shade', region })
   }
 
-  /**
-   * Mark a region as non-selectable (excluded from fullscreen text
-   * selection copy + highlight). Used by <NoSelect> to fence off
-   * gutters (line numbers, diff sigils). Applied AFTER blit/write so
-   * the mark wins regardless of what's blitted into the region.
-   * @param region - the region to mark.
-   */
   /** Mark row `y` as a wrap continuation (see Styles.softWrapContinuation). */
   softWrapRow(y: number, contentEnd: number): void {
     this.operations.push({ type: 'softWrapRow', y, contentEnd })
   }
 
+  /**
+   * Mark the visible part of a region as non-selectable (copy + highlight).
+   * Capture the current clip at enqueue time: the final mask pass runs after
+   * all blits/writes, when this region's clip has already been popped.
+   */
   noSelect(region: Rectangle): void {
-    this.operations.push({ type: 'noSelect', region })
+    const visible = this.getVisibleRect(region.x, region.y, region.width, region.height)
+    if (visible !== undefined) this.operations.push({ type: 'noSelect', region: visible })
   }
 
   /**
@@ -832,7 +831,7 @@ export default class Output {
     )) {
       return false
     }
-    const clip = this.imageClips.at(-1)
+    const clip = this.paintClips.at(-1)
     if (!canCrop && (
       clip !== undefined &&
       ((clip.x1 !== undefined && left < clip.x1) ||
@@ -1019,11 +1018,18 @@ export default class Output {
 
   /** Whether a rectangle can contribute cells under the current paint clip. */
   isRectVisible(x: number, y: number, width: number, height: number): boolean {
-    const clip = this.imageClips.at(-1)
-    return x < Math.min(this.width, clip?.x2 ?? this.width) &&
-      x + width > Math.max(0, clip?.x1 ?? 0) &&
-      y < Math.min(this.height, clip?.y2 ?? this.height) &&
-      y + height > Math.max(0, clip?.y1 ?? 0)
+    return this.getVisibleRect(x, y, width, height) !== undefined
+  }
+
+  /** Intersect a rectangle with screen bounds and this Output's active clip. */
+  getVisibleRect(x: number, y: number, width: number, height: number): Rectangle | undefined {
+    const clip = this.paintClips.at(-1)
+    const left = Math.max(x, 0, clip?.x1 ?? 0)
+    const top = Math.max(y, 0, clip?.y1 ?? 0)
+    const right = Math.min(x + width, this.width, clip?.x2 ?? this.width)
+    const bottom = Math.min(y + height, this.height, clip?.y2 ?? this.height)
+    if (left >= right || top >= bottom) return undefined
+    return { x: left, y: top, width: right - left, height: bottom - top }
   }
 
   /**
@@ -1031,7 +1037,7 @@ export default class Output {
    * @param clip - the clip region to apply.
    */
   clip(clip: Clip): void {
-    this.imageClips.push(intersectClip(this.imageClips.at(-1), clip))
+    this.paintClips.push(intersectClip(this.paintClips.at(-1), clip))
     this.operations.push({
       type: 'clip',
       clip,
@@ -1040,7 +1046,7 @@ export default class Output {
 
   /** Pop the most recent clip region. */
   unclip(): void {
-    this.imageClips.pop()
+    this.paintClips.pop()
     this.operations.push({
       type: 'unclip',
     })
