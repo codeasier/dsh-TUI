@@ -6,7 +6,8 @@
 #
 # 环境变量：
 #   DSH_HOME            默认 ~/.dsh
-#   DSH_TUI_PACK_DIR    tarball 落盘目录，默认 $DSH_HOME/profiles/<profile>/local-packages
+#   DSH_TUI_PACK_DIR    打包根目录，默认 $DSH_HOME/profiles/<profile>/local-packages
+#                       每次使用独立子目录；保留旧产物，避免破坏其他 profile 的 file: 引用
 #
 # ---------------------------------------------------------------------------
 # 为什么是 tarball，而不是 `link:` / `pnpm link`（2026-09-29 实测，别改回去）
@@ -71,11 +72,15 @@ echo "==> 1/3 编译 src/ → lib/"
 echo
 echo "==> 2/3 打 tarball（发布形状 manifest）"
 mkdir -p "$PACK_DIR"
-# 不在这里清旧 tgz：profile 的 package.json 正用 file: 指着上一次的产物，
-# 先删再 pack 的话，pack 一失败就把可引导的产物删没了。清理挪到装完之后。
+PACK_DIR="$(cd "$PACK_DIR" && pwd)"
+# npm pack 的文件名只含版本；同版本重装也不能覆盖已有 file: 引用。
+# 独立目录只属于本次 pack，不按共享目录的 mtime 猜测产物，也不清理旧包。
+PACK_RUN="$(mktemp -d "$PACK_DIR/dsh-tui.XXXXXX")"
 (cd "$REPO" && node scripts/with-publish-manifest.mjs \
-  npm pack --ignore-scripts --pack-destination "$PACK_DIR" >/dev/null)
-TARBALL="$(ls -t "$PACK_DIR"/*.tgz | head -1)"
+  npm pack --ignore-scripts --pack-destination "$PACK_RUN" >/dev/null)
+set -- "$PACK_RUN"/*.tgz
+[ "$#" -eq 1 ] && [ -f "$1" ] || { echo "本次 pack 未生成唯一 tarball：$PACK_RUN" >&2; exit 1; }
+TARBALL="$1"
 echo "    $TARBALL"
 
 echo
@@ -108,12 +113,6 @@ if [ "$want" != "$have" ]; then
 fi
 [ "$want" = "$have" ] || { echo "安装产物与 tarball 不一致（$have ≠ $want）" >&2; exit 1; }
 echo "    lib 摘要一致：$(printf '%s' "$have" | cut -c1-12)…"
-
-# 装成功了才清旧包：此刻 profile 的 package.json 已指向 $TARBALL，其余都是死重量。
-for old in "$PACK_DIR"/*.tgz; do
-  [ "$old" = "$TARBALL" ] && continue
-  rm -f "$old"
-done
 
 echo
 echo "完成。在 TUI 里 /restart 生效（或重开 dst）。"
