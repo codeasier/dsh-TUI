@@ -291,6 +291,7 @@ The command menu = built-in commands (50) + DSH registry commands (`/plan` `/goa
 |---|---|---|
 | `/provider` | none | interactive model-provider wizard (add / edit / delete; standard-profile account sign-in includes DeepSeek on DSH 0.2.0-rc.1+, plus ChatGPT/Codex / Claude / Grok and, when supported by host pi-ai, OpenAI direct / Meta Muse) |
 | `/auth` | `status` / `login [provider]` / `logout <provider>` | inspect account status, sign in, or sign out (`deepseek-account` for DeepSeek; `openai-codex` / `anthropic` / `xai` for pi-ai subscriptions; newer pi-ai also `openai` / `meta`) |
+| `/fast` | none / `toggle` / `on` / `off` / `status` | fast switch registered by the OAuth plugin: bare/`toggle` switches, `on` sets `priority`, `off` sets `default`, `status` reports; applies from the next model request, leaving `effort` unchanged |
 | `/login` | none | credential status (source, store writability, base URL; account states are listed when the OAuth module is mounted) |
 | `/logout` | none | logout notes (env source: delete the variable and restart) |
 | `/permission` | none / `<preset>` / `status` | view/switch permission preset and policy (no arg opens the selector) |
@@ -301,6 +302,15 @@ The command menu = built-in commands (50) + DSH registry commands (`/plan` `/goa
 | `/plugins` | `check <dsh-plugin.json 路径>` | plugin diagnostics: trust banner + host descriptor + authorization matrix + ledger; `check` validates a manifest and reports compatibility |
 | `/update` | none | update the TUI and auto-restart to resume the session (only via `dsh --profile`; rejected mid-turn) |
 | `/terminal-setup` | none | terminal setup advice (Windows Terminal ≥110 columns, paste keys) |
+
+`/fast` covers all supported OAuth routes registered by this plugin in the
+current TUI process (`openai-codex-responses` / `openai-responses`), not just
+the current model or session; other protocols and other plugins' routes stay
+unchanged. It is not persisted: restarting restores the optional
+`config.serviceTier` startup default; unset means off/provider default. An
+unmounted OAuth entry does not provide the command; a mounted entry with no
+successfully registered supported route reports a clear unavailable error.
+The backend owns tier acceptance and quota. See [built-in subscription OAuth](configuration.en.md#built-in-subscription-oauth).
 
 ### 3.5 Skills
 

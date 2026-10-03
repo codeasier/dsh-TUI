@@ -1373,6 +1373,17 @@ const dict = {
   'oauth-open-failed': { zh: '无法打开浏览器，请改为复制链接。', en: 'Could not open the browser; copy the link instead.' },
   'oauth-waiting': { zh: '等待授权…', en: 'Waiting for authorization…' },
   'oauth-choose-action': { zh: '请选择一个操作。', en: 'Choose an action.' },
+  // /fast：当前 TUI 进程的 OAuth service tier，不持久化也不改变推理强度
+  'fast-usage': { zh: '用法：/fast [toggle|on|off|status]（最多一个参数）；状态未改变。', en: 'Usage: /fast [toggle|on|off|status] (at most one argument); state unchanged.' },
+  'fast-unsupported': { zh: '/fast 不可用：当前 TUI 进程没有支持 Fast 的 OAuth 路由；service tier 未改变。', en: '/fast unavailable: no OAuth routes in the current TUI process support Fast; service tier unchanged.' },
+  'fast-cancelled': { zh: '/fast 已取消；service tier 未改变。', en: '/fast cancelled; service tier unchanged.' },
+  'fast-enabled': { zh: '开启', en: 'on' },
+  'fast-disabled': { zh: '关闭', en: 'off' },
+  'fast-provider-default': { zh: '提供方默认值', en: 'provider default' },
+  'fast-status': { zh: 'Fast 当前状态：{{state}}（实际 service tier：{{tier}}）。', en: 'Fast status: {{state}} (actual service tier: {{tier}}).' },
+  'fast-on': { zh: 'Fast 已开启（实际 service tier：{{tier}}）。', en: 'Fast is on (actual service tier: {{tier}}).' },
+  'fast-off': { zh: 'Fast 已关闭（实际 service tier：{{tier}}）。', en: 'Fast is off (actual service tier: {{tier}}).' },
+  'fast-scope': { zh: '作用于当前 TUI 进程中所有支持 Fast 的 OAuth 路由，从下一次请求起生效；不改变推理强度（effort）。仅运行时生效，不持久化；重启后恢复启动配置。', en: 'Applies to all Fast-capable OAuth routes in the current TUI process, starting with the next request; reasoning effort is unchanged. Runtime-only, not persisted; restarting restores the startup configuration.' },
   // /provider 动作层（添加/编辑；删除并入编辑菜单）
   'provider-q-action': { zh: '要做什么？', en: 'What do you want to do?' },
   'provider-opt-action-add': { zh: '添加新 provider', en: 'Add a new provider' },
@@ -1463,6 +1474,7 @@ const dict = {
   'cmd-desc-color': { zh: '设置当前会话强调色（输入框边框与会话标签）' },
   'cmd-desc-lang': { zh: '切换界面语言（en / zh）' },
   'cmd-desc-model': { zh: '查看当前模型' },
+  'cmd-desc-fast': { zh: '切换当前 TUI 进程支持的 OAuth 路由的 Fast 优先服务（不改变推理强度，不持久化）' },
   'cmd-desc-thinking': { zh: '显示或隐藏思考过程' },
   'cmd-desc-tokens': { zh: '查看会话 token 用量' },
   // Account / policy
