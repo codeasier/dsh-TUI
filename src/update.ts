@@ -49,33 +49,6 @@ const RESTART_LOG = join(DATA_DIR, 'restart.log')
 /** Cap so a long debugging streak cannot grow the log unbounded. */
 const RESTART_LOG_MAX_BYTES = 256 * 1024
 
-/**
- * Stop this process from reading the console it just handed to a child,
- * without closing the tty.
- *
- * `stdin.destroy()` is not safe here. libuv restores the termios captured
- * at this process's first `setRawMode(true)` — cooked, echoing — onto the
- * shared terminal. The replacement has already entered raw mode and its
- * `isRaw` flag stays true, so it does not re-apply. Mouse reports and
- * DECRPM/DA1 replies then echo at the cursor as `^[...` garbage. Pause,
- * drop readers, and refuse a later `resume()` instead of closing the fd.
- */
-export function sealInheritedStdin(stdin: NodeJS.ReadStream = process.stdin): void {
-  try {
-    stdin.removeAllListeners('readable')
-    stdin.removeAllListeners('data')
-    stdin.pause()
-    stdin.read = (() => null) as typeof stdin.read
-    const pause = stdin.pause.bind(stdin)
-    stdin.resume = (() => {
-      pause()
-      return stdin
-    }) as typeof stdin.resume
-  } catch {
-    // Best effort. Never throw out of the handoff.
-  }
-}
-
 function writeRestartLine(line: string): void {
   try {
     mkdirSync(DATA_DIR, { recursive: true })
@@ -1083,18 +1056,41 @@ export interface ReleaseAgeExcludeOutcome {
  * (24h by default) — on release day that gate refuses the very version
  * `/update` is installing (ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION), which
  * reads to the user as a broken update until the window passes. Pre-seed the
- * profile's pnpm-workspace.yaml with a release-age exclusion scoped to this
- * package at the exact target version — the same best-effort, idempotent
- * pattern as {@link ensureProfileAllowBuilds}: foreign entries are preserved,
- * an existing entry for this package is replaced (one entry tracks the current
- * target instead of accumulating), a missing `minimumReleaseAgeExclude` block
- * is appended, a missing file is created, and an absent profile directory
- * resolves to undefined — the caller still runs pnpm, whose own diagnostic
- * stays the visible fallback.
+ * profile's pnpm-workspace.yaml with release-age exclusions scoped to this
+ * package at the exact versions pnpm verifies before it can swap the package:
+ * the target version itself, plus `alsoExempt` — the pre-update `updatedFrom`,
+ * read from the running package's own manifest (normally the version the
+ * profile lockfile pins). Two releases inside the 24h window leave the OLD
+ * lockfile entry inside it too, and pnpm fails the whole policy check on that
+ * entry before replacing the package (issue #1205), so exempting only the
+ * target is not enough. Same best-effort,
+ * idempotent pattern as {@link ensureProfileAllowBuilds}: entries for this
+ * package track exactly the versions the current update needs (older own
+ * entries are dropped instead of accumulating), foreign entries are
+ * preserved, a missing `minimumReleaseAgeExclude` block is appended, a
+ * missing file is created, and an absent profile directory resolves to
+ * undefined — the caller still runs pnpm, whose own diagnostic stays the
+ * visible fallback. Own entries are re-rendered target-first on every
+ * rewrite: pnpm 11.7.x honours only the FIRST entry per package (later
+ * entries for the same package are ignored against the real registry), and
+ * 11.21.x applies every entry in any order, so the target — the version the
+ * swap itself has to resolve, and published by construction while a
+ * dev-built `updatedFrom` need not be — takes the slot older pnpm still
+ * reads. Both exemptions come from the manifest, not from `pnpm-lock.yaml`:
+ * a profile whose manifest and lockfile diverged keeps the lockfile's entry
+ * unexempted. The 11.7.x `--frozen-lockfile` policy check reads that first
+ * entry only, so a two-entry list does not clear it there; the `pnpm add`
+ * path `/update` runs resolves the target and does pass.
+ *
+ * @param profile - The dsh profile whose workspace file is seeded.
+ * @param version - The update target (exact version).
+ * @param alsoExempt - Optional second version to keep exempt, normally the
+ *   pre-update `updatedFrom`; ignored when empty or equal to `version`.
  */
 export function ensureProfileReleaseAgeExclude(
   profile: string,
   version: string,
+  alsoExempt?: string,
 ): ReleaseAgeExcludeOutcome | undefined {
   const yamlPath = profileWorkspaceYamlPath(profile)
   try {
@@ -1106,6 +1102,10 @@ export function ensureProfileReleaseAgeExclude(
       // Missing file — start from an empty document; writeFileSync creates it.
     }
     const entry = `${PACKAGE_NAME}@${version}`
+    const alsoEntry = alsoExempt !== undefined && alsoExempt !== '' && alsoExempt !== version
+      ? `${PACKAGE_NAME}@${alsoExempt}`
+      : undefined
+    const keep = alsoEntry === undefined ? [entry] : [entry, alsoEntry]
     const lines = text.split(/\r?\n/u)
     let blockStart = -1
     for (let i = 0; i < lines.length; i += 1) {
@@ -1117,9 +1117,12 @@ export function ensureProfileReleaseAgeExclude(
     }
     /** Item text of a list line, unquoted (`- 'x@1'` / `- x@1` → `x@1`). */
     const itemOf = (line: string): string => line.trim().replace(/^-\s*/u, '').replace(/^'(.*)'$/u, '$1')
-    const foreign: string[] = []
+    /** Foreign exclusion lines, preserved verbatim and in file order. */
+    const foreignLines: string[] = []
+    /** Keep-set entries already present in the block. */
+    const present: string[] = []
+    let droppedStale = false
     let blockEnd = -1
-    let alreadyCurrent = false
     if (blockStart !== -1) {
       blockEnd = blockStart + 1
       for (let i = blockStart + 1; i < lines.length; i += 1) {
@@ -1127,20 +1130,25 @@ export function ensureProfileReleaseAgeExclude(
         if (line === '' || line === line.trimStart()) break // dedent = block ends
         blockEnd = i + 1
         const item = itemOf(line)
-        if (item === entry) {
-          alreadyCurrent = true
-          foreign.push(line)
-        } else if (!item.startsWith(`${PACKAGE_NAME}@`)) {
-          foreign.push(line)
+        if (!item.startsWith(`${PACKAGE_NAME}@`)) {
+          foreignLines.push(line)
+        } else if (keep.includes(item)) {
+          present.push(item)
+        } else {
+          // Own entries for older targets: dropped (no accumulation).
+          droppedStale = true
         }
-        // Stale entries for THIS package (older targets) are dropped above.
       }
     }
-    if (alreadyCurrent) {
-      const entries = [entry, ...lines.slice(blockStart + 1, blockEnd).map(itemOf)]
-      return { entries, changed: false }
+    const missing = keep.filter(item => !present.includes(item))
+    if (!droppedStale && missing.length === 0) {
+      return { entries: [...foreignLines.map(itemOf), ...present], changed: false }
     }
-    const insert = foreign.concat(`  - '${entry}'`)
+    // Own entries are re-rendered in keep order (target first) instead of
+    // copied as found: pnpm 11.7.x honours only the first entry per package
+    // (11.21.x applies them all, order-independent), and the target is the
+    // version the swap must resolve, so it takes that first slot.
+    const insert = foreignLines.concat(keep.map(item => `  - '${item}'`))
     if (blockStart !== -1) {
       lines.splice(blockStart + 1, blockEnd - blockStart - 1, ...insert)
     } else {
@@ -1148,7 +1156,7 @@ export function ensureProfileReleaseAgeExclude(
       lines.push('minimumReleaseAgeExclude:', ...insert)
     }
     writeFileSync(yamlPath, `${lines.join('\n')}\n`)
-    return { entries: [...foreign.map(itemOf), entry], changed: true }
+    return { entries: insert.map(itemOf), changed: true }
   } catch {
     return undefined
   }
@@ -1604,14 +1612,22 @@ export async function updateTui(
   // pnpm ≥11's minimumReleaseAge (24h by default) refuses installs of
   // packages published within the window — on release day that gate rejects
   // the exact version /update pins, surfacing as a failed update that heals
-  // itself a day later. Scope-exempt this package at the exact target before
-  // pnpm runs (release-day /update parity with the allowBuilds seed above).
+  // itself a day later. Two releases inside the window (issue #1205) trip the
+  // same gate on the OLD lockfile entry pnpm verifies before the swap, so
+  // both the target and the still-installed updatedFrom are exempted.
   if (targetVersion !== undefined) {
-    const releaseAge = ensureProfileReleaseAgeExclude(profile, targetVersion)
+    const releaseAge = ensureProfileReleaseAgeExclude(
+      profile,
+      targetVersion,
+      updatedFrom === '' ? undefined : updatedFrom,
+    )
     if (releaseAge !== undefined && releaseAge.changed) {
+      const exempted = updatedFrom !== '' && updatedFrom !== targetVersion
+        ? `${PACKAGE_NAME}@${targetVersion} + ${PACKAGE_NAME}@${updatedFrom}`
+        : `${PACKAGE_NAME}@${targetVersion}`
       process.stderr.write(
-        `dsh-tui: pre-seeded profile release-age exclusion (${PACKAGE_NAME}@${targetVersion}) — ` +
-          'a freshly published version installs without the 24h supply-chain delay\n',
+        `dsh-tui: pre-seeded profile release-age exclusion (${exempted}) — ` +
+          'freshly published versions install without the 24h supply-chain delay\n',
       )
     }
   }
@@ -1805,6 +1821,45 @@ export async function cliUpdate(profile: string): Promise<number> {
 }
 
 /**
+ * Release the shared console for the replacement without resetting it.
+ *
+ * A pty's termios is per-DEVICE: destroying this stream would write this
+ * process's saved cooked/ECHO mode back over the replacement's raw mode
+ * (libuv restores orig_termios on tty close; verified on Node 24 — mouse
+ * reports then echo as `^[[<…M` and keys wait for a newline). Detaching —
+ * no readers, paused, unref'd — keeps the mode untouched.
+ *
+ * Two deliberate trade-offs vs the old destroy():
+ * - destroy() doubled as a permanent gate ("a destroyed stream can never be
+ *   resumed"). Readers removed + paused + sealed read/resume keep this
+ *   process out of the console's key path (#284/#307), including late pumps.
+ * - On exit Node still writes the saved cooked mode back once (atexit
+ *   uv_tty_reset_mode). Fine in the normal order — this process outlives the
+ *   replacement, and the shell wants cooked back anyway; it only bites if
+ *   this process dies while the replacement is still running.
+ *
+ * @param stdin - Console stream to detach; injectable for the regression.
+ */
+export function detachHandoffStdin(
+  stdin: Pick<NodeJS.ReadStream, 'removeAllListeners' | 'pause' | 'unref'>
+    & Partial<Pick<NodeJS.ReadStream, 'read' | 'resume'>> = process.stdin,
+): void {
+  stdin.removeAllListeners('readable')
+  stdin.removeAllListeners('data')
+  stdin.pause()
+  stdin.unref()
+  // A delayed readable pump must not reclaim the replacement's console.
+  // Seal without closing the shared fd or changing its termios.
+  if (stdin.read !== undefined) stdin.read = () => null
+  if (stdin.resume !== undefined) {
+    stdin.resume = () => {
+      stdin.pause()
+      return stdin as NodeJS.ReadStream
+    }
+  }
+}
+
+/**
  * Restart the running TUI in place and resume the active session — the
  * `/update` restart path minus the pnpm step, for `/restart`. Spawns the
  * same node process with the original argv and the dual-written resume
@@ -1893,12 +1948,17 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     // 1. SAMPLE this process's stdin state every second — if anything
     //    re-attaches a reader after the funnel's detachStdinForHandoff, the
     //    sample (taken before the re-assert below) shows it in the log.
-    // 2. RE-ASSERT the detach for the whole survival window, then seal the
-    //    stream so a later resume cannot read. Do NOT destroy stdin: closing
-    //    the tty handle restores this process's original cooked termios on
-    //    the shared terminal and the replacement's raw mode is silently
-    //    undone (mouse / DECRPM bytes echo into the prompt as `^[...`).
-    sealInheritedStdin()
+    // 2. RE-ASSERT the detach — never DESTROY the stream: destroying it
+    //    resets the shared pty and stomps the replacement's raw mode (see
+    //    detachHandoffStdin for the mechanism and trade-offs). This process
+    //    must never read the shared console again — every keypress belongs to
+    //    the replacement, and a resumed pump here is exactly the "restarted
+    //    TUI sees dropped or swallowed input" failure (#284/#307).
+    try {
+      detachHandoffStdin(process.stdin)
+    } catch {
+      // Best effort: the child-exit listener still owns the handoff lifetime.
+    }
     let watchdogTicks = 0
     const watchdog = setInterval(() => {
       watchdogTicks += 1
@@ -1911,12 +1971,14 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
         raw: stdin.isRaw === true,
         buffered: stdin.readableLength,
       })
-      // seal clears listeners; a late re-attach during the window is stripped
-      // again. The read/resume overrides from the first seal stay in place.
-      sealInheritedStdin()
+      try {
+        detachHandoffStdin(stdin)
+      } catch {
+        // Diagnosis/mitigation only.
+      }
       if (watchdogTicks === 15) {
         clearInterval(watchdog)
-        logRestartEvent('parent: stdin sealed after watchdog')
+        logRestartEvent('parent: stdin detached after watchdog (kept raw, not destroyed)')
       }
     }, 1000)
     watchdog.unref()

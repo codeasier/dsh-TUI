@@ -2,9 +2,10 @@ import React from 'react'
 import { Box, Text, useAnimationFrame, useTerminalSize } from '../../ui.js'
 import { formatJobDuration, jobTitleOf, type BackgroundJobStatus } from '../../dsh-adapter/jobs.js'
 import type { JobRow } from '../../dsh-adapter/channel.js'
-import type { BackgroundJobOutputLine } from '../../adapter/ports/channel-view.js'
+import type { BackgroundJobOutputChannel, BackgroundJobOutputLine } from '../../adapter/ports/channel-view.js'
 import type { Theme } from '../../theme.js'
 import { t } from '../../i18n.js'
+import wrapText from '../../ink/wrap-text.js'
 import { stringWidth } from '../../ink/stringWidth.js'
 import { isMinimalUiMode } from '../../minimalUiMode.js'
 import { ProgressBar } from '../design-system/ProgressBar.js'
@@ -58,21 +59,47 @@ export function JobProgress({ progress }: { progress: string }): React.ReactNode
   )
 }
 
-/** Hard single-line clip by display width — a wrapped waterfall row would
- *  break the constant-height window. */
-function clipLine(text: string, maxWidth: number): string {
-  if (maxWidth <= 1) return ''
-  let width = 0
-  let index = 0
-  while (index < text.length) {
-    const next = text.codePointAt(index)!
-    const char = String.fromCodePoint(next)
-    const charWidth = stringWidth(char)
-    if (width + charWidth > maxWidth - 1) break
-    width += charWidth
-    index += char.length
+/** One rendered waterfall row: a wrapped piece of an output line, or a gap
+ *  banner standing on its own row. */
+interface WaterfallRow {
+  key: string
+  text: string
+  channel?: BackgroundJobOutputChannel
+  gap?: true
+}
+
+/**
+ * The waterfall window: every entry is WRAPPED at the card width FIRST, then
+ * the last `budget` VISUAL rows are kept. A 400-cell JSON line therefore
+ * shows its ending folded over the rows instead of a clipped head — and the
+ * window still costs a constant number of rows, which is what the
+ * transcript's virtualization measures.
+ */
+function waterfallWindow(
+  entries: ReadonlyArray<{ kind: 'line'; line: BackgroundJobOutputLine } | { kind: 'gap' }>,
+  width: number,
+  budget: number,
+): WaterfallRow[] {
+  const rows: WaterfallRow[] = []
+  // One cell of slack: a line that lands exactly on the boundary is re-wrapped
+  // by ink's own renderer, which would silently double that row's height.
+  const textWidth = Math.max(1, width - 1)
+  for (let index = entries.length - 1; index >= 0 && rows.length < budget; index--) {
+    const entry = entries[index]!
+    if (entry.kind === 'gap') {
+      rows.unshift({ key: `gap-${index}`, text: '', gap: true })
+      continue
+    }
+    const wrapped = wrapText(entry.line.text, textWidth, 'wrap').split('\n')
+    for (let row = wrapped.length - 1; row >= 0 && rows.length < budget; row--) {
+      rows.unshift({
+        key: `${index}-${row}`,
+        text: wrapped[row] ?? '',
+        ...(entry.line.channel === undefined ? {} : { channel: entry.line.channel }),
+      })
+    }
   }
-  return index < text.length ? `${text.slice(0, index)}…` : text
+  return rows
 }
 
 /**
@@ -89,45 +116,79 @@ function clipLine(text: string, maxWidth: number): string {
  * is consuming and reserved for the owning agent, so the card shows the
  * tail of the agent's own job_output results as they stream through the
  * transcript.
+ *
+ * `rail` marks the card as a member of a job GROUP (see JobGroupRow): the
+ * card gets a 2-cell chain column on its left, and `rail.open` / `rail.close`
+ * round its ends (`╭` on the first line, `╰` on the last) so the run reads as
+ * one bracket from the first card to the last — the group's summary line stays
+ * OUTSIDE it. A lone card renders as before.
+ *
+ * The rail is drawn per line, which means this component owns the card's
+ * HEIGHT: the label is pre-wrapped against an explicit column width (so the
+ * wrap count is known, not guessed from the flex result), and the rail column
+ * paints exactly that many glyphs. Both use ink's own `wrapText`/`stringWidth`,
+ * so the pre-wrap breaks where the renderer would have broken.
  */
-export function JobCard({ job, marginTopOnTurn, onClick }: {
+export function JobCard({ job, marginTopOnTurn, onClick, rail }: {
   job: JobRow
   marginTopOnTurn: boolean
   onClick?(): void
+  /** Job GROUP member: shared chain rail, optionally rounded at either end. */
+  rail?: { open?: boolean; close?: boolean } | undefined
 }): React.ReactNode {
   const settled = job.status === 'completed' || job.status === 'failed' || job.status === 'killed'
-  // 动画订阅仅限存活卡片：settled 后退订共享 clock（同 SubagentMessage 的
-  // 约定）。1s tick 只驱动运行时长跳动——状态标是静态的（见 statusInfo）。
+  // Only live cards subscribe to the shared clock; the status glyph is static.
   const [viewportRef] = useAnimationFrame(settled ? null : 1000)
   const { columns } = useTerminalSize()
   const info = statusInfo(job.status)
   const [hovered, setHovered] = React.useState(false)
   const clickable = onClick !== undefined
-  // 内容列已让出竖线的两格，瀑布裁剪预算同步减掉，避免宽度对不上时由
-  // ink 的 truncate 兜底（长行会多截两个字符）。
-  const rowWidth = Math.max(20, (columns ?? 80) - WATERFALL_GUTTER - RAIL_WIDTH)
-  // Waterfall entries: gap banners interleave as their own rows, then the
-  // window keeps the LAST WATERFALL_ROWS entries so a banner never pushes a
-  // fresher line out — the card stays constant-height.
+  const grouped = rail !== undefined
+  // Both the machine rail and the group's bracket occupy the same two cells.
+  const cardColumns = Math.max(1, columns - RAIL_WIDTH)
+  const rowWidth = Math.max(1, cardColumns - WATERFALL_GUTTER)
   const waterfall: Array<{ kind: 'line'; line: BackgroundJobOutputLine } | { kind: 'gap' }> = []
   for (const line of settled ? [] : job.outputLines) {
     if (line.gapBefore === true) waterfall.push({ kind: 'gap' })
     waterfall.push({ kind: 'line', line })
   }
-  const activity = waterfall.slice(-WATERFALL_ROWS)
-  // A settled job's terminal detail ('exit code: 0') rides the header; a
-  // failed/killed one also keeps it as the explanatory tail line.
+  const activity = waterfallWindow(waterfall, rowWidth, WATERFALL_ROWS)
   const headerDetail = job.detail !== undefined && job.detail !== '' ? job.detail : undefined
   const headerName = `${t('jobs-card-prefix')}${jobTitleOf(job)}`
   const duration = formatJobDuration(job)
-  // Only a LIVE job carries a progress chip; a settled one has dropped it, so
-  // reserving width for it unconditionally would clip the label for nothing.
   const liveProgress = settled || job.progress === undefined || job.progress === '' ? undefined : job.progress
 
-  // 点击打开 /jobs 面板；hover 不刷整行背景（转录视觉保持安静），只把
-  // 状态 glyph 提亮为品牌色作为可点指示。缩进由机器活动竖线承担：任务卡
-  // 是上方工具调用（run_in_background 卡）的延续，与工具卡同栏。瀑布的
-  // `│ ` 槽与工具卡正文的 `⎿` 槽位对齐。
+  // The title is the ONLY wrapping column, with fork metadata beside it rather
+  // than a second copy of the registry label. Pre-wrap the actual displayed
+  // title so the bracket covers precisely the rows the renderer will paint.
+  const fixedWidths = [
+    stringWidth(info.glyph),
+    stringWidth(job.id),
+    stringWidth(job.kind),
+    stringWidth(duration),
+    stringWidth(info.label),
+  ]
+  let titleBudget = cardColumns - fixedWidths.reduce((sum, width) => sum + width, 0) - fixedWidths.length - 1
+  // Optional chips move below the header when they would squeeze the title
+  // into a per-character column or overflow a narrow chat column altogether.
+  const progressInHeader = liveProgress !== undefined && titleBudget >= 8 + 13
+  if (progressInHeader) titleBudget -= 13
+  const detailInHeader = headerDetail !== undefined && titleBudget >= 8 + stringWidth(headerDetail) + 1
+  if (detailInHeader) titleBudget -= stringWidth(headerDetail!) + 1
+  const titleWidth = Math.max(1, titleBudget)
+  const titleLines = wrapText(headerName, titleWidth, 'wrap').split('\n')
+  const progressTail = liveProgress !== undefined && !progressInHeader
+  const detailTail = headerDetail !== undefined && (!detailInHeader || (settled && job.status !== 'completed'))
+  const contentLines = titleLines.length + activity.length + (detailTail ? 1 : 0) + (progressTail ? 1 : 0)
+  const railGlyphs: string[] = []
+  if (grouped) {
+    for (let index = 0; index < contentLines; index++) {
+      const opens = index === 0 && rail?.open === true
+      const closes = index === contentLines - 1 && rail?.close === true
+      railGlyphs.push(opens ? '╭' : closes ? '╰' : '│')
+    }
+  }
+
   return <Box
     flexDirection="row"
     marginTop={marginTopOnTurn ? 1 : 0}
@@ -136,52 +197,50 @@ export function JobCard({ job, marginTopOnTurn, onClick }: {
     onMouseEnter={clickable ? () => setHovered(true) : undefined}
     onMouseLeave={clickable ? () => setHovered(false) : undefined}
   >
-    <MachineRail />
+    {grouped ? (
+      <Box width={RAIL_WIDTH} flexShrink={0}>
+        <Text color="inactive">{railGlyphs.join('\n')}</Text>
+      </Box>
+    ) : <MachineRail />}
     <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-      {/* Fixed columns around ONE flexible label: the label truncates instead
-        * of wrapping, so the header grid holds at any width and with or without
-        * the progress chip (the old header reserved a hand-counted width and
-        * overflowed by exactly the chip's width). */}
       <Box flexDirection="row" gap={1}>
-        <Text color={hovered && clickable ? 'accent' : info.color}>{info.glyph}</Text>
-        <Box flexGrow={1} flexShrink={1}>
-          <Text bold color={hovered && clickable ? 'accent' : undefined} wrap="truncate-end">
-            {headerName}
-          </Text>
+        <Box flexShrink={0}>
+          <Text color={hovered && clickable ? 'accent' : info.color}>{info.glyph}</Text>
+        </Box>
+        <Box width={titleWidth} flexShrink={0} flexDirection="column">
+          {titleLines.map((line, index) => (
+            <Text key={index} bold color={hovered && clickable ? 'accent' : undefined}>{line}</Text>
+          ))}
         </Box>
         <Box flexShrink={0}><Text dimColor>{job.id}</Text></Box>
         <Box flexShrink={0}><Text dimColor>{job.kind}</Text></Box>
-        {liveProgress !== undefined && (
+        {progressInHeader && (
           <Box width={12} flexShrink={0}>
-            <JobProgress progress={liveProgress} />
+            <JobProgress progress={liveProgress!} />
           </Box>
         )}
         <Box flexShrink={0}><Text dimColor>{duration}</Text></Box>
-        {headerDetail !== undefined && <Box flexShrink={0}><Text dimColor wrap="truncate-end">{headerDetail}</Text></Box>}
+        {detailInHeader && <Box flexShrink={0}><Text dimColor>{headerDetail}</Text></Box>}
         <Box flexShrink={0}><Text color={info.color}>{info.label}</Text></Box>
       </Box>
-      {!settled && activity.length > 0 && activity.map((entry, index) => (
-        // key 不含 time（同 SubagentMessage 的约定）：内容更新走 in-place
-        // diff，避免每个 tick 都 unmount+mount。瀑布只在有镜像输出时出现
-        // （后台任务静默是常态——无输出时卡片就是头行，不摆空 gutter）。
-        entry.kind === 'gap' ? (
-          <Text key={`${job.id}-wf-gap-${index}`} dimColor italic wrap="truncate">
-            {`  · ${clipLine(t('jobs-output-gap'), rowWidth)}`}
+      {progressTail && <Box paddingLeft={WATERFALL_GUTTER}><JobProgress progress={liveProgress!} /></Box>}
+      {activity.map(entry => (
+        entry.gap === true ? (
+          <Text key={entry.key} dimColor italic wrap="truncate">
+            {`  · ${t('jobs-output-gap')}`}
           </Text>
         ) : (
           <Text
-            key={`${job.id}-wf-${index}`}
-            color={entry.line.channel === 'stderr' ? 'error' : undefined}
-            dimColor={entry.line.channel !== 'stderr'}
+            key={entry.key}
+            color={entry.channel === 'stderr' ? 'error' : undefined}
+            dimColor={entry.channel !== 'stderr'}
             wrap="truncate"
           >
-            {`  │ ${clipLine(entry.line.text, rowWidth)}`}
+            {`  │ ${entry.text}`}
           </Text>
         )
       ))}
-      {settled && job.status !== 'completed' && headerDetail !== undefined && (
-        <Text dimColor wrap="truncate">{`  └ ${clipLine(headerDetail, rowWidth)}`}</Text>
-      )}
+      {detailTail && <Text dimColor wrap="truncate">{`  └ ${headerDetail}`}</Text>}
     </Box>
   </Box>
 }

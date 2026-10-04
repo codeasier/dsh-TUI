@@ -29,6 +29,7 @@ Cordis profile
 | `src/workspaces.ts` | Local-path fallback and generic workspace-provider registry; it must contain no provider protocol, copy, or dependency |
 | `src/screens/Chat.tsx` | Modal precedence, global keys, scroll/search/selection state, and slash dispatch |
 | `src/components/` | User views and design-system primitives; no Agent or session source of truth |
+| `src/components/sidePanel/` (`SidePanelLayout`, `PanelHost`) | Chat/side-panel split: geometry (`dimensions`), the seam, the `PanelBar` tab strip and panel host, and the `useSidePanel` controller; mounted inside Chat's main return, it only arranges boxes and re-provides the TerminalSize / SurfaceEdges contexts — it never touches message rendering and never copies channel state |
 | `src/ui.ts` | Themed `Box`/`Text`, render, selection, scroll, and other public TUI primitives |
 | `src/theme.ts`, `src/themeCatalog.ts` | Built-in, static JSON, and runtime plugin theme resolution and catalog ordering |
 | `src/dsh-adapter/themes.ts` | The `ctx.tuiThemes` theme seam, registration lifecycle, and private host facade |
@@ -116,6 +117,12 @@ Tool results are associated by `callId`, never guessed from array position.
   skip the splash animation to land straight on content.
 - **Display-cell width**: ANSI escapes, combining marks, emoji, and East Asian
   wide characters use terminal cell width, not JavaScript `string.length`.
+- **Column-aware copy provenance**: partial-column paint activates cell-owned
+  wrap metadata in Screen, carried with the corresponding cells through writes,
+  blits, scrolling, and clears. Gutters and `NoSelect` panels cannot overwrite
+  Chat's soft wraps; extraction reads the selected columns, including a
+  panel-origin gesture's own boundaries. Row-level `softWrap` is a compatibility
+  projection, not the sole source of truth for split-column copying.
 
 When changing `src/ink/` or Yoga, run the CI questionnaire/tool-card
 regressions and the affected scroll, resize, copy-on-select, or PTY harness.

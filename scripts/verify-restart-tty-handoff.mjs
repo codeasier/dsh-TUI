@@ -7,13 +7,15 @@
  * flag stays true, and setRawMode(true) is then a libuv no-op, so mouse
  * reports and DECRPM/DA1 replies echo at the cursor as `^[...`.
  *
+ * POSIX PTY probe: needs python3, stty and installed TypeScript (no lib build).
+ * The detach path executes src/update.ts's AST-extracted production helper.
  * Run: node scripts/verify-restart-tty-handoff.mjs
  */
 import { spawn } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { isAbsolute, join, resolve } from 'node:path'
+import ts from 'typescript'
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -24,14 +26,24 @@ function check(name, ok, extra = '') {
 const updateSrc = readFileSync(new URL('../src/update.ts', import.meta.url), 'utf8')
 const restartAt = updateSrc.indexOf('export async function restartTui')
 const restartBody = updateSrc.slice(restartAt)
-const sealBody = updateSrc.slice(updateSrc.indexOf('export function sealInheritedStdin'), restartAt)
+// Execute the production function in the PTY parent without importing the
+// update/network module graph there. The AST selects the declaration; TS only
+// erases its types/exports, so the exercised detach is never a copied model.
+const sourceFile = ts.createSourceFile('update.ts', updateSrc, ts.ScriptTarget.Latest, true)
+const detachNode = sourceFile.statements.find(node =>
+  ts.isFunctionDeclaration(node) && node.name?.text === 'detachHandoffStdin')
+if (detachNode === undefined) throw new Error('missing production detachHandoffStdin')
+const detachBody = detachNode.getText(sourceFile)
+const detachJs = ts.transpileModule(detachBody, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+}).outputText
 check(
   'restartTui does not destroy stdin (that restores cooked termios)',
-  restartBody.includes('sealInheritedStdin') && !restartBody.includes('.destroy('),
+  restartBody.includes('detachHandoffStdin') && !restartBody.includes('.destroy('),
 )
 check(
-  'sealInheritedStdin does not close the tty or touch termios',
-  !sealBody.includes('.destroy(') && !sealBody.includes('setRawMode'),
+  'detachHandoffStdin does not close the tty or touch termios',
+  !detachBody.includes('.destroy(') && !detachBody.includes('setRawMode'),
 )
 const ttyMode = readFileSync(new URL('../src/utils/ttyMode.ts', import.meta.url), 'utf8')
 check(
@@ -40,6 +52,12 @@ check(
 )
 
 const scratch = mkdtempSync(join(tmpdir(), 'verify-restart-tty-'))
+// Verify the absolute cleanup target before creating/removing fixture files.
+const scratchPath = resolve(scratch)
+if (!isAbsolute(scratch) || scratchPath !== scratch
+  || !scratchPath.startsWith(join(resolve(tmpdir()), 'verify-restart-tty-'))) {
+  throw new Error(`unexpected PTY fixture path: ${scratch}`)
+}
 
 writeFileSync(join(scratch, 'child.cjs'), `
 const { execFileSync } = require('node:child_process')
@@ -81,6 +99,7 @@ setTimeout(() => {
 function parentSource(childName, action) {
   return `
 const { spawn } = require('node:child_process')
+${detachJs}
 process.stdin.setRawMode(true)
 const child = spawn(process.execPath, [${JSON.stringify(join(scratch, childName))}], {
   stdio: ['inherit', 'inherit', 'pipe'],
@@ -91,12 +110,12 @@ setTimeout(() => {
   if (${JSON.stringify(action)} === 'destroy') {
     process.stdin.destroy()
   } else {
-    process.stdin.removeAllListeners('readable')
-    process.stdin.removeAllListeners('data')
-    process.stdin.pause()
-    process.stdin.read = () => null
-    const pause = process.stdin.pause.bind(process.stdin)
-    process.stdin.resume = () => { pause(); return process.stdin }
+    detachHandoffStdin(process.stdin)
+    // A late pump must neither consume shared input nor resume this stream.
+    if (process.stdin.read() !== null) throw new Error('detached read consumed input')
+    if (process.stdin.resume() !== process.stdin || !process.stdin.isPaused()) {
+      throw new Error('detached resume reopened the tty reader')
+    }
   }
 }, 250)
 child.on('exit', (code) => {
@@ -174,7 +193,7 @@ check(
   `out=${destroyRun.out.trim()} err=${destroyRun.err.trim()}`,
 )
 check(
-  'seal keeps the shared tty in raw mode',
+  'production detach + late read/resume keeps the shared tty in raw mode',
   sealed?.before === false && sealed?.mid === false,
   `out=${sealRun.out.trim()} err=${sealRun.err.trim()}`,
 )

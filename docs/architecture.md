@@ -29,6 +29,7 @@ Cordis profile
 | `src/workspaces.ts` | 本地路径 fallback 与通用工作区 provider registry；不得包含任何 provider 的协议、文案或依赖 |
 | `src/screens/Chat.tsx` | modal 优先级、全局按键、滚动/搜索/选择状态、slash command 分发 |
 | `src/components/` | 用户界面和 design-system；不直接拥有 Agent 或 session 真相 |
+| `src/components/sidePanel/`（`SidePanelLayout`、`PanelHost`） | 聊天/侧栏分栏：几何（`dimensions`）、中缝、`PanelBar` 标签栏与面板宿主、`useSidePanel` 控制器；由 Chat 主 return 内部挂载，只排布盒子并重提供 TerminalSize / SurfaceEdges 上下文——不碰消息渲染，也不复制 channel 状态 |
 | `src/ui.ts` | 主题化 `Box`/`Text`、render、选择、滚动等公共 facade |
 | `src/theme.ts`、`src/themeCatalog.ts` | 内置、静态 JSON 与运行时插件主题的解析和统一列表 |
 | `src/dsh-adapter/themes.ts` | `ctx.tuiThemes` 主题插件接缝；注册生命周期与 host 私有 facade |
@@ -99,6 +100,10 @@ Channel 只保留适合当前 TUI 的投影。长会话超过窗口后，旧行�
   开屏动画直落内容。
 - **显示宽度**：ANSI、组合字符、emoji 和东亚宽字符都按 terminal cell width 处理，
   不能用普通 JavaScript `string.length` 代替。
+- **分列复制溯源**：部分列绘制需要时，Screen 启用按显示单元保存的换行元数据，
+  随对应单元一起绘制、blit、滚动与清理。滚动轨和 `NoSelect` 侧栏不能覆盖聊天的
+  软换行；选区按实际包含的列读取信息，面板内起始的选区保留自身边界。行级
+  `softWrap` 只是兼容投影，不再充当分列复制的唯一真源。
 
 改动 `src/ink/` 或 Yoga 时，至少运行 CI 的问卷/工具卡回归，并按影响范围运行
 scroll、resize、copy-on-select 或 PTY 脚本。不要用普通 `console.log` 向活动 TUI 的

@@ -6,6 +6,9 @@ import { wrapWidth } from '../../sessions/format.js'
 import { usePagePanelBleed } from '../PageMargin.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
 
+/** Vertical surface padding before the first prompt text row (timeline anchor). */
+export const USER_PROMPT_PADDING_Y = 1
+
 type Props = {
   text: string
   /** Adds the top margin between turns. */
@@ -61,7 +64,7 @@ export function UserPromptMessage({
       width={bleed ? panelColumns : '100%'}
       marginLeft={-panelBleed.left}
       marginRight={-panelBleed.right}
-      paddingY={1}
+      paddingY={USER_PROMPT_PADDING_Y}
       paddingLeft={1}
       paddingRight={2}
       borderStyle="bold"

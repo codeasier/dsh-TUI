@@ -232,7 +232,7 @@ const channel: any = {
   tokens: { input: 0, output: 0 }, cwd: '/tmp/demo', displayCwd: '/tmp/demo', gitBranch: 'main',
   working: false, spinnerMode: 'requesting', responseChars: 0, activeToolCount: 0, turnStart: 0,
   pending: [], commandList: LOCAL_COMMANDS, notifications: [], mode: { plan: false, sandbox: undefined },
-  activityFrames: 'moon8', agentPreset: undefined, subagents: [], lastUserText: '问题 8',
+  activityFrames: 'moon8', agentPreset: undefined, subagents: [], backgroundJobs: [], todos: [], lastUserText: '问题 8',
   scrollGutter: 'timeline',
   subscribe(cb: () => void) { chatListeners.add(cb); return () => chatListeners.delete(cb) as unknown as void },
   submit: () => {}, cancel: () => {}, clear: () => {}, notify: () => {},
@@ -296,6 +296,56 @@ check('Chat：正文不越左缘，只有输入框图标和 prompt 黄色竖条�
     return chars === '' || (x > 0 && cell?.getBgColor() === 0x303030 &&
       (chars === '⌸' || (x === 1 && chars === '┃' && cell.getFgColor() === 0xffdf80)))
   })).every(Boolean))
+
+// 分栏时沿用左侧画布出血，但右侧卡片/输入框必须停在聊天列内。
+const { applySidePanelOpen, applySidePanelRatio, applySidePanelPanels } = await import('../src/tuiDisplayPrefs.js')
+const { resolveSplit } = await import('../src/components/sidePanel/dimensions.js')
+const { usePagePanelBleed } = await import('../src/components/PageMargin.js')
+const { SurfaceEdgesContext } = await import('../src/components/SurfaceEdges.js')
+const geometry = resolveSplit(CHAT_COLS - 6, 0.68)!
+const dividerX = 3 + geometry.chat
+applySidePanelRatio(0.68)
+applySidePanelPanels('todo,jobs,agents')
+applySidePanelOpen(true)
+await settle(() => Array.from({ length: CHAT_ROWS }, (_, y) => cellAtC(y, dividerX)).includes('├'))
+const splitPrompt = linesC().findIndex(l => l.includes('┃ ❯'))
+check('分栏：prompt 黄色竖条仍在第 1 列，正文仍在第 5 列',
+  splitPrompt >= 0 && linesC()[splitPrompt]!.indexOf('┃') === 1 && linesC()[splitPrompt]!.indexOf('问题') === 5)
+check('分栏：转录与输入框表面同宽，止于两格 gutter 前，不覆盖分隔线',
+  [splitPrompt, linesC().findIndex(l => l.includes('⌸'))].every(y => {
+    const edges = surfaceEdgesC(y)
+    return edges[0] === 1 && edges.at(-1) === dividerX - 3
+  }))
+const splitText = '分栏中文👍'.repeat(8) + 'TAIL-SPLIT-END'
+chatRows.push({ id: 1000, kind: 'user', text: splitText })
+channel.version += 1
+for (const listener of chatListeners) listener()
+await settle(() => linesC().some(l => l.includes('TAIL-SPLIT-END')))
+check('分栏：CJK/emoji 换行后尾部完整可见，且不穿过分隔线',
+  linesC().some(l => l.slice(0, dividerX - 2).includes('TAIL-SPLIT-END')))
+chatRows.pop()
+channel.version += 1
+for (const listener of chatListeners) listener()
+applySidePanelOpen(false)
+await settle(() => {
+  const y = linesC().findIndex(l => l.includes('⌸'))
+  return y >= 0 && surfaceEdgesC(y).at(-1) === CHAT_COLS - 3
+})
+check('分栏收起：原全宽表面预算恢复',
+  surfaceEdgesC(linesC().findIndex(l => l.includes('⌸'))).at(-1) === CHAT_COLS - 3)
+
+// 列边界不是屏幕坐标偏移：右栏禁止向左出血，不能回读 PageInset.x。
+let panelBleed: { left: number; right: number } | undefined
+function PanelBleedProbe(): React.ReactNode {
+  panelBleed = usePagePanelBleed(true)
+  return <Text>panel-edge-probe</Text>
+}
+instC.rerender(<AlternateScreen><PageMargin>
+  <SurfaceEdgesContext.Provider value={{ left: 0, right: 3 }}><PanelBleedProbe /></SurfaceEdgesContext.Provider>
+</PageMargin></AlternateScreen>)
+await settle(() => linesC().some(l => l.includes('panel-edge-probe')))
+check('右栏：共享出血 helper 遵循 nearest surface，而非 PageInset',
+  panelBleed?.left === 0 && panelBleed.right === 1)
 
 // 对照组：无 PageMargin 的树 —— 尺寸不收敛、inset=0（verify 直挂契约不变）。
 // 先卸载带边距的应用再挂对照组：同一进程并存两个 Ink 实例时，第二个实例

@@ -209,7 +209,7 @@ function makeHarness(cols: number, rows: number) {
       (buffer.getLine(buffer.baseY + y)?.translateToString(true) ?? '').replace(/\s+$/, ''))
     // The composer ends at the last otherwise-empty rail row. Its footer
     // excludes the random startup tip and remains stable across remounts.
-    const divider = lines.findLastIndex(line => /^\s*│\s*$/.test(line))
+    const divider = lines.findLastIndex(line => /^\s*┃\s*$/.test(line))
     return lines.slice(divider === -1 ? 0 : divider)
       .filter(line => line !== '')
       .join('\n')

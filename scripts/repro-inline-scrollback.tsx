@@ -349,7 +349,8 @@ for (const t of [
 }
 const resultMarkers = ['READ_RESULT_ONCE_7F31', ...Array.from({ length: 6 }, (_, i) => `READ_DETAIL_${i}_7F31`), 'READ_END_ONCE_7F31']
 for (const [index, marker] of resultMarkers.entries()) {
-  const visible = expandedTools || index < 3
+  // Read calls are quiet one-line summaries until real Ctrl+O expands them.
+  const visible = expandedTools
   check(`工具正文「${marker}」${visible ? '恰好一份' : '折叠隐藏'}`,
     count(marker) === (visible ? 1 : 0), `实际 ${count(marker)} 次`)
 }
@@ -389,8 +390,12 @@ check(
 
 const topBorder = lines[inputRow - 1] ?? ''
 const bottomBorder = lines[inputRow + 1] ?? ''
-const borderIntact = topBorder.includes('╭') && topBorder.includes('╮')
-  && bottomBorder.includes('╰') && bottomBorder.includes('╯')
+const railX = (lines[inputRow] ?? '').indexOf('┃')
+const borderIntact = railX >= 0 && topBorder.trim() === '┃' && bottomBorder.trim() === '┃'
+  && [inputRow - 1, inputRow, inputRow + 1].every(y => {
+    const cell = buf.getLine(y)?.getCell(railX)
+    return cell?.getChars() === '┃' && cell.getFgColor() === 0xffdf80
+  })
   && ![topBorder, bottomBorder].some(line => /思考 ·|TOOL_CALL_ONCE|ASSISTANT_BODY_ONCE/.test(line))
 check(
   '输入边框完整且未覆盖思考、工具或正文',

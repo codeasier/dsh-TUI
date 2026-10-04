@@ -36,6 +36,34 @@ export interface SelectionAttachment {
 }
 
 /**
+ * One context a side panel staged into the composer ("Send to Chat", §6.7):
+ * the panel row's own title plus the model-facing text. The composer renders
+ * a chip per entry above the input row, and the NEXT submission appends the
+ * `<attached-context …>` block — the same one-shot consumption the IDE
+ * selection channel next door performs (a staged context is spent by the
+ * message that carried it).
+ */
+export interface AttachedContext {
+  /** Stable handle minted by the channel (`ctx-N`), used to detach one entry. */
+  readonly id: string
+  /** Where the context came from. Only panels exist today; the discriminant
+   *  is explicit so a future source cannot be mistaken for a panel row. */
+  readonly source: 'panel'
+  /** Identity of the contributing row INSIDE its panel (a job id, a session
+   *  id, …) — paired with `title` it is the replace key. */
+  readonly sourceId: string
+  /** Human-facing label for the composer chip (e.g. `Job #142`). */
+  readonly title: string
+  /** Model-facing body, already capped at `MENTION_MAX_FILE_CHARS`. */
+  readonly content: string
+  /** Length of `content` after the cap — what the model will actually get. */
+  readonly chars: number
+  /** True when the panel's content exceeded the cap and was cut at attach
+   *  time; the block builder then appends the visible `[… truncated]` marker. */
+  readonly truncated: boolean
+}
+
+/**
  * One rendered transcript row. The DSH session log is the source of truth:
  * rows are derived from `session/event` records (and the initial
  * `agent.session.events` replay), never from optimistic local state.
@@ -52,12 +80,20 @@ export interface ChatRow {
   images?: readonly TranscriptImage[]
   /** True while an assistant step is still streaming chunks. */
   streaming?: boolean
+  /** Keep a settled reasoning row expanded until the current turn ends. */
+  thinkingOpen?: boolean
   /** Present on `tool` rows; the card model. */
   tool?: ToolRow
   /** Present on `subagent` rows; the subagent state snapshot. */
   subagent?: SubagentRow
   /** Present on `job` rows; the background-job state snapshot. */
   job?: JobRow
+  /** Present on `job` rows that share a run of ≥2 consecutive cards: the
+   *  group decoration (chain rail + fold summary). Render-derived state:
+   *  written only onto shallow copies in the transcript's row pre-pass
+   *  (rows may arrive frozen from the session projection), never by the
+   *  projection and never on the shared row objects. */
+  jobGroup?: JobGroupRow
   /** Event wall-clock time (transcript-mode metadata, assistant rows). */
   time?: number
   /** Present on `reasoning` rows once settled: thinking wall-clock duration. */
@@ -249,6 +285,42 @@ export interface JobRow {
   finishedAt?: number
   /** Mirrored output tail feeding the card's three-line waterfall. */
   outputLines: readonly BackgroundJobOutputLine[]
+}
+
+/**
+ * Group decoration for a run of consecutive background-job cards.
+ *
+ * A batch of `run_in_background` calls lands as N adjacent cards (the job
+ * projection pushes the whole roster in one sync) and each one pays a blank
+ * separator line — a pile of near-identical rows for work nobody reads card
+ * by card. The transcript therefore reads ≥2 adjacent job rows as ONE group:
+ * members drop the blank line between them, share a chain rail on the left,
+ * and the group header summarizes the run; once every member settled the
+ * whole group folds into that header line alone (click / Ctrl+O expands).
+ *
+ * Derived state: it rides a per-pass shallow COPY of the row (the shared
+ * rows may arrive frozen from the session projection) so BOTH the renderer
+ * and the height signature can read it, and it is recomputed from scratch
+ * whenever the visible-row window rebuilds.
+ */
+export interface JobGroupRow {
+  /** Group header row: the only member rendering the title/fold line. */
+  head: boolean
+  /** Last member: closes the rounded rail with a `╰` cap line. */
+  last: boolean
+  /** Members in the run (≥2 — a lone job card stays ungrouped). */
+  count: number
+  /** Whole group folded into the header line (meaningful on the head). */
+  folded: boolean
+  /** Members still live (running + stopping). */
+  running: number
+  completed: number
+  failed: number
+  killed: number
+  /** Earliest member start. */
+  startedAt: number
+  /** Latest member finish; absent while any member is still live. */
+  endedAt?: number
 }
 
 /**
@@ -711,3 +783,28 @@ export interface LlmDiscoveredModel { id: string; name?: string; contextWindow?:
 export type ChannelImageMediaType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
 export interface ChannelSceneMetadata { readonly id: string; readonly title?: string }
 export interface RawTrajEvent { readonly type: string; readonly seq: number; readonly time: number; readonly data: unknown }
+
+/**
+ * The ONE context-occupancy reading every occupancy surface shares: the
+ * footer's `ctx` field and its hover detail, the segmented context bar, the
+ * working-activity line's `⚠ ctx N%` prefix, `/tokens` + `/status`, and the
+ * context-low warning.
+ *
+ * It is deliberately separate from the last request's billed usage, which stays
+ * the source for cache-hit-rate and cost readouts: "what the last request cost"
+ * and "how full the window is now" are different questions (see
+ * `dsh-adapter/context-occupancy.ts`).
+ */
+export interface ContextOccupancy {
+  /** Tokens the next request would occupy. */
+  readonly usedTokens: number
+  /** Window to divide by; `undefined` when no route advertised a capacity. */
+  readonly contextWindow: number | undefined
+  /**
+   * Which source answered: `projection` is DSH's own `contextPressure`
+   * projection (the number the Web UI shows); `sample` is this TUI's fallback,
+   * the last settled request's billed usage, used only when the composition
+   * mounts no token meter.
+   */
+  readonly source: 'projection' | 'sample'
+}

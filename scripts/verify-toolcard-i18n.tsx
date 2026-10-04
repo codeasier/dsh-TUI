@@ -5,8 +5,9 @@
  * tool display names, per-line fold hints, exit/signal error lines, the
  * running placeholder, and search-result truncation. These used to be
  * hardcoded English that leaked into the zh UI.
- * Collapsed cards show a single header plus a short output preview. Body-copy
- * scenarios check the preview and then expand; opened tool details are uncapped.
+ * Collapsed read/search calls show quiet one-line summaries; output-heavy cards
+ * retain a short preview. Body-copy scenarios explicitly expand before checking
+ * localized interface copy; opened tool details are uncapped.
  * SplitDiffView also exercises its own localized line-budget hints.
  *
  * Belt and suspenders with scripts/verify-i18n.ts: that gate bans the
@@ -72,6 +73,8 @@ type Scenario = {
   opts?: { foldTerminalCommand?: boolean; verbose?: boolean }
   /** Visible header while the body-copy scenario shows its short preview. */
   summary?: { zh: string; en: string }
+  /** Quiet read/search calls hide body copy until explicitly expanded. */
+  inlineSummary?: boolean
   zh: string[]
   en: string[]
 }
@@ -111,6 +114,7 @@ const SCENARIOS: Scenario[] = [
   },
   {
     id: 'body-detail',
+    inlineSummary: true,
     tool: { name: 'read', resultFull: 'l1\nl2\nl3\nl4\nl5' },
     opts: { verbose: true },
     summary: { zh: '读取', en: 'Read' },
@@ -157,6 +161,7 @@ const SCENARIOS: Scenario[] = [
   },
   {
     id: 'running-placeholder',
+    inlineSummary: true,
     opts: { verbose: true },
     summary: { zh: '读取', en: 'Read' },
     tool: { name: 'read', status: 'running', startedAt: Date.now() - 4000 },
@@ -165,6 +170,7 @@ const SCENARIOS: Scenario[] = [
   },
   {
     id: 'search-total',
+    inlineSummary: true,
     opts: { verbose: true },
     summary: { zh: 'Glob **/*.ts', en: 'Glob **/*.ts' },
     tool: {
@@ -231,14 +237,14 @@ async function runPass(lang: 'zh' | 'en') {
         await settled(() => screenOf(rig.term).includes(scenario.summary![lang])))
       check(`[${lang}] ${scenario.id}: 预览标题仍为一物理行`,
         screenOf(rig.term).split('\n').filter(line => line.includes(scenario.summary![lang])).length === 1)
-      const preview = scenario.id === 'body-detail'
-        ? ['l1', 'l2', 'l3', lang === 'zh' ? '… +2 行（ctrl+o 展开）' : '… +2 lines (ctrl+o to expand)']
-        : scenario[lang]
-      check(`[${lang}] ${scenario.id}: 短预览与界面文案可见`,
-        await settled(() => preview.every(text => screenOf(rig.term).includes(text))))
-      if (scenario.id === 'body-detail') {
-        check(`[${lang}] ${scenario.id}: 三行预览隐藏输出尾部`,
-          !screenOf(rig.term).includes('l4') && !screenOf(rig.term).includes('l5'))
+      if (scenario.inlineSummary) {
+        const bodyCopy = scenario[lang].filter(text => !scenario.summary![lang].includes(text))
+        check(`[${lang}] ${scenario.id}: 收起态单行摘要不提前显示正文文案`,
+          screenOf(rig.term).split('\n').filter(line => line.trim() !== '').length === 1
+          && bodyCopy.every(text => !screenOf(rig.term).includes(text)))
+      } else {
+        check(`[${lang}] ${scenario.id}: 短预览与界面文案可见`,
+          await settled(() => scenario[lang].every(text => screenOf(rig.term).includes(text))))
       }
     }
     app.rerender(React.createElement(AssistantToolUseMessage, {

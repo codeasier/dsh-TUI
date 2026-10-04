@@ -36,7 +36,7 @@ const [
   React,
   { render },
   { JobCard },
-  { JobsPanel },
+  { JobsPanel, resolveJobsRowColumns },
   { Chat },
   { QuestionStore },
   { createJobProjection },
@@ -968,13 +968,15 @@ for (const columns of [40, 100]) {
     await withTerminal(
       () => React.createElement(JobCard, { job, marginTopOnTurn: false }),
       async (screen, _rerender, _stdin, term) => {
-        check(`C4 ${columns}列 ${status} 概述标题/ID/kind/状态在同一行`, await settled(() => {
+        check(`C4 ${columns}列 ${status} 概述折行、ID/kind/状态留在首行`, await settled(() => {
           const lines = screen().split('\n').filter(line => line.trim() !== '')
-          return lines.length === 1 && lines[0].includes('job: ') && lines[0].includes('pwsh-1 pwsh') && lines[0].includes(status)
+          return (columns === 100 ? lines.length === 1 : lines.length > 1) && lines[0].includes('job: ')
+            && lines[0].includes('pwsh-1 pwsh') && lines[0].includes(status)
+            && lines.some(line => line.includes('IDs'))
         }), screen())
         const header = screen().split('\n').find(line => line.includes('job: ')) ?? ''
-        check(`C4 ${columns}列 ${status} 概述优先且窄宽正确截断`, !header.includes(job.label)
-          && (columns === 100 ? header.includes(`job: ${description}`) : !header.includes(description) && header.includes('…')), header)
+        check(`C4 ${columns}列 ${status} 概述优先且窄宽不截断`, !screen().includes(job.label)
+          && (columns === 100 ? header.includes(`job: ${description}`) : !header.includes('…')), header)
         check(`C4 ${columns}列 ${status} prefix+标题粗体、ID+kind dim`,
           textHasStyle(term, columns === 100 ? `job: ${description}` : 'job:', 'bold')
             && textHasStyle(term, 'pwsh-1 pwsh', 'inactive'), header)
@@ -991,6 +993,47 @@ await withTerminal(
   100,
 )
 
+await withTerminal(
+  () => React.createElement(JobsPanel, {
+    jobs: [
+      runningJob,
+      { id: 'bash-2', kind: 'bash', label: 'pnpm build', status: 'completed' as const, detail: 'exit code: 0', startedAt: NOW - 90_000, finishedAt: NOW - 1000, outputLines: [] },
+      { id: 'subagent-3', kind: 'subagent', label: 'review the regressions', status: 'running' as const, startedAt: NOW - 10_000, outputLines: [] },
+    ],
+    initialFocusId: 'subagent-3',
+    onClose: () => {},
+    onKill: () => {},
+  }),
+  async screen => {
+    await sleep(150) // 固定窗:探针 C4 渲染落定（initialFocusId 聚焦行渲染）
+    const text = screen()
+    const rows = text.split('\n')
+    check(
+      'C4 initialFocusId 聚焦指定任务（非首行）',
+      rows.some(line => line.includes('review the regressions') && line.includes('❯')),
+      rows.filter(line => line.includes('❯') || line.includes('subagent-3')).join('|'),
+    )
+    check(
+      'C4 默认首行不被聚焦',
+      !rows.some(line => line.includes('pwsh-1') && line.includes('❯')),
+      rows.filter(line => line.includes('pwsh-1')).join('|'),
+    )
+  },
+)
+
+await withTerminal(
+  () => React.createElement(JobsPanel, {
+    jobs: [runningJob],
+    initialFocusId: 'gone-job',
+    onClose: () => {},
+    onKill: () => {},
+  }),
+  async screen => {
+    await sleep(150) // 固定窗:探针 C4 渲染落定（回退首行用例）
+    const text = screen()
+    check('C4 未知 initialFocusId 回退首行', text.includes('❯') && text.includes('pwsh-1'))
+  },
+)
 // ---------------------------------------------------------------------------
 // Group D — 按键归属：/jobs 面板打开时 Esc 关面板，不得同时中断对话
 // ---------------------------------------------------------------------------
@@ -1141,6 +1184,23 @@ for (const fullscreen of [false, true]) {
   } finally {
     channel.releaseContributions()
   }
+}
+
+// ---------------------------------------------------------------------------
+// Group F — 侧栏形态的列宽分配纯函数（panel variant 的行网格契约）
+// ---------------------------------------------------------------------------
+console.log('--- F: panel-variant column allocation ---')
+{
+  const full = resolveJobsRowColumns(52)
+  check('E1 宽面板（52）三列全开', full.showProgress && full.showDuration && full.showStatus && full.idWidth === 9 && full.statusWidth === 9 && !full.labelWrap)
+  const mid46 = resolveJobsRowColumns(46)
+  check('E1 中宽面板（46）无进度列、有时长与状态', !mid46.showProgress && mid46.showDuration && mid46.showStatus)
+  const mid = resolveJobsRowColumns(38)
+  check('E1 中等面板（38）无进度列、有时长与状态', !mid.showProgress && mid.showDuration && mid.showStatus)
+  const narrow = resolveJobsRowColumns(30)
+  check('E1 窄面板（30）省略时长列、保留状态列', !narrow.showProgress && !narrow.showDuration && narrow.showStatus)
+  const min = resolveJobsRowColumns(28)
+  check('E1 minColumns=28 仍有状态列', min.showStatus && !min.showProgress && !min.showDuration)
 }
 
 if (failed > 0) {

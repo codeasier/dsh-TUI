@@ -17,6 +17,8 @@ import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { parseOpenCodeExport } from '../src/dsh-adapter/migrate/adapters/opencode.parse.js'
 import { sessionize } from '../src/dsh-adapter/migrate/sessionize.js'
 import { TOOL_RESULT_MAX_BYTES } from '../src/dsh-adapter/migrate/parse/tools.js'
+import { createInitialChannelView } from '../src/dsh-adapter/channel/state.js'
+import { createChannelProjection } from '../src/dsh-adapter/channel/projection.js'
 
 const SID = 'ses_synthetic'
 const NOW = 1_790_000_000_000
@@ -148,6 +150,55 @@ check('pending/running tools close as interrupted errors, never resumed executio
   assert.equal(log.events.find(e => e.type === 'turn/end').data.reason.kind, 'aborted')
   wire(messages)
 })
+function transcript(log, model) {
+  const noop = () => undefined
+  const state = { ...createInitialChannelView({ model: 'source-model', provider: 'fixture', cwd: '/synthetic/project' }, {
+    agentId: String(model.id), mode: { id: 'normal', name: 'Normal' }, cwdDescription: '/synthetic/project',
+  }), emit: noop }
+  const projector = createChannelProjection(state, {
+    agent: () => ({ session: model }), rowIds: { value: 0 }, resetContextWarning: noop,
+    jobs: { onOutputSeen: noop, onStarted: noop }, inputConvergence: { cancelInFlight: false },
+    checkContextWarning: noop, notify: noop, attachments: noop, selectionAttached: noop,
+  })
+  projector.replayEvents(log.events)
+  return { state, projector }
+}
+for (const name of ['read', 'task', 'ask_user_question']) {
+  for (const status of ['completed', 'error', 'running']) {
+    check(`Channel replay retains imported ${name} ${status} card, call-ID and seq`, () => {
+      const { log, model } = projected(fixture([user('u1', 'tools'), assistant('a1', 'u1', [tool('imported-call', status, {}, { tool: name })])]))
+      const { state, projector } = transcript(log, model)
+      const call = log.events.find(e => e.type === 'tool/call')
+      const row = state.rows.find(r => r.kind === 'tool')
+      assert.equal(row?.tool?.name, name)
+      assert.equal(row?.tool?.callId, 'imported-call')
+      assert.equal(row?.seq, call.seq)
+      assert.equal(row?.tool?.status, status === 'completed' ? 'ok' : 'error')
+      assert.equal(status === 'completed' ? row.tool.resultFull : row.tool.errorText,
+        status === 'completed' ? 'imported-call output' : status === 'error' ? 'imported-call error' : '[Tool execution was interrupted]')
+      assert.equal(state.activeToolCount, 0)
+      // A binding reset must discard provenance along with all projection state.
+      const assistantEvent = log.events.find(e => e.type === 'assistant/message')
+      projector.reset()
+      state.rows.length = 0
+      projector.renderEvent(assistantEvent)
+      projector.reset()
+      projector.renderEvent(call)
+      assert.equal(state.rows.filter(r => r.kind === 'tool').length, name === 'read' ? 1 : 0)
+      // Native calls retain their subagent/questionnaire suppression after an import.
+      const nativeEvents = log.events.map(e => e.type === 'assistant/message'
+        ? { ...e, data: { ...e.data, message: { ...e.data.message, source: { ...e.data.message.source, provider: 'fixture' } } } }
+        : e)
+      const native = transcript({ events: nativeEvents }, model).state
+      assert.equal(native.rows.filter(r => r.kind === 'tool').length, name === 'read' ? 1 : 0)
+      const withoutProvenance = nativeEvents.map(e => e.type === 'assistant/message'
+        ? { ...e, data: { ...e.data, message: { ...e.data.message, source: undefined } } }
+        : e)
+      assert.equal(transcript({ events: withoutProvenance }, model).state.rows.filter(r => r.kind === 'tool').length,
+        name === 'read' ? 1 : 0, 'legacy/stub message without source must not throw or imply import')
+    })
+  }
+}
 check('interrupted tool errors retain explicitly recorded partial output', () => {
   const { session } = projected(fixture([user('u1', 'tools'), assistant('a1', 'u1', [tool('c1', 'error', { metadata: { interrupted: true, output: 'partial output' } })])]))
   assert.deepEqual(session.turns[0].steps[0].results[0], { callId: 'c1', text: 'partial output', isError: false })
