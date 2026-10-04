@@ -460,6 +460,12 @@ An empty session shows the whale logo area at the top (scrolls away with the con
   distinguished from prose by a left rail. Tool cards have their own background and a continuous left
   border through the title, preview and expanded body. Cards are separated by one blank line;
   spacing from prose and user turns is preserved too.
+- **Background jobs**: foreground bash/pwsh calls show only their tool card. Commands explicitly started
+  in the background or handed off after a wait timeout also show an independent job card and appear in
+  `/jobs`. Job cards, `/jobs`, notifications and the status bar prefer the persisted call's description
+  (`args.description`), falling back to the upstream label when absent; replay uses the same description,
+  without extra model-generated summaries. Job IDs remain available for `job_output` and stopping tasks,
+  and `/jobs` details retain the actual command.
 
 **Tool previews and thinking summaries** (default on)
 

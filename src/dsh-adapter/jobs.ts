@@ -138,9 +138,9 @@ export class BackgroundJobStore {
   /** Kernel-ring read state per job id (own cursor — never the model's). */
   private readonly kernelReads = new Map<string, KernelReadState>()
   /** Durable hand-offs prove a shell job actually left the foreground. Keep
-   *  the command when available, including a bounded set of acks that arrived
-   *  before the registry roster (replay and live delivery can race). */
-  private readonly backgroundCommands = new Map<string, string | undefined>()
+   *  call metadata separately from registry facts, including a bounded set of
+   *  acks arriving before the roster (replay and live delivery can race). */
+  private readonly backgroundStarts = new Map<string, { command?: string; description?: string }>()
 
   constructor(private readonly events: BackgroundJobEvents = {}) {}
 
@@ -160,12 +160,13 @@ export class BackgroundJobStore {
       seen.add(snap.id)
       const prev = this.jobs.get(snap.id)
       if (prev === undefined) {
-        const command = this.backgroundCommands.get(snap.id)
+        const start = this.backgroundStarts.get(snap.id)
         this.jobs.set(snap.id, {
           id: snap.id,
           kind: snap.kind,
           label: snap.label,
-          ...(command === undefined ? {} : { command }),
+          ...(start?.command === undefined ? {} : { command: start.command }),
+          ...(start?.description === undefined ? {} : { description: start.description }),
           status: snap.status,
           ...(snap.detail === undefined ? {} : { detail: snap.detail }),
           ...(snap.progress === undefined ? {} : { progress: snap.progress }),
@@ -218,7 +219,7 @@ export class BackgroundJobStore {
         if (this.jobs.size <= JOBS_MAX_TRACKED) break
         if (isTerminal(job.status)) {
           this.jobs.delete(id)
-          this.backgroundCommands.delete(id)
+          this.backgroundStarts.delete(id)
           this.kernelReads.delete(id)
           changed = true
         }
@@ -229,20 +230,26 @@ export class BackgroundJobStore {
 
   /**
    * Confirm a background hand-off (explicit start, timeout promotion, or
-   * job_output), optionally recording its full command. Registry membership
-   * alone is not evidence: modern bash/pwsh also register foreground calls.
+   * job_output), optionally recording its command and single-line overview.
+   * Later output-only proofs never erase metadata from the originating call.
+   * Registry membership alone is not evidence: modern bash/pwsh also register
+   * foreground calls.
    */
-  onStarted(id: string, command?: string): void {
+  onStarted(id: string, command?: string, description?: string): void {
     const job = this.jobs.get(id)
-    const newlyBackground = !this.backgroundCommands.has(id)
-    const fullCommand = command ?? this.backgroundCommands.get(id)
-    this.backgroundCommands.set(id, fullCommand)
+    const previous = this.backgroundStarts.get(id)
+    const start = {
+      command: command ?? previous?.command,
+      description: description ?? previous?.description,
+    }
+    this.backgroundStarts.set(id, start)
     // A replay can contain many already-expired jobs absent from the roster.
     // Bound those pending proofs without evicting a tracked live job's proof.
-    const pending = [...this.backgroundCommands.keys()].filter(key => !this.jobs.has(key))
-    for (const key of pending.slice(0, Math.max(0, pending.length - JOBS_MAX_TRACKED))) this.backgroundCommands.delete(key)
-    if (job !== undefined && (newlyBackground || job.command !== fullCommand)) {
-      if (fullCommand !== undefined) job.command = fullCommand
+    const pending = [...this.backgroundStarts.keys()].filter(key => !this.jobs.has(key))
+    for (const key of pending.slice(0, Math.max(0, pending.length - JOBS_MAX_TRACKED))) this.backgroundStarts.delete(key)
+    if (job !== undefined && (previous === undefined || job.command !== start.command || job.description !== start.description)) {
+      if (start.command !== undefined) job.command = start.command
+      if (start.description !== undefined) job.description = start.description
       this.events.onChanged?.()
     }
   }
@@ -251,7 +258,7 @@ export class BackgroundJobStore {
    *  Other producers already represent independent work at registration. */
   isBackground(id: string): boolean {
     const job = this.jobs.get(id)
-    return job !== undefined && ((job.kind !== 'bash' && job.kind !== 'pwsh') || this.backgroundCommands.has(id))
+    return job !== undefined && ((job.kind !== 'bash' && job.kind !== 'pwsh') || this.backgroundStarts.has(id))
   }
 
   /**
@@ -372,12 +379,17 @@ export class BackgroundJobStore {
   reset(options: { preservePendingStarts?: boolean } = {}): void {
     const changed = this.jobs.size > 0
     if (options.preservePendingStarts) {
-      for (const id of this.jobs.keys()) this.backgroundCommands.delete(id)
-    } else this.backgroundCommands.clear()
+      for (const id of this.jobs.keys()) this.backgroundStarts.delete(id)
+    } else this.backgroundStarts.clear()
     this.jobs.clear()
     this.kernelReads.clear()
     if (changed) this.events.onChanged?.()
   }
+}
+
+/** All job surfaces prefer the durable call overview over the registry label. */
+export function jobTitleOf(job: Pick<BackgroundJobState, 'label' | 'description'>): string {
+  return job.description || job.label
 }
 
 /** `3s` under a minute, `3m12s` under an hour, `1h02m` beyond — transcript-card compact. */

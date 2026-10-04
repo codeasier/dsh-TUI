@@ -1,6 +1,6 @@
 import React from 'react'
 import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTerminalSize, useAnimationFrame } from '../ui.js'
-import { formatJobDuration, type BackgroundJobState, type BackgroundJobStatus } from '../dsh-adapter/jobs.js'
+import { formatJobDuration, jobTitleOf, type BackgroundJobState, type BackgroundJobStatus } from '../dsh-adapter/jobs.js'
 import { JobProgress } from './Chat/JobCard.js'
 import { Markdown } from './Markdown.js'
 import type { Theme } from '../theme.js'
@@ -95,6 +95,7 @@ function JobRowLine({ job, focused, armed, showProgress, onFocus }: {
 }): React.ReactNode {
   const info = statusInfo(job.status)
   const duration = formatJobDuration(job)
+  const title = jobTitleOf(job)
   const live = !isTerminalStatus(job.status)
   const progress = live && job.progress !== undefined && job.progress !== '' ? job.progress : undefined
   return (
@@ -115,7 +116,7 @@ function JobRowLine({ job, focused, armed, showProgress, onFocus }: {
           <Text bold={focused} color={focused ? 'accent' : undefined} wrap="truncate-end">{job.id}</Text>
         </Box>
         <Box flexGrow={1} flexShrink={1}>
-          <Text bold={focused} wrap="truncate-end">{job.label}</Text>
+          <Text bold={focused} wrap="truncate-end">{title}</Text>
         </Box>
         {showProgress === true && (
           <Box width={11} flexShrink={0} justifyContent="flex-end">
@@ -140,7 +141,7 @@ function JobRowLine({ job, focused, armed, showProgress, onFocus }: {
         // row above already names the job, so the old `任务：…` line was pure
         // repetition, and the command only earns a line when it differs.
         <Box flexDirection="column" paddingLeft={4}>
-          {job.command !== undefined && job.command !== '' && job.command !== job.label && (
+          {job.command !== undefined && job.command !== '' && job.command !== title && (
             <Box flexDirection="row" gap={1}>
               <Box width={7} flexShrink={0}><Text dimColor>{t('jobs-panel-command')}</Text></Box>
               <Text dimColor wrap="truncate-end">{job.command}</Text>

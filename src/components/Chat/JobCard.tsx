@@ -1,6 +1,6 @@
 import React from 'react'
 import { Box, Text, useAnimationFrame, useTerminalSize } from '../../ui.js'
-import { formatJobDuration, type BackgroundJobStatus } from '../../dsh-adapter/jobs.js'
+import { formatJobDuration, jobTitleOf, type BackgroundJobStatus } from '../../dsh-adapter/jobs.js'
 import type { JobRow } from '../../dsh-adapter/channel.js'
 import type { BackgroundJobOutputLine } from '../../adapter/ports/channel-view.js'
 import type { Theme } from '../../theme.js'
@@ -77,7 +77,7 @@ function clipLine(text: string, maxWidth: number): string {
 
 /**
  * Live background-job card embedded in the transcript (`kind: 'job'`),
- * sibling of the subagent card: header (id · kind · label · elapsed ·
+ * sibling of the subagent card: header (overview · id · kind · elapsed ·
  * status) plus a bounded output waterfall (up to three rows) while the job
  * is live — and only when mirrored output exists: background jobs are
  * usually silent, so an outputless card is just its header line, never a
@@ -118,7 +118,7 @@ export function JobCard({ job, marginTopOnTurn, onClick }: {
   // A settled job's terminal detail ('exit code: 0') rides the header; a
   // failed/killed one also keeps it as the explanatory tail line.
   const headerDetail = job.detail !== undefined && job.detail !== '' ? job.detail : undefined
-  const headerName = `${t('jobs-card-prefix')}${job.id}`
+  const headerName = `${t('jobs-card-prefix')}${jobTitleOf(job)}`
   const duration = formatJobDuration(job)
   // Only a LIVE job carries a progress chip; a settled one has dropped it, so
   // reserving width for it unconditionally would clip the label for nothing.
@@ -144,15 +144,13 @@ export function JobCard({ job, marginTopOnTurn, onClick }: {
         * overflowed by exactly the chip's width). */}
       <Box flexDirection="row" gap={1}>
         <Text color={hovered && clickable ? 'accent' : info.color}>{info.glyph}</Text>
-        <Box flexShrink={0}>
-          <Text bold color={hovered && clickable ? 'accent' : undefined}>
+        <Box flexGrow={1} flexShrink={1}>
+          <Text bold color={hovered && clickable ? 'accent' : undefined} wrap="truncate-end">
             {headerName}
           </Text>
         </Box>
+        <Box flexShrink={0}><Text dimColor>{job.id}</Text></Box>
         <Box flexShrink={0}><Text dimColor>{job.kind}</Text></Box>
-        <Box flexGrow={1} flexShrink={1}>
-          <Text wrap="truncate-end">{job.label}</Text>
-        </Box>
         {liveProgress !== undefined && (
           <Box width={12} flexShrink={0}>
             <JobProgress progress={liveProgress} />

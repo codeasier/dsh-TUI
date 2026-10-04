@@ -1,7 +1,7 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { markChannelReadDirty } from '../../adapter/channel/read-view.js'
 import { t } from '../../i18n.js'
-import { BackgroundJobStore, formatJobDuration, type JobsRuntime } from '../jobs.js'
+import { BackgroundJobStore, formatJobDuration, jobTitleOf, type JobsRuntime } from '../jobs.js'
 import type { ChannelOwner } from './owner.js'
 import type { ChannelState, ChatRow, JobControl } from './types.js'
 
@@ -35,7 +35,7 @@ export function createJobProjection(
     for (const job of state.backgroundJobs) {
       let row = jobRowsByJobId.get(job.id)
       if (!row) {
-        row = { id: deps.rowIds.value++, kind: 'job', text: job.label, job: undefined }
+        row = { id: deps.rowIds.value++, kind: 'job', text: jobTitleOf(job), job: undefined }
         jobRowsByJobId.set(job.id, row)
         state.rows.push(row)
       }
@@ -43,6 +43,7 @@ export function createJobProjection(
         id: job.id,
         kind: job.kind,
         label: job.label,
+        ...(job.description === undefined ? {} : { description: job.description }),
         status: job.status,
         ...(job.detail === undefined ? {} : { detail: job.detail }),
         ...(job.progress === undefined ? {} : { progress: job.progress }),
@@ -50,7 +51,7 @@ export function createJobProjection(
         ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
         outputLines: job.outputLines,
       }
-      row.text = job.label
+      row.text = jobTitleOf(job)
       markChannelReadDirty(row)
       markChannelReadDirty(state.rows)
     }
@@ -63,7 +64,7 @@ export function createJobProjection(
       deps.notify(
         t(job.status === 'completed' ? 'jobs-toast-completed' : job.status === 'failed' ? 'jobs-toast-failed' : 'jobs-toast-killed', {
           id: job.id,
-          label: job.label,
+          label: jobTitleOf(job),
           duration: formatJobDuration(job),
           detail: job.detail ?? '',
         }),
@@ -91,7 +92,7 @@ export function createJobProjection(
         return false
       }
       if (job !== undefined && (job.status === 'running' || job.status === 'stopping')) {
-        deps.steer(t('jobs-steer-killed', { id, label: job.label }))
+        deps.steer(t('jobs-steer-killed', { id, label: jobTitleOf(job) }))
       }
       return true
     },

@@ -1,4 +1,5 @@
 import type { TodoPanelItem } from './types.js'
+import { cleanRenderText } from '../sanitize.js'
 /** Names the subagent delegation tools ship under (preset `toolName` values
  *  plus the CLI default); each renders as a live subagent card, never a plain
  *  tool card. */
@@ -26,8 +27,8 @@ export function parseJobOutputId(argsFull: string | undefined): string | undefin
 }
 
 /** Extract the command that launched a background job from its tool args
- *  (`command` for the shell tools, `text` for terminal_send). The registry
- *  label is the friendly description; the command is the actual invocation. */
+ *  (`command` for the shell tools, `text` for terminal_send). Kept separately
+ *  from the display overview and the producer-owned registry label. */
 export function toolCommandOf(argsFull: string | undefined): string | undefined {
   if (argsFull === undefined || argsFull === '') return undefined
   try {
@@ -38,6 +39,18 @@ export function toolCommandOf(argsFull: string | undefined): string | undefined 
         ? args.text
         : undefined
     return candidate
+  } catch {
+    return undefined
+  }
+}
+
+/** Read an optional shell overview, keeping untrusted call text single-line. */
+export function toolDescriptionOf(argsFull: string | undefined): string | undefined {
+  if (argsFull === undefined || argsFull === '') return undefined
+  try {
+    const args: unknown = JSON.parse(argsFull)
+    if (args === null || typeof args !== 'object' || !('description' in args) || typeof args.description !== 'string') return undefined
+    return cleanRenderText(args.description, Infinity) || undefined
   } catch {
     return undefined
   }

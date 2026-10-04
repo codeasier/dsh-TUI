@@ -7,7 +7,7 @@ import { replaySelectionAttachment } from './ide-selection.js'
 import type { InputConvergence } from './input-actions.js'
 import type { BackgroundJobStore } from '../jobs.js'
 import type { TuiRendererHost } from '../renderers.js'
-import { isSubagentToolName, parseJobOutputId, toolCommandOf, BACKGROUND_START_ACK, BACKGROUND_PROMOTED_ACK, todoPanelItems } from './projection-helpers.js'
+import { isSubagentToolName, parseJobOutputId, toolCommandOf, toolDescriptionOf, BACKGROUND_START_ACK, BACKGROUND_PROMOTED_ACK, todoPanelItems } from './projection-helpers.js'
 import { ARGS_PREVIEW_LIMIT, harnessToolResultView, LOCAL_OUTPUT_LIMIT, prepareReplayEvents, preview, RESULT_PREVIEW_LIMIT, toolErrorText } from './transcript.js'
 import { estimateTokens, isTokenDelta, tokenDeltaChars, usageOutputTokens } from './usage.js'
 import { transcriptImagesOf, type TranscriptImage } from '../transcript-images.js'
@@ -226,7 +226,11 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     // only an explicit start or timeout hand-off exposes an independent job.
     const startAck = BACKGROUND_START_ACK.exec(result)
       ?? (name === 'bash' || name === 'pwsh' ? BACKGROUND_PROMOTED_ACK.exec(result) : null)
-    if (startAck !== null) deps.jobs.onStarted(startAck[1], toolCommandOf(argsFull))
+    if (startAck !== null) deps.jobs.onStarted(
+      startAck[1],
+      toolCommandOf(argsFull),
+      name === 'bash' || name === 'pwsh' ? toolDescriptionOf(argsFull) : undefined,
+    )
   }
 
   /**

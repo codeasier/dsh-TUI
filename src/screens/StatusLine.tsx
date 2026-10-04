@@ -7,7 +7,7 @@ import { formatContextUsage, DEFAULT_STATUS_BAR, normalizeStatusBar, type Status
 import { estimateSessionCostSnapshotCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js'
 import { ActivityLine, contextPressurePct, type ActivityLineValue } from '../components/ActivityLine.js'
 import { GoalStatusChip } from '../components/GoalTodoPanel.js'
-import { formatJobDuration, type BackgroundJobState } from '../dsh-adapter/jobs.js'
+import { formatJobDuration, jobTitleOf, type BackgroundJobState } from '../dsh-adapter/jobs.js'
 
 /** Stable fallback for stubbed channels: verify/repro harnesses render the
  *  real Chat with partial channel literals that predate the jobs field. */
@@ -758,7 +758,7 @@ function buildHoverDetail(
       return (
         <Text wrap="truncate">
           {dim('jobs ')}
-          {shown.map(job => `${job.id} ${job.label} (${formatJobDuration(job)})`).join(' · ')}
+          {shown.map(job => `${job.id} ${jobTitleOf(job)} (${formatJobDuration(job)})`).join(' · ')}
           {rest > 0 ? ` · +${rest}` : ''}
         </Text>
       )
