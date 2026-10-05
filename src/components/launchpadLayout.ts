@@ -121,7 +121,7 @@ export interface LaunchpadLayout {
   readonly tipGapRows: number
   /** 双角铭牌行（永远画：它是这一屏的底边锚点）。 */
   readonly showCorners: boolean
-  /** 输入框卡片占的行数（边框 2 + 输入 1，恒 3）。 */
+  /** 输入框卡片占的行数（边框 2 + 输入行数，单行草稿恒 3）。 */
   readonly cardRows: number
   /** 头部本体占的行数（不含 LogoV2 根盒的 marginTop）。 */
   readonly heroRows: number
@@ -134,13 +134,15 @@ export interface LaunchpadLayout {
  * @param rows - 内容区行数。
  * @param options - whale / whaleGirl 对应设置项；font 是当天那款字体（字身宽度
  *   不同，宽轴阈值也跟着不同）；params 是框下有没有参数行（模型/思考深度/模式/
- *   权限全拿不到时为 false，成组行矮一行）。
+ *   权限全拿不到时为 false，成组行矮一行）；inputRows 是输入框要画几行
+ *   （Shift+Enter 多行草稿，缺省 1）——行数预算与阶梯一起 +N，矮屏时立绘/
+ *   键帽行先让位，绝不把输入框挤出去。
  * @returns 该尺寸下要渲染的部件。
  */
 export function resolveLaunchpadLayout(
   columns: number,
   rows: number,
-  options: { whale: boolean; whaleGirl?: boolean; font: SplashFont; params?: boolean },
+  options: { whale: boolean; whaleGirl?: boolean; font: SplashFont; params?: boolean; inputRows?: number },
 ): LaunchpadLayout {
   const { font } = options
   // 与 resolveSplashLayout 同一套阈值：末尾那一格字距也算进去，否则恰好卡阈值
@@ -161,14 +163,16 @@ export function resolveLaunchpadLayout(
   // 头部整块（含根盒 marginTop）实际占的行数：阶梯与 totalRows 都按它算。
   const heroBlockRows = showHero ? heroRows + HERO_TOP_MARGIN : 0
 
-  // 第六版行数预算：输入框（恒 3）+ 框下成组行（参数 1 + 呼吸留白 0/1 +
-  // 键帽 1 + Tips 3）+ 双角铭牌 2。撤的顺序「从最可省到最不可省」：
-  // 新增的两处呼吸（词标↔输入框、入口行↔Tips）→ 参数行呼吸留白 → Tips 行
-  // 本身 → 键帽行 → 立绘（**所有留白永远排在 Tips/入口行之前撤**，
-  // 绝不让呼吸把输入框挤掉）。
+  // 第六版行数预算：输入框（边框 2 + 输入行数，单行时恒 3）+ 框下成组行
+  // （参数 1 + 呼吸留白 0/1 + 键帽 1 + Tips 3）+ 双角铭牌 2。撤的顺序
+  // 「从最可省到最不可省」：新增的两处呼吸（词标↔输入框、入口行↔Tips）→
+  // 参数行呼吸留白 → Tips 行本身 → 键帽行 → 立绘（**所有留白永远排在
+  // Tips/入口行之前撤**，绝不让呼吸把输入框挤掉）。多行草稿把输入行数直接
+  // 加进 core，于是同一套阶梯会先撤立绘/键帽行来给它让位。
   const paramRows = options.params === true ? PARAM_ROWS : 0
   const gapRows = paramRows > 0 ? PARAM_HINTS_GAP_ROWS : 0
-  const cardRows = CARD_ROWS
+  const inputRows = Math.max(1, Math.floor(options.inputRows ?? 1))
+  const cardRows = CARD_ROWS + (inputRows - 1)
   const withArt = artRows > 0 ? artRows + 1 : 0
   const core = heroBlockRows + cardRows + paramRows + CORNERS_BLOCK_ROWS
   // 每一档的总行数。顺序即从最全的往下掉：先试最全的，放不下就往下掉。

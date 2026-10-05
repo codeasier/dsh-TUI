@@ -100,6 +100,8 @@ const VERSION = '9.9.9'
 const PARAM_LINE = 'glm-5.3  ·  Max  ·  Standard  ·  default'
 /** 夹具固定 bold 字面：大字 needle 与阶梯阈值都不随当天轮换的字体漂。 */
 const FONT = splashFontById('bold')
+/** 长中文草稿（Q5 的 IME 预留回归）：比一行内容区还长，逼窗口左滑。 */
+const CJK_LONG = '及光标溢出对话框问题仍未解决，且这不仅仅是启动界面，用户输入框也'
 
 class FakeStdout extends Writable {
   isTTY = true
@@ -156,6 +158,8 @@ interface OpenOptions {
   tipRotateMs?: number
   /** 接上左下角铭牌的 onOpenWorkspace（true = 记 workspace 事件）。 */
   cornerWorkspace?: boolean
+  /** 接上立绘星标的 onStarClick（true = 记 star 事件；默认不接）。 */
+  starClick?: boolean
   /** 内核版本（第七版双版本铭牌）。 */
   kernelVersion?: string
   /**
@@ -216,6 +220,7 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
         tipRotateMs={options.tipRotateMs}
         kernelVersion={options.kernelVersion}
         onOpenWorkspace={options.cornerWorkspace === true ? () => { events.push({ type: 'workspace' }) } : undefined}
+        onStarClick={options.starClick === true ? () => { events.push({ type: 'star' }) } : undefined}
         cwd={corners ? CWD : undefined}
         branch={corners ? BRANCH : undefined}
         tuiVersion={corners ? VERSION : undefined}
@@ -719,6 +724,174 @@ base.close()
     check('B25 焦点在参数段时 Ctrl+W 无操作（不删草稿、不漏进别处）',
       ev.slice(before).every(e => e.type !== 'query'),
       JSON.stringify(ev.slice(before)))
+    s.close()
+  }
+}
+
+// ── B26+ 换行与多行草稿（2026-10：Shift+Enter 在启动页是死的）──────────────
+// 与聊天页 composer（PromptInput）逐条对齐的换行契约：Shift+Enter /
+// Option+Enter（ESC CR，终端报不出 shift 时的回退）与 Ctrl+J、legacy LF 都在
+// 光标处插换行，草稿从此可以是多行、输入框跟着长高（SearchBox 的多行分支 +
+// resolveLaunchpadLayout 的 inputRows）；↑/↓ 在多行草稿里先归光标，行级键
+// （Home/End/Ctrl+A/E/U/K）只作用于本行。修复前 `isPlainReturn` 之外的
+// `key.return` 全被 `composing || key.return` 的兜底静默吞掉，Shift+Enter
+// 一个字都进不去。
+{
+  // Shift+Enter 三种编码 + Option+Enter 回退（与 verify-keys 钉的同一批字节）。
+  for (const [label, key] of [
+    ['CSI-u 13;2u', '\u001b[13;2u'],
+    ['modifyOtherKeys 27;2;13~', '\u001b[27;2;13~'],
+    ['Option+Enter（ESC CR）', '\u001b\r'],
+  ] as const) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hi' })
+    await s.send(key)
+    check(`B26 ${label} 在光标处插入换行（不再被 key.return 兜底吞掉）`,
+      last(ev, 'query')?.value === 'hi\n' && last(ev, 'query')?.cursor === 3,
+      JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  for (const [label, key] of [
+    ['Ctrl+J（CSI-u 106;5u）', '\u001b[106;5u'],
+    ['legacy LF', '\u000a'],
+  ] as const) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hi' })
+    await s.send(key)
+    check(`B27 ${label} 换行（终端报不出 Enter 修饰时的可移植回退）`,
+      last(ev, 'query')?.value === 'hi\n' && last(ev, 'query')?.cursor === 3,
+      JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  {
+    // 多行上屏：两行草稿画两行，续行按前缀宽度缩进，输入框（卡片）长高一行。
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hi' })
+    await s.send('\u001b[13;2u')
+    await s.send('yo')
+    const screen = s.screen()
+    const lines = viewportLines(s.term)
+    const firstRow = lines.findIndex(line => line.includes('╭'))
+    const lastRow = lines.findIndex(line => line.includes('╰'))
+    check('B28 多行草稿上屏：两行各占一行、续行缩进对齐，卡片高 = 边框 2 + 输入 2',
+      /│\s*❯\s*hi\s*│/u.test(lines[firstRow + 1] ?? '')
+        && /│\s{3}yo\s*│/u.test(lines[firstRow + 2] ?? '')
+        && lastRow === firstRow + 3
+        && screen.includes('hi'),
+      JSON.stringify(lines.slice(firstRow, firstRow + 4)))
+    s.close()
+  }
+  {
+    // ↑/↓ 跨行移动光标（保持显示列）：末行行尾 ↑ 到尾行行尾、再 ↓ 回来。
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hi\nyo' })
+    await s.send('\u001b[A')
+    check('B29a 多行草稿里 ↑ 把光标移到上一行同列（行尾）',
+      last(ev, 'query')?.cursor === 2, JSON.stringify(last(ev, 'query')))
+    await s.send('\u001b[B')
+    check('B29b ↓ 再回到下一行同列（草稿与光标都不动，只换行）',
+      last(ev, 'query')?.cursor === 5 && last(ev, 'query')?.value === 'hi\nyo',
+      JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  {
+    // ↑ 在多行草稿里不再落进焦点环：焦点仍在输入框（-1）。
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hi\nyo' })
+    await s.send('\u001b[A')
+    check('B29c 多行草稿里 ↑/↓ 不抢焦点环（不产生 focus 事件）',
+      ev.every(e => e.type !== 'focus'), JSON.stringify(ev))
+    s.close()
+  }
+  // 行级键在多行草稿里只作用于本行（readline 语义，与聊天页 composer 一致）。
+  for (const [label, key, expect, cursor] of [
+    ['Home 到本行行首', '\u001b[H', 'ab\ncd', 3],
+    ['Ctrl+A 到本行行首', '\u0001', 'ab\ncd', 3],
+  ] as const) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'ab\ncd' })
+    await s.send(key)
+    check(`B30 ${label}（而不是全文行首）`,
+      last(ev, 'query')?.value === expect && last(ev, 'query')?.cursor === cursor,
+      JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'ab\ncd' })
+    await s.send('\u001b[H') // 本行行首（offset 3）
+    await s.send('\u000b') // Ctrl+K：只删本行到行尾
+    check('B31a Ctrl+K 只删本行到行尾（上一行原样保留）',
+      last(ev, 'query')?.value === 'ab\n' && last(ev, 'query')?.cursor === 3,
+      JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'ab\ncd' })
+    await s.send('\u001b[H')
+    await s.send('\u0015') // Ctrl+U：只删本行行首到光标（光标已在行首 → 无操作）
+    check('B31b Ctrl+U 在行首无操作（绝不越过换行吃掉上一行）',
+      last(ev, 'query')?.value === 'ab\ncd' && last(ev, 'query')?.cursor === 3,
+      JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'ab\ncd' })
+    await s.send('\u001b[H')
+    await s.send('\u007f') // Backspace（行首）：合并两行
+    check('B31c 行首退格合并两行（ab|cd → abcd，光标落在接缝）',
+      last(ev, 'query')?.value === 'abcd' && last(ev, 'query')?.cursor === 2,
+      JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  {
+    // 行数上限：超过 6 行按光标行开垂直窗口（第 1 行滚出视野、末行在屏上）。
+    const nine = Array.from({ length: 9 }, (_, index) => `第${index + 1}行`).join('\n')
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: nine })
+    await settled(() => s.screen().includes('第9行'))
+    const screen = s.screen()
+    const lines = viewportLines(s.term)
+    const firstRow = lines.findIndex(line => line.includes('╭'))
+    const lastRow = lines.findIndex(line => line.includes('╰'))
+    check('B32 多行草稿最多画 6 行（第 9 行草稿：末 6 行在屏、首行滚出视野）',
+      lastRow === firstRow + 7 && !screen.includes('第1行') && screen.includes('第9行'),
+      `firstRow=${firstRow} lastRow=${lastRow} has9=${screen.includes('第9行')} has1=${screen.includes('第1行')}`)
+    s.close()
+  }
+  {
+    // Tab 在多行草稿下仍走焦点环（换行只借走 ↑/↓，不动 Tab）。
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'ab\ncd' })
+    await s.send('\t')
+    check('B33 多行草稿下 Tab 仍进焦点环（焦点落到第一格）',
+      typeof last(ev, 'focus')?.value === 'number' && last(ev, 'focus')?.value !== -1,
+      JSON.stringify(last(ev, 'focus')))
+    s.close()
+  }
+  {
+    // Ctrl+L（keymap redraw 动作）：这一屏独占键盘，不在这里接就没绑——清屏
+    // 重画是屏幕被外部写花（含本次的输入法黑带）时最通用的恢复键。
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hello' })
+    const before = s.out.writeCount
+    await s.send('\u000c')
+    await settled(() => s.out.writeCount > before + 1)
+    check('B34 Ctrl+L 触发清屏重画（不往草稿里插字、不提交）',
+      s.out.writeCount > before + 1
+        && ev.every(e => e.type !== 'query' && e.type !== 'submit')
+        && s.screen().includes('hello'),
+      `writes=${before}->${s.out.writeCount} events=${JSON.stringify(ev)}`)
+    s.close()
+  }
+  {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: '', starClick: true })
+    await s.send('\u001bs') // Alt+S（keymap star 动作）
+    check('B35 Alt+S 触发立绘星标（可点目标补上键盘路径）',
+      last(ev, 'star') !== undefined, JSON.stringify(ev))
     s.close()
   }
 }
@@ -1762,6 +1935,31 @@ for (const cols of [120, 100, 72, 60, 48]) {
     holes === 0, `holes=${holes} at ${JSON.stringify(holeAt)}`)
   check('Q2 sessionBackground 铺满整页（rgb 25,25,25 的格子过半）',
     canvasCells > (COLS * ROWS) / 2, `canvasCells=${canvasCells}/${COLS * ROWS}`)
+  s.close()
+}
+{
+  // Q5 IME 预留（2026-10）：终端/输入法把 preedit 画在**物理光标**处、向右长，
+  // 光标贴着框右缘时合成串与它自己的光标条就溢出输入框（用户截图里的"光标
+  // 溢出对话框"）。窗口化时在光标右侧留出预留格（SearchBox 的
+  // IME_PREEDIT_RESERVE = 4），长文本也不许把光标顶到框边：这里断言渲染后
+  // 终端光标（= 声明/park 的目标，输入法就画在那儿）离框右缘至少 5 格
+  // （预留 4 + 光标自己那一格）。用 park 目标而不是反显格：反显块随闪烁相位
+  // 来去，park 目标与相位无关。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { canvas: true, query: CJK_LONG })
+  await settled(() => s.screen().includes('❯'))
+  const buf = s.term.buffer.active
+  const lines = viewportLines(s.term)
+  const top = lines.findIndex(l => l.includes('╭'))
+  let right = -1
+  for (let x = COLS - 1; x >= 0; x--) {
+    if (buf.getLine(top)?.getCell(x)?.getChars() === '╮') { right = x; break }
+  }
+  const parked = buf.cursorX
+  const slack = right - parked
+  check('Q5 长中文草稿：光标（park 目标）离框右缘 ≥5 格（给输入法合成串留位）',
+    top >= 0 && parked >= 0 && right > 0 && buf.cursorY === top + 1 && slack >= 5,
+    `caret=${parked} caretY=${buf.cursorY} top=${top} right=${right} slack=${slack}`)
   s.close()
 }
 {
