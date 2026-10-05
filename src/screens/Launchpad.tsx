@@ -10,7 +10,8 @@ import { pickSplashFont, splashFontById, type SplashFont } from '../components/s
 import { t } from '../i18n.js'
 import { isMinimalUiMode } from '../minimalUiMode.js'
 import { stringWidth } from '../ink/stringWidth.js'
-import { isPlainReturn } from '../utils/modifiers.js'
+import { isMod, isPlainReturn } from '../utils/modifiers.js'
+import { wordBoundaryLeft, wordBoundaryRight } from '../utils/wordEdit.js'
 import { parseCommandName } from '../commands.js'
 import { actionMatches } from '../utils/keymap.js'
 import { formatClipboardInsert, readClipboard, type ClipboardRead } from '../utils/clipboard.js'
@@ -429,6 +430,13 @@ export function Launchpad({
   queryRef.current = query
   const caretRef = React.useRef(caret)
   caretRef.current = caret
+  /**
+   * 编辑落点的唯一漏斗：先写同步镜像、再交回 Chat。一批 stdin（ink 的
+   * discreteUpdates）里的按键之间**没有渲染**，后续按键必须读镜像才能看
+   * 到前一个键的结果——「← 之后同批跟一个字母」不能把字打到旧光标处
+   * （PromptInput 的 setInput 同一条规则）；props 回流后渲染期的镜像刷新
+   * 写回的就是同一个值。
+   */
   const changeQuery = (text: string, cursor: number): void => {
     queryRef.current = text
     caretRef.current = cursor
@@ -553,9 +561,12 @@ export function Launchpad({
    * 这一屏独占键盘（`Chat` 在 `supervisorOpen` 那一层之前让位），所以输入
    * 在这里自持——把按键转发给 Chat 反而要多绕一层 state 往返。
    *
-   * 编辑能力刻意只做单行编辑器该有的那几样：退格 / Delete / 左右移动 /
-   * Home / End / 粘贴。首屏不是编辑器，用户在上面打的第一句通常就一两个
-   * 词；多行、图片、`@` 补全都属于聊天页，敲 Enter 就过去了。
+   * 编辑能力是**单行编辑器该有的全套**：退格 / Delete / 左右移动 /
+   * Home / End / 粘贴，加上与聊天页 composer 同一套词级与行级编辑
+   * （Ctrl/Option/Alt+←→ 与 Alt+B/F 跳词、Ctrl+W 删词、Ctrl+A/E/U/K
+   * 行首/行尾/删到行首/删到行尾——用户在聊天页养成的肌肉记忆必须原样
+   * 带进首屏，见 utils/wordEdit.ts 的同源约定）。多行、图片、`@` 补全
+   * 仍属于聊天页，敲 Enter 就过去了。
    *
    * `↑/↓` 与 `Tab` 在键帽行上移动焦点；焦点在 `-1` 时这两组键无操作
    * （首屏没有可滚的东西）。
@@ -564,7 +575,9 @@ export function Launchpad({
     // 选择器盖在这一屏之上时键盘整块让位（Chat 的 overlay 分支处理；Esc 关
     // 选择器回到这里）。没有这道闸，选择器分支没消费的键会漏进草稿。
     if (inputPaused) return
-    // Controlled props lag behind keys coalesced into one stdin batch.
+    // 一批 stdin（discreteUpdates）里的按键之间没有渲染：query/caret 读
+    // 同步镜像（changeQuery 维护），否则同批后续按键吃到上一帧的闭包旧值。
+    // 名字遮蔽 props 同名变量是刻意的——handler 里要的永远是「最新值」。
     const query = queryRef.current
     const caret = caretRef.current
     const composing = key.ctrl || key.meta || key.super
@@ -717,6 +730,22 @@ export function Launchpad({
       event.stopImmediatePropagation()
       return
     }
+    // ── 词级移动（与聊天页 composer 同一套键位与语义）────────────────────
+    // Ctrl+←/→（Windows/Linux 肌肉记忆）、Option/Alt+←/→（macOS；legacy
+    // ESC b/f 会直接解析成 meta 箭头）与 CSI-u / modifyOtherKeys 报上来的
+    // Alt+B/F 全在这里吃掉——必须排在裸箭头分支**之前**，否则带修饰的箭头
+    // 退化成单码位移动（这次修的就是它）。
+    const altWordKey = key.meta && !key.ctrl && !key.super && !key.shift
+    if (inputFocused && (((isMod(key) || altWordKey) && key.leftArrow) || (altWordKey && input === 'b'))) {
+      changeQuery(query, wordBoundaryLeft(query, caret))
+      event.stopImmediatePropagation()
+      return
+    }
+    if (inputFocused && (((isMod(key) || altWordKey) && key.rightArrow) || (altWordKey && input === 'f'))) {
+      changeQuery(query, wordBoundaryRight(query, caret))
+      event.stopImmediatePropagation()
+      return
+    }
     if (key.leftArrow || key.rightArrow || key.home || key.end) {
       if (!inputFocused) return
       const at = caret
@@ -739,6 +768,37 @@ export function Launchpad({
         if (at >= query.length) return
         changeQuery(query.slice(0, at) + query.slice(nextBoundary(query, at)), at)
       }
+      event.stopImmediatePropagation()
+      return
+    }
+    // ── 行级编辑（与聊天页 composer 同一套）──────────────────────────────
+    // Ctrl+A/E 跳行首/行尾（编辑器语境的 Mod+A——聊天页把裸 Ctrl+A 让给
+    // 子代理面板，这里没有那个面板）；Ctrl+U/K 删到行首/行尾；Ctrl+W 删
+    // 光标前一个 Unicode 词（含无空格中文；单行编辑器没有选区，删词就是
+    // 纯粹的词删除）。焦点不在输入框时与退格一样无操作。
+    if (inputFocused && isMod(key) && input === 'a') {
+      changeQuery(query, 0)
+      event.stopImmediatePropagation()
+      return
+    }
+    if (inputFocused && isMod(key) && input === 'e') {
+      changeQuery(query, query.length)
+      event.stopImmediatePropagation()
+      return
+    }
+    if (inputFocused && isMod(key) && input === 'u') {
+      changeQuery(query.slice(caret), 0)
+      event.stopImmediatePropagation()
+      return
+    }
+    if (inputFocused && isMod(key) && input === 'k') {
+      changeQuery(query.slice(0, caret), caret)
+      event.stopImmediatePropagation()
+      return
+    }
+    if (inputFocused && isMod(key) && input === 'w') {
+      const boundary = wordBoundaryLeft(query, caret)
+      changeQuery(query.slice(0, boundary) + query.slice(caret), boundary)
       event.stopImmediatePropagation()
       return
     }

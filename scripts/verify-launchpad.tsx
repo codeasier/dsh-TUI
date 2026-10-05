@@ -629,6 +629,100 @@ base.close()
   s.close()
 }
 
+// ── B20+ 词级/行级编辑（2026-10：升级 0.13.0 后启动页丢掉的编辑键位回补）──
+// 与聊天页 composer（PromptInput，verify-word-jump.mjs 钉的同一批字节）完全
+// 同一套键位与语义：Ctrl/Option/Alt+←→ 与 Alt+B/F 按 Unicode 词边界跳词、
+// Ctrl+W 删光标前一个词、Ctrl+A/E/U/K 行首/行尾/删到行首/删到行尾。曾经
+// Ctrl+W/U/K 被 `composing` 兜底整段吞掉、带修饰的箭头退化成单码位移动
+// （上游 Launchpad 只做了最小单行编辑器）。
+{
+  // Ctrl+W 三种编码（legacy / CSI-u / modifyOtherKeys）删前一个词。
+  for (const [label, key] of [
+    ['legacy 0x17', '\u0017'],
+    ['CSI-u', '\u001b[119;5u'],
+    ['modifyOtherKeys', '\u001b[27;5;119~'],
+  ] as const) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hello world' })
+    await s.send(key)
+    check(`B20 Ctrl+W（${label}）删前一个词、光标落到词边界`,
+      last(ev, 'query')?.value === 'hello ' && last(ev, 'query')?.cursor === 6,
+      JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: '你好世界' })
+    await s.send('\u0017')
+    check('B21 Ctrl+W 无空格中文只删一个词（Unicode 词边界，不整段清空）',
+      last(ev, 'query')?.value === '你好', JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  // 跳词：先跳再打 X 看落点（与 verify-word-jump 的 editCase 同一条思路）。
+  for (const [label, prep, jump, expect, cursor] of [
+    ['Option+Left', '', '\u001b[1;3D', 'hello Xworld', 7],
+    ['Alt+B legacy', '', '\u001bb', 'hello Xworld', 7],
+    ['Alt+B CSI-u', '', '\u001b[98;3u', 'hello Xworld', 7],
+    ['Ctrl+Left', '', '\u001b[1;5D', 'hello Xworld', 7],
+    ['Option+Right', '\u001b[H', '\u001b[1;3C', 'hello Xworld', 7],
+    ['Alt+F CSI-u', '\u001b[H', '\u001b[102;3u', 'hello Xworld', 7],
+    ['Ctrl+Right', '\u001b[H', '\u001b[1;5C', 'hello Xworld', 7],
+  ] as const) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hello world' })
+    if (prep !== '') await s.send(prep)
+    await s.send(jump)
+    await s.send('X')
+    check(`B22 ${label} 按词跳（打 X 落在词边界）`,
+      last(ev, 'query')?.value === expect && last(ev, 'query')?.cursor === cursor,
+      JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  // 行级编辑。
+  for (const [label, prep, key, expect, cursor] of [
+    ['Ctrl+A 行首', '', '\u0001', 'Xhello world', 1],
+    ['Ctrl+E 行尾', '\u001b[H', '\u0005', 'hello worldX', 12],
+    ['Ctrl+U 删到行首', '', '\u0015', '', 0],
+    ['Ctrl+K 删到行尾', '\u001b[H', '\u000b', '', 0],
+    ['Ctrl+K 行中删到行尾', '\u001b[H\u001b[1;3C', '\u000b', 'hello ', 6],
+  ] as const) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hello world' })
+    if (prep !== '') await s.send(prep)
+    if (label.startsWith('Ctrl+A') || label.startsWith('Ctrl+E')) await s.send(key + 'X')
+    else await s.send(key)
+    check(`B23 ${label}`,
+      last(ev, 'query')?.value === expect && last(ev, 'query')?.cursor === cursor,
+      JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  {
+    // 同一批 stdin（discreteUpdates 里没有渲染）：← 与 X 必须合成——
+    // 修复前 X 会落在旧光标处（hello worldX）。
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hello world' })
+    s.input.write('\u001b[DX')
+    await settle(() => last(ev, 'query')?.value === 'hello worlXd', { timeoutMs: 2000 })
+    check('B24 同一批 stdin 里 ← + 打字按新光标合成（同步镜像）',
+      last(ev, 'query')?.value === 'hello worlXd', JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  {
+    // 焦点不在输入框（参数行/入口行）时，编辑键与退格同口径：无操作、不漏字。
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hello world' })
+    await s.send('\u001b[B') // ↓ 落到参数行
+    await settled(() => last(ev, 'focus')?.value === -2)
+    const before = ev.length
+    s.input.write('\u0017')
+    await new Promise(resolve => setTimeout(resolve, 60))
+    check('B25 焦点在参数段时 Ctrl+W 无操作（不删草稿、不漏进别处）',
+      ev.slice(before).every(e => e.type !== 'query'),
+      JSON.stringify(ev.slice(before)))
+    s.close()
+  }
+}
+
 // ── C. 键位标签 ─────────────────────────────────────────────────────────────
 {
   const ev: Ev[] = []

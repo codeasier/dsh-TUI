@@ -77,14 +77,19 @@ The startup **launchpad** and the **first-run wizard** each own the keyboard; bo
 results back to the chat screen and add no new behavior.
 
 - **Launchpad**: printable input goes into the input box (the prefix turns from `❯` to `⌘` when the line
-  starts with `/`), `Backspace`/`Delete`/`←`/`→`/`Home`/`End` edit it; the caret is an **inverse block
+  starts with `/`); the editing keys are **the same set as the chat composer** — `Backspace`/`Delete`/`←`/`→`/
+  `Home`/`End`, plus `Ctrl/Option/Alt+←/→` (and `Alt+B/F`) jumping by Unicode word boundaries, `Ctrl+W`
+  deleting the preceding word, and `Ctrl+A/E/U/K` for line start/end and delete-to-start/end; Chinese
+  without spaces deletes by word and punctuation/emoji are separate units (word boundaries are shared
+  with the chat page, see `utils/wordEdit.ts`); when focus is not on the input box the editing keys no-op.
+  The caret is an **inverse block
   sitting on the current character** (inverse on that one character; an inverse blank cell at end of
   line), blinking is a pure style toggle (inverse ↔ regular, ~550ms per phase) and never occupies an
   extra cell or eats a character; `Alt+R` continues the most recent session (= the first entry row slot,
   bound only on this screen, no-op when there is nothing to continue, remappable in `/settings`);
   a leading `/` opens the
   **command palette** (the same data source and component as the chat composer: `↑`/`↓` move the selection,
-  `Enter`/`Tab`/click **run** the selected command, `Esc` dismisses only the palette and keeps the draft);
+  `Tab` fills the selection into the input box, `Enter`/click **run** it, `Esc` dismisses only the palette and keeps the draft);
   with the palette dismissed, `Enter` **sends** the line straight away (a leading `/` line — including
   plugin/registry commands — goes through the chat page's merged command table and never reaches the model);
   `↑`/`↓`/`Tab` walk the focus ring (input box → the four param segments under the box → the quick

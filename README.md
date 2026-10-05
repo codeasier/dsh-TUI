@@ -193,7 +193,7 @@ Read, search and ordinary tool calls collapse to quiet inline summaries with no 
 
 While the model is working: `Enter` steers, `Tab` queues a follow-up, `Ctrl+Enter` interrupts and sends.
 
-Text editing: `Ctrl+←/→` or `Alt+←/→` (`Option` on macOS; `Alt+B/F` also works) jumps by Unicode word boundaries, including Chinese without spaces. `Ctrl+W` deletes the preceding word and trailing whitespace, or the active selection—not the conversation history. Punctuation and emoji are separate editing units; a draft containing only one word can still be deleted completely.
+Text editing: `Ctrl+←/→` or `Alt+←/→` (`Option` on macOS; `Alt+B/F` also works) jumps by Unicode word boundaries, including Chinese without spaces. `Ctrl+W` deletes the preceding word and trailing whitespace, or the active selection—not the conversation history. Punctuation and emoji are separate editing units; a draft containing only one word can still be deleted completely. The launchpad's input box takes the same word/line editing keys (`Ctrl+A/E/U/K` included), so editing muscle memory carries over from the first screen.
 
 On native Windows, fragmented Win32 input records are reassembled across short input delays instead of appearing as numeric protocol text. The platform check only reports that this machine might run the private mode (win32-input-mode); a bare `ESC[` fragment is held only after one record has actually been decoded, while a fragment whose own shape is already record-specific holds on its own (which is how even the first record can survive a split). Windows terminals that never enter the mode (mintty, GitBash) therefore keep the classic VT path: a lone `Esc` keeps its normal response time, and a letter typed after a timed-out `ESC[` is not swallowed.
 
