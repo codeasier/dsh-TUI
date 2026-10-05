@@ -11,6 +11,7 @@ import { appendCrashLog, serializeCrashDetail } from "../../utils/crashDetail.js
 import { isNestedUpdateOverflow, noteBoundaryRecoveryRemount, shouldRecoverBoundaryOverflow } from "../update-overflow-guard.js";
 import { EventEmitter } from "../events/emitter.js";
 import { InputEvent } from "../events/input-event.js";
+import { isImeCommit } from "../ime-commit.js";
 import instances from "../instances.js";
 import { TerminalFocusEvent } from "../events/terminal-focus-event.js";
 import { DragEvent } from "../events/drag-event.js";
@@ -909,6 +910,7 @@ function processKeysInBatch(
 	) {
 		updateLastInteractionTime();
 	}
+	let imeCommitSeen = false;
 	for (let i = 0; i < items.length; i++) {
 		const item = items[i]!;
 		// Terminal responses (DECRPM, DA1, OSC replies, etc.) are not user
@@ -1023,11 +1025,29 @@ function processKeysInBatch(
 			}
 		}
 		app.handleInput(sequence);
+		// Committed IME text (CJK and friends) arrives here as ordinary
+		// text — the preedit keystrokes never reach us. Flag it for the
+		// batch tail: while composing, the terminal painted the composition
+		// band over the input row out-of-band with its DEFAULT background,
+		// and only an explicit rewrite reclaims those cells (see
+		// Ink#repaintCursorRow).
+		if (isImeCommit(item)) imeCommitSeen = true;
 		const event = new InputEvent(item);
 		app.internal_eventEmitter.emit("input", event);
 
 		// Also dispatch through the DOM tree so onKeyDown handlers fire.
 		app.props.dispatchKeyboardEvent(item);
+	}
+
+	// IME commit tail: the composition just ended, so its preedit — and the
+	// default-background band the terminal reserved for it — is gone from the
+	// terminal's own view, while our frame still believes those cells carry
+	// the canvas background. Rewrite the declared cursor's rows once, at the
+	// batch tail so it lands after every state update this batch dispatched.
+	if (imeCommitSeen) {
+		const ink = instances.get(app.props.stdout)
+			?? (instances.size === 1 ? instances.values().next().value : undefined);
+		ink?.repaintCursorRow();
 	}
 
 	// Batch tail: drain the deferred alt-screen re-entry / blocked probe if

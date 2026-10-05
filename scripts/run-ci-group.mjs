@@ -59,6 +59,10 @@ const GROUPS = {
 // 高度阶梯（full → no-chips → no-hint → input-only）、受控输入的闭环、
 // 焦点与 Enter 的归属（输入框提交 vs 入口激活）、真鼠标 SGR 点击。
     ['verify-launchpad', ['node', '--import', 'tsx/esm', 'scripts/verify-launchpad.tsx']],
+// 输入法提交后的「光标行回收」回归：终端/输入法把 preedit 那一行用默认底色
+// 带外刷掉，逐格 diff 永远看不见——IME 提交（唯一可靠信号）后重写声明光标
+// 所在的行；含 isImeCommit 判定表与"非提交键不回收"的反向断言。
+    ['verify-ime-cursor-repair', ['node', '--import', 'tsx/esm', 'scripts/verify-ime-cursor-repair.tsx']],
 // 首次引导向导回归：四步骨架与步骤条降级、凭证/余额文案口径、语言与主题
 // 两个面板的键盘路径、模型/强度/工作区三条切换、招式卡与两个出口
 // （Esc=skipped 不记账，最后一步 Enter=done 才写 onboarding.json）。
