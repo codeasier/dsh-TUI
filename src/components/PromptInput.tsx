@@ -24,7 +24,8 @@ import { noteAuxNumber } from '../ink/geometry-trace.js'
 import instances from '../ink/instances.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
-import { getGraphemeSegmenter, getWordSegmenter } from '../utils/intl.js'
+import { getGraphemeSegmenter } from '../utils/intl.js'
+import { wordBoundaryLeft, wordBoundaryRight } from '../utils/wordEdit.js'
 import { draftWordRangeAt, isDraftWordBoundary } from '../utils/draftWordBoundary.js'
 import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
 import { imagePathMediaType, parsePastedImagePath, stageClipboardFilePaths } from '../utils/pastedImagePath.js'
@@ -324,33 +325,6 @@ async function readBoundedRegularFile(path: string, maxBytes: number): Promise<U
   } finally {
     await file.close()
   }
-}
-
-/** Previous Unicode word start, skipping trailing whitespace. Punctuation
- *  and emoji are their own units, so deleting after them never eats a word too. */
-function wordBoundaryLeft(text: string, cursor: number): number {
-  const segments = getWordSegmenter().segment(text)
-  let offset = cursor
-  while (offset > 0) {
-    const { index, segment } = segments.containing(offset - 1)!
-    if (!/^\s+$/u.test(segment)) return index
-    offset = index
-  }
-  return 0
-}
-
-/** Next word start: finish the current segment, then skip following whitespace. */
-function wordBoundaryRight(text: string, cursor: number): number {
-  const segments = getWordSegmenter().segment(text)
-  const current = segments.containing(cursor)
-  if (current === undefined) return text.length
-  let offset = current.index + current.segment.length
-  while (offset < text.length) {
-    const next = segments.containing(offset)!
-    if (!/^\s+$/u.test(next.segment)) break
-    offset = next.index + next.segment.length
-  }
-  return offset
 }
 
 // --- vim normal-mode helpers -----------------------------------------------
