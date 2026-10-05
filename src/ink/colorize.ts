@@ -74,6 +74,11 @@ export type ColorType = 'foreground' | 'background'
 const RGB_REGEX = /^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/
 const ANSI_REGEX = /^ansi256\(\s*(\d+)\s*\)$/
 
+/** A full SGR reset: `\e[0m`, or the shorthand `\e[m`. See applyTextStyles. */
+const FULL_SGR_RESET = /\u001b\[0?m/g
+const FULL_SGR_RESET_LONG = '\u001b[0m'
+const FULL_SGR_RESET_SHORT = '\u001b[m'
+
 /**
  * Apply a raw color value to a string using chalk.
  * @param str - the text to color.
@@ -231,7 +236,28 @@ export function applyTextStyles(text: string, styles: TextStyles): string {
 
   if (styles.backgroundColor) {
     // backgroundColor is now always a raw color value
-    result = colorize(result, styles.backgroundColor, 'background')
+    const wrapped = colorize(result, styles.backgroundColor, 'background')
+    if (wrapped !== result) {
+      // A full SGR reset inside pre-rendered ANSI content (letter-grid art
+      // such as the pixel whale) clears the background for the REST of the
+      // run. chalk re-opens its own close code after an embedded close, but
+      // not after a bare reset, so the art's transparent cells become
+      // terminal-default blanks that punch holes in the painted surface
+      // behind them — the same class as #606's tab indentation. Re-open the
+      // background after each reset so the content sits ON the surface;
+      // the foreground stays reset (art re-opens its own colors, and
+      // default-fg-after-reset is every other producer's existing
+      // behavior). chalk level 0 returns the text untouched, so NO_COLOR
+      // injects nothing (backgroundOpenCode yields '' there).
+      const reopen = backgroundOpenCode(styles.backgroundColor)
+      if (
+        reopen !== '' &&
+        (result.includes(FULL_SGR_RESET_LONG) || result.includes(FULL_SGR_RESET_SHORT))
+      ) {
+        return wrapped.replace(FULL_SGR_RESET, reset => reset + reopen)
+      }
+    }
+    result = wrapped
   }
 
   return result

@@ -65,6 +65,7 @@ const [
   { t },
   { TooltipLayer, getTooltipSnapshot },
   { applyCompanionSkin },
+  { PageMargin },
 ] = await Promise.all([
   import('../src/ui.js'),
   import('../src/screens/Launchpad.js'),
@@ -76,6 +77,7 @@ const [
   ),
   import('../src/components/Tooltip.js'),
   import('../src/tuiDisplayPrefs.js'),
+  import('../src/components/PageMargin.js'),
 ])
 // 本脚本锁的是落地页版面/阶梯契约（WHALE_ART_ROWS=13 那套预算）：吉祥物
 // 皮肤用 store 钉在 'whale'，避免默认 deepy 把立绘换成 15 行字母格宠物
@@ -216,6 +218,14 @@ interface OpenOptions {
   kernels?: readonly KernelOption[]
   /** 接上内核区的 onKernelPick（true = 点击/Enter 记一条 'kernel' 事件）。 */
   kernelPick?: boolean
+  /** 内核版本（第七版双版本铭牌）。 */
+  kernelVersion?: string
+  /**
+   * 按真实挂载树包一层 PageMargin（plugin.ts: `AlternateScreen > PageMargin >
+   * Chat`）：整页铺 sessionBackground 画布。默认不包（既有断言的孤立夹具
+   * 形态）；Q 段的画布底色回归用它。
+   */
+  canvas?: boolean
 }
 
 async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
@@ -313,7 +323,7 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
   const app = await render(
     <ThemeProvider theme="dark">
       <AlternateScreen>
-        <Harness />
+        {options.canvas === true ? <PageMargin><Harness /></PageMargin> : <Harness />}
       </AlternateScreen>
     </ThemeProvider>,
     {
@@ -2639,6 +2649,105 @@ for (const cols of [120, 100, 72, 60, 48]) {
     last(ev2, 'action') === undefined && last(ev2, 'query') === undefined,
     JSON.stringify(ev2.slice(before2)))
   s2.close()
+}
+
+// ── Q. 画布底色（2026-10：鲸鱼 sprite 的整段 RESET 曾把页面画布打穿）──────
+// 真实挂载树是 `AlternateScreen > PageMargin > Chat`（plugin.ts）：PageMargin
+// 给整页铺 sessionBackground（暗色 #191919）。鲸鱼 sprite 的预渲染 ANSI 用
+// 整段 `\e[0m` 收尾透明像素，chalk 只给自己的闭合码（`\e[49m`）补开底色、
+// 不管整段重置——那些格子丢掉继承底色，变成「终端默认底」的洞，在用户终端
+// （OSC 11 上报 #111111）上就是英雄区那块黑矩形。修复（colorize.ts 给整段
+// 重置补开继承底色）后的不变量：
+//   Q1 画布之下**任何**格子都不是终端默认底（黑块不再）；
+//   Q2 sessionBackground 真的铺上了；
+//   Q3 选择器浮层（OverlayAbove transparent）的空白行**仍然**是终端默认底
+//      ——那是刻意的镂空（Kitty 立绘从默认背景透出，见 Launchpad 第七版注
+//      释），不得被 Q1 的口径顺手修掉。
+{
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { canvas: true })
+  await settled(() => s.screen().includes('▀▀▀▀▄  ▄▄▀▀▀'))
+  const buf = s.term.buffer.active
+  let holes = 0
+  let canvasCells = 0
+  const holeAt: string[] = []
+  for (let y = 0; y < ROWS; y++) {
+    const line = buf.getLine(y)
+    if (line === undefined) continue
+    for (let x = 0; x < COLS; x++) {
+      const cell = line.getCell(x)
+      if (cell === undefined) continue
+      if (cell.isBgDefault()) {
+        holes++
+        if (holeAt.length < 8) holeAt.push(`${x},${y}`)
+        continue
+      }
+      if (cell.isBgRGB() && cell.getBgColor() === 0x191919) canvasCells++
+    }
+  }
+  check('Q1 画布之下没有「终端默认底」的洞（鲸鱼透明像素继承 sessionBackground）',
+    holes === 0, `holes=${holes} at ${JSON.stringify(holeAt)}`)
+  check('Q2 sessionBackground 铺满整页（rgb 25,25,25 的格子过半）',
+    canvasCells > (COLS * ROWS) / 2, `canvasCells=${canvasCells}/${COLS * ROWS}`)
+  s.close()
+}
+{
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { canvas: true, overlayPanelTall: true })
+  await settled(() => s.screen().includes('PICKER-PROBE'))
+  const lines = viewportLines(s.term)
+  const probeRow = lines.findIndex(l => l.includes('PICKER-PROBE'))
+  const cardRow = lines.findIndex(l => l.includes('╭'))
+  const overlayRows: number[] = []
+  for (let r = probeRow; r >= 0 && r < cardRow; r++) overlayRows.push(r)
+  const blankRow = overlayRows.find(r => !lines[r]!.includes('PICKER-PROBE')) ?? -1
+  const line = blankRow >= 0 ? s.term.buffer.active.getLine(blankRow) : undefined
+  // 镂空判据按浮层**自己的列区间**：空白行里 default 底的格子必须连成一段
+  // （浮层矩形），段外仍是画布底色（页面自身）。整行扫会把段外的画布也算
+  // 进来——那是页面，不是浮层。
+  const defCols: number[] = []
+  let canvasCols = 0
+  if (line !== undefined) {
+    for (let col = 0; col < COLS; col++) {
+      const cell = line.getCell(col)
+      if (cell === undefined) continue
+      if (cell.isBgDefault()) defCols.push(col)
+      else if (cell.isBgRGB() && cell.getBgColor() === 0x191919) canvasCols++
+    }
+  }
+  const contiguous = defCols.length > 0
+    && defCols.length === Math.max(...defCols) - Math.min(...defCols) + 1
+  check('Q3 浮层空白行在画布之下仍是终端默认底的镂空（段外保持画布底）',
+    blankRow >= 0 && contiguous && defCols.length >= 40 && canvasCols > 0,
+    `row=${blankRow} default=${defCols.length}@${defCols[0]}..${defCols[defCols.length - 1]} canvas=${canvasCols}`)
+  s.close()
+}
+{
+  // Q4：deepy（companion.skin 的默认值）与鲸鱼共用 renderCellRows 编码器
+  // （deepy.ts），同样以整段 RESET 收尾透明像素——默认皮肤的黑块一并钉住。
+  applyCompanionSkin('deepy')
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { canvas: true })
+  await settled(() => s.screen().includes('❯'))
+  const buf = s.term.buffer.active
+  let holes = 0
+  const holeAt: string[] = []
+  for (let y = 0; y < ROWS; y++) {
+    const line = buf.getLine(y)
+    if (line === undefined) continue
+    for (let x = 0; x < COLS; x++) {
+      const cell = line.getCell(x)
+      if (cell === undefined) continue
+      if (cell.isBgDefault()) {
+        holes++
+        if (holeAt.length < 8) holeAt.push(`${x},${y}`)
+      }
+    }
+  }
+  applyCompanionSkin('whale')
+  check('Q4 deepy（默认皮肤）画布之下同样没有「终端默认底」的洞',
+    holes === 0, `holes=${holes} at ${JSON.stringify(holeAt)}`)
+  s.close()
 }
 
 if (failures === 0) console.log(`\nverify-launchpad: ${checks} checks, all passed`)
