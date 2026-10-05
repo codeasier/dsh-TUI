@@ -82,20 +82,28 @@ results back to the chat screen and add no new behavior.
   deleting the preceding word, and `Ctrl+A/E/U/K` for line start/end and delete-to-start/end; Chinese
   without spaces deletes by word and punctuation/emoji are separate units (word boundaries are shared
   with the chat page, see `utils/wordEdit.ts`); when focus is not on the input box the editing keys no-op.
+  `Shift+Enter` / `Option+Enter` / `Ctrl+J` (legacy LF included) **insert a newline**, so the launcher
+  draft can be multi-line: the box grows with it (up to 6 rows, beyond that the rows window around the
+  caret and the hero art gives way first), `↑`/`↓` move the caret between the draft's lines by display
+  column, `Home`/`End` and `Ctrl+A/E/U/K` stay scoped to the current line (readline semantics, matching
+  the chat composer), `Tab` still walks the focus ring, and `Ctrl+L` clears and repaints the screen
+  (`redraw` — the recovery key when a terminal or input method wrote over the frame).
   The caret is an **inverse block
   sitting on the current character** (inverse on that one character; an inverse blank cell at end of
   line — a theme that declares the `cursor` key paints a solid fill with a contrasting glyph instead,
   see [Themes](themes.en.md)), blinking is a pure style toggle (inverse ↔ regular, ~550ms per phase)
-  and never occupies an extra cell or eats a character; `Alt+R` continues the most recent session
-  (= the first entry row slot, bound only on this screen, no-op when there is nothing to continue,
-  remappable in `/settings`);
+  and never occupies an extra cell or eats a character; the hardware cursor is parked at that caret with a few cells of slack
+  kept to its right, so an input method's composition stays inside the box (see the CJK note below);
+  `Alt+R` continues the most recent session (= the first entry row slot,
+  bound only on this screen, no-op when there is nothing to continue, remappable in `/settings`);
+  `Alt+S` stars the session exactly like clicking the star on the hero art;
   a leading `/` opens the
   **command palette** (the same data source and component as the chat composer: `↑`/`↓` move the selection,
   `Tab` fills the selection into the input box, `Enter`/click **run** it, `Esc` dismisses only the palette and keeps the draft);
   with the palette dismissed, `Enter` **sends** the line straight away (a leading `/` line — including
   plugin/registry commands — goes through the chat page's merged command table and never reaches the model);
   `↑`/`↓`/`Tab` walk the focus ring (input box → the four param segments under the box → the quick
-  actions → the Tips line) and `Enter` activates the focused one (`Enter` on the Tips line rotates the
+  actions → the Tips line; `↑`/`↓` belong to the caret only while the draft actually holds a newline) and `Enter` activates the focused one (`Enter` on the Tips line rotates the
   tip), while typing returns focus to the input box; `Esc` clears
   a non-empty line and opens sessions when empty, and `Ctrl+C` on an empty line takes the exit funnel.
 - **Launchpad param row** (under the box: model · effort · mode · permission; model shows the bare model
@@ -164,6 +172,17 @@ results back to the chat screen and add no new behavior.
 | `Ctrl+W` | Delete the preceding Unicode word segment and trailing whitespace; supports Chinese without spaces, with punctuation and emoji as separate units; with a selection, delete only that selection |
 | `Backspace` / `Delete` | Delete the character before / after the caret; **with a selection, delete the whole selection** |
 | Typing | **Replaces an active selection** (standard editor semantics), caret after the inserted text |
+
+**CJK input methods (IME)**: the terminal paints the composition (preedit) itself at the **physical
+cursor** and reserves part of that row with the terminal's own default background — on a themed canvas
+that reads as a black bar trailing the caret, and the composition spills past the input box when the
+caret sits at its right edge. The app therefore (a) parks the cursor exactly on the caret cell, never a
+cell off, and keeps a few cells of slack to its right (the windowed single-line input reserves 4), and
+(b) rewrites the caret's row the moment a composition **commits** — committed text is the only signal an
+input method hands an app — reclaiming the cells the terminal painted out-of-band. Ordinary typing,
+arrows and pastes never rewrite that row, so a live preedit is never erased. The band during composition
+is the terminal's own drawing and is out of the app's hands; if anything else writes over the frame,
+`Ctrl+L` repaints the whole screen.
 
 ### vim editing mode (`/vim`)
 
