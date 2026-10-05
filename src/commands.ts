@@ -509,17 +509,23 @@ function matchingCompletionToken(candidate: CommandCompletionNode, prefix: strin
   const alias = candidate.aliases?.find(value => value.toLowerCase().startsWith(prefix))
   if (alias !== undefined) return { token: alias, tier: 0 }
   if (matchModelId) {
-    const name = candidate.name.toLowerCase()
-    if (name.slice(name.lastIndexOf('/') + 1).startsWith(prefix)) return { token: candidate.name, tier: 1 }
-    if (isSubsequence(prefix, name)) return { token: candidate.name, tier: 2 }
+    const tier = modelCompletionMatchTier(candidate.name, prefix)
+    if (tier !== undefined) return { token: candidate.name, tier }
   }
   return undefined
 }
 
-/**
- * fzf 风格子序列匹配：query 的字符按顺序出现在 candidate 中即命中。
- * 两侧均已小写；query 经 isCommandCompletionToken 校验，仅含 ASCII。
- */
+/** Shared model-route ranking for inline completion and the searchable picker. */
+export function modelCompletionMatchTier(route: string, query: string): number | undefined {
+  const name = route.toLowerCase()
+  const prefix = query.trim().toLowerCase()
+  if (name.startsWith(prefix)) return 0
+  if (name.slice(name.lastIndexOf('/') + 1).startsWith(prefix)) return 1
+  if (isSubsequence(prefix, name)) return 2
+  return undefined
+}
+
+/** fzf 风格子序列匹配：两侧已小写，query 的字符按顺序出现即命中。 */
 function isSubsequence(query: string, candidate: string): boolean {
   let index = 0
   for (const char of candidate) {

@@ -39,7 +39,7 @@ import { stringWidth } from '../src/ink/stringWidth.js'
 const { Terminal: XTerm } = xterm
 
 const [
-  { render, Box, ThemeProvider },
+  { render, Box, ThemeProvider, AlternateScreen },
   { Chat },
   { LOCAL_COMMANDS, completeCommands },
   { QuestionStore },
@@ -260,23 +260,27 @@ interface Flags {
   launchpadOnBoot?: boolean
   onboardingOnBoot?: boolean
   openHomeOnBoot?: boolean
+  fullscreen?: boolean
+  columns?: number
 }
 
 async function mountChat(flags: Flags, over: Record<string, unknown> = {}, chatProps: Record<string, unknown> = {}) {
-  const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const columns = flags.columns ?? COLS
+  const term = new XTerm({ cols: columns, rows: ROWS, scrollback: 0, allowProposedApi: true })
   const stdout = new FakeStdout(term)
   const stdin = new FakeStdin()
   const { channel, notifications, calls } = makeChannel(over)
   const promptControllerRef = React.createRef<import('../src/components/PromptInput.js').PromptController | null>()
-  const instance = await render(
+  const node = (
     <ThemeProvider theme="dark">
       {/* 与真机同构：根是整屏尺寸（Chat 的每个整屏 early-return 都按整屏排版）。 */}
-      <Box width={COLS} height={ROWS} flexDirection="column">
+      <Box width={columns} height={ROWS} flexDirection="column">
         <Chat
           channel={channel as never}
           questionStore={new QuestionStore()}
           starPrompt={null}
           promptControllerRef={promptControllerRef}
+          fullscreen={flags.fullscreen === true}
           openHomeOnBoot={flags.openHomeOnBoot === true}
           launchpadOnBoot={flags.launchpadOnBoot === true}
           onboardingOnBoot={flags.onboardingOnBoot === true}
@@ -285,7 +289,10 @@ async function mountChat(flags: Flags, over: Record<string, unknown> = {}, chatP
           {...chatProps}
         />
       </Box>
-    </ThemeProvider>,
+    </ThemeProvider>
+  )
+  const instance = await render(
+    flags.fullscreen === true ? <AlternateScreen>{node}</AlternateScreen> : node,
     { stdin: stdin as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
   )
   /** 当前屏幕（xterm 视口）。用视口而不是 painted 流的最后一帧：ink 会分块写，
@@ -1339,6 +1346,329 @@ const AC4_CUT_PRESET = 'Standard (Git Bash'
   await chat.unmount()
 }
 
+// ── M. /model：Tab 只补全，裸命令开独立筛选器，搜索按当前层级路由 ──────────
+const MODEL_SEARCH_MARK = '输入以筛选模型…'
+const MODEL_EMPTY_MARK = '没有匹配的模型'
+const MODEL_FIXTURES = [
+  { provider: 'deepseek', id: 'active', name: 'Fixture Active' },
+  { provider: 'deepseek', id: 'glm-5.3', name: 'Jade Alpha' },
+  { provider: 'gateway', id: 'glm-5.4', name: 'Azure Beta' },
+  { provider: 'gateway', id: 'deepseek-v4.1-flash', name: 'Flash Delta' },
+]
+const MODEL_PROVIDERS = [
+  { id: 'deepseek', name: 'Fixture DeepSeek' },
+  { id: 'gateway', name: 'Cloud Gateway' },
+]
+function mountModelChat(flags: Flags, listModels: () => Promise<typeof MODEL_FIXTURES> = async () => MODEL_FIXTURES) {
+  return mountChat(flags, {
+    model: 'active',
+    listModels,
+    listProviders: async () => MODEL_PROVIDERS,
+    commandCompletions: (input: string) => completeCommands(input, LOCAL_COMMANDS, path =>
+      path.length === 1 && path[0] === 'model'
+        ? MODEL_FIXTURES.map(model => ({ name: `${model.provider}/${model.id}`, description: model.name }))
+        : []),
+  })
+}
+function makeModelEnter(chat: { send(data: string): Promise<void> }) {
+  let lastReturnAt = 0
+  return async (data = '\r'): Promise<void> => {
+    // Chat 与 PromptInput 都有 80ms CR/LF 去重窗；等真实冷却条件，不加固定 sleep。
+    // data 可含同一 stdin read 里的编辑 + Enter，等待不把被测批拆成两次 write。
+    await settle(() => Date.now() - lastReturnAt >= 80)
+    lastReturnAt = Date.now()
+    await chat.send(data)
+  }
+}
+for (const fullscreen of [false, true]) {
+  for (const columns of [120, 60]) {
+    for (const launchpad of [true, false]) {
+      const label = `M ${launchpad ? '启动页' : '聊天页'} ${fullscreen ? 'fullscreen' : 'inline'} ${columns}列`
+      const chat = await mountModelChat({ launchpadOnBoot: launchpad, fullscreen, columns })
+      // 启动页草稿由 Chat 持有，组件层 K4 钉尾随空格/光标；集成层只读输入行，
+      // 不把补全面板里同文的候选误当成输入。聊天页直接读真实 composer 控制器。
+      const draft = (): string => launchpad
+        ? (chat.screen().split('\n').find(line => line.includes('⌘'))?.split('⌘')[1] ?? '')
+          .replace(/│.*$/u, '').trim()
+        : chat.promptControllerRef.current?.text().trim() ?? ''
+      const noDelivery = (): boolean => chat.calls.length === 0
+      const clearSearch = async (): Promise<void> => {
+        // bare Esc 等解析器的独立超时；光标闪烁帧不等于这次按键已处理。
+        await chat.send('\x1b')
+        check(`${label} Esc 已清空搜索后再继续输入`,
+          await settled(() => chat.screen().includes(MODEL_SEARCH_MARK)
+            && !chat.screen().includes(MODEL_EMPTY_MARK)), chat.screen())
+      }
+      const closePicker = async (): Promise<void> => {
+        await chat.send('\x1b')
+        check(`${label} Esc 已关闭选择器后再继续输入`,
+          await settled(() => !chat.screen().includes(MODEL_SEARCH_MARK)
+            && !chat.screen().includes(MODEL_EMPTY_MARK)), chat.screen())
+      }
+      const typeModelCommand = async (text: string): Promise<void> => {
+        // 启动页 bare 命令既可能由 palette 执行（保留草稿），也可能由
+        // onSubmit 执行（消费草稿）；测试下一条命令不能猜前一条的落点。
+        if (launchpad && draft() !== '') {
+          await chat.send('\x03')
+          check(`${label} 输入下一条完整命令前清空启动页草稿`,
+            await settled(() => draft() === '' && chat.screen().includes(LAUNCHPAD_MARK)), chat.screen())
+        }
+        await chat.type(text)
+        await settle(() => draft() === text)
+      }
+      const searchCaretAt = (query: string): boolean => {
+        const lines = viewportLines(chat.term)
+        const row = lines.findIndex(line => line.includes('⌕ ' + query))
+        if (row < 0) return false
+        const line = lines[row]!
+        const col = stringWidth(line.slice(0, line.indexOf('⌕ ')) + '⌕ ' + query)
+        return chat.term.buffer.active.cursorY === row && chat.term.buffer.active.cursorX === col
+      }
+      const enter = makeModelEnter(chat)
+      const openBarePicker = async (): Promise<void> => {
+        await typeModelCommand('/model')
+        await enter()
+        await settle(() => chat.screen().includes(MODEL_SEARCH_MARK))
+      }
+      try {
+        check(`${label} 输入就绪`, await settled(() => launchpad
+          ? chat.screen().includes(LAUNCHPAD_MARK) : chat.promptControllerRef.current !== null))
+        await chat.type('/mo')
+        await chat.send('\t')
+        check(`${label} /mo + Tab 只补全 /model，未开选择器或执行`,
+          await settled(() => draft() === '/model'
+            && chat.screen().includes('model gateway/glm-5.4')
+            && !chat.screen().includes(MODEL_SEARCH_MARK) && noDelivery()), chat.screen())
+        if (!launchpad) {
+          check(`${label} 根命令补全保留尾随空格与输入归属`,
+            chat.promptControllerRef.current?.text() === '/model ')
+        }
+        await enter()
+        check(`${label} /model 空参数 Enter 开独立选择器而非执行首个内联候选`,
+          await settled(() => chat.screen().includes(MODEL_SEARCH_MARK)
+            && chat.screen().includes('Cloud Gateway') && noDelivery()), chat.screen())
+        const draftBeforeSearch = draft()
+        await chat.type('zz9')
+        check(`${label} 无匹配搜索上屏且没有切换`,
+          await settled(() => chat.screen().includes(MODEL_EMPTY_MARK) && noDelivery()), chat.screen())
+        await enter()
+        check(`${label} 空结果 Enter 不切换、不提交，选择器仍在`,
+          chat.screen().includes(MODEL_EMPTY_MARK) && noDelivery(), JSON.stringify(chat.calls))
+        await chat.send('\x7f')
+        check(`${label} 非空搜索 Backspace 编辑查询，不返回分组或关闭`,
+          await settled(() => chat.screen().includes(MODEL_EMPTY_MARK)
+            && chat.screen().split('\n').some(line => line.includes('⌕ zz') && !line.includes('zz9'))
+            && !chat.screen().includes(MODEL_SEARCH_MARK) && noDelivery()), chat.screen())
+        await chat.send('\x1b[H')
+        await chat.send('\x1b[3~')
+        await chat.send('\x1b[F')
+        await chat.type('9')
+        await chat.send('\x1b[D')
+        await chat.send('\x7f')
+        await chat.send('\x1b[C')
+        await chat.type('z')
+        check(`${label} 搜索 Home/Delete/End/左右/Backspace 在光标处编辑`,
+          await settled(() => chat.screen().split('\n').some(line => line.includes('⌕ 9z'))
+            && chat.screen().includes(MODEL_EMPTY_MARK) && noDelivery()), chat.screen())
+        check(`${label} 原生终端光标停在搜索行查询末尾`,
+          await settled(() => searchCaretAt('9z')), chat.screen())
+        await clearSearch()
+        check(`${label} 第一次 Esc 清搜索并恢复分组，背景草稿不变`,
+          await settled(() => chat.screen().includes(MODEL_SEARCH_MARK)
+            && chat.screen().includes('Cloud Gateway') && !chat.screen().includes(MODEL_EMPTY_MARK)
+            && draft() === draftBeforeSearch && noDelivery()), chat.screen())
+        await closePicker()
+        check(`${label} 第二次 Esc 关闭选择器，不改变背景草稿或执行命令`,
+          await settled(() => !chat.screen().includes(MODEL_SEARCH_MARK)
+            && draft() === draftBeforeSearch && noDelivery()), chat.screen())
+
+        await typeModelCommand('/model')
+        await enter()
+        check(`${label} 精确裸 /model Enter 同样开选择器`,
+          await settled(() => chat.screen().includes(MODEL_SEARCH_MARK) && noDelivery()), chat.screen())
+        await chat.type('GLM-5')
+        check(`${label} 分组层按模型 ID 跨 provider 搜索且大小写无关`,
+          await settled(() => chat.screen().includes('Jade Alpha') && chat.screen().includes('Azure Beta')
+            && !chat.screen().includes('Fixture Active') && !chat.screen().includes('Flash Delta')
+            && noDelivery()), chat.screen())
+        await clearSearch()
+        await chat.type('Cloud')
+        check(`${label} provider 显示名子串匹配其模型`,
+          await settled(() => chat.screen().includes('Azure Beta') && chat.screen().includes('Flash Delta')
+            && !chat.screen().includes('Jade Alpha') && noDelivery()), chat.screen())
+        await clearSearch()
+        await chat.type('dsv4.1')
+        check(`${label} 模型路由子序列模糊匹配`,
+          await settled(() => chat.screen().includes('Flash Delta')
+            && !chat.screen().includes('Azure Beta') && !chat.screen().includes('Jade Alpha')
+            && noDelivery()), chat.screen())
+        await clearSearch()
+        // 聚焦非首行后缩小到一条结果：焦点必须仍指向新结果，不读旧 index。
+        await chat.type('GLM-5')
+        await chat.send('\x1b[B')
+        await chat.type('.4')
+        check(`${label} 收窄查询后焦点仍指向真实结果`,
+          await settled(() => chat.screen().split('\n').some(line => line.includes('❯') && line.includes('Azure Beta'))
+            && !chat.screen().includes('Jade Alpha') && noDelivery()), chat.screen())
+        check(`${label} 筛选列表焦点不抢搜索框的原生终端光标`,
+          await settled(() => searchCaretAt('GLM-5.4')), chat.screen())
+        await clearSearch()
+        // 进入 provider 组：最近使用组可能由前面场景落盘，因此按焦点行定位，
+        // 不把“第一个 provider 就是 index 0”写成夹具前提。
+        for (let i = 0; i < 3 && !chat.screen().split('\n').some(line =>
+          line.includes('❯') && line.includes('Fixture DeepSeek')); i++) await chat.send('\x1b[B')
+        check(`${label} 可以键盘聚焦 provider 分组`,
+          await settled(() => chat.screen().split('\n').some(line => line.includes('❯') && line.includes('Fixture DeepSeek'))))
+        await enter()
+        check(`${label} provider 组内仍显示独立搜索框`,
+          await settled(() => chat.screen().includes(MODEL_SEARCH_MARK) && chat.screen().includes('Jade Alpha')))
+        await chat.type('Azure')
+        check(`${label} 已钻入 provider 的搜索不穿透到别的 provider`,
+          await settled(() => chat.screen().includes(MODEL_EMPTY_MARK)
+            && !chat.screen().includes('Azure Beta') && noDelivery()), chat.screen())
+        await clearSearch()
+        check(`${label} 组内 Esc 先清搜索，不提前返回分组`,
+          await settled(() => chat.screen().includes(MODEL_SEARCH_MARK) && chat.screen().includes('Jade Alpha')
+            && !chat.screen().includes('Cloud Gateway') && noDelivery()), chat.screen())
+        await chat.type('Jade')
+        check(`${label} 模型显示名子串匹配`,
+          await settled(() => chat.screen().includes('Jade Alpha')
+            && !chat.screen().includes('Fixture Active') && noDelivery()), chat.screen())
+        await clearSearch()
+        await chat.send('\x7f')
+        check(`${label} 空搜索 Backspace 返回 provider 分组`,
+          await settled(() => chat.screen().includes(MODEL_SEARCH_MARK)
+            && chat.screen().includes('Cloud Gateway') && noDelivery()), chat.screen())
+        await closePicker()
+
+        // 同一输入在启动页和聊天页都继续走 commandCompletions；Tab 与 Enter
+        // 必须分离：先验 input/callback 零副作用，再按 Enter 才走既有切换路由。
+        await typeModelCommand('/model GLM-5')
+        check(`${label} /model 参数前缀筛出内联候选`,
+          await settled(() => chat.screen().includes('model deepseek/glm-5.3')
+            && chat.screen().includes('model gateway/glm-5.4')
+            && !chat.screen().includes('model deepseek/active')
+            && !chat.screen().includes('model gateway/deepseek-v4.1-flash')
+            && noDelivery()), chat.screen())
+        await chat.send('\t')
+        check(`${label} 参数 Tab 填入首个完整 route，绝不切换或打开选择器`,
+          await settled(() => draft() === '/model deepseek/glm-5.3'
+            && !chat.screen().includes(MODEL_SEARCH_MARK) && noDelivery()), chat.screen())
+        if (!launchpad) {
+          check(`${label} 参数补全保留尾随空格`,
+            chat.promptControllerRef.current?.text() === '/model deepseek/glm-5.3 ')
+        }
+        await enter()
+        check(`${label} 参数 Enter 才切换，恰好一次，不提交给模型且消费草稿`,
+          await settled(() => chat.calls.length === 1 && chat.calls[0] === 'switch:deepseek/glm-5.3'
+            && draft() === ''), JSON.stringify(chat.calls))
+
+        await openBarePicker()
+        await chat.type('Azure')
+        check(`${label} 再次打开后筛选状态干净，跨 provider 可达`,
+          await settled(() => chat.screen().includes('Azure Beta') && !chat.screen().includes('Jade Alpha')),
+          chat.screen())
+        await enter()
+        check(`${label} picker 搜索结果 Enter 切换真实匹配模型而非旧分组行`,
+          await settled(() => chat.calls.length === 2 && chat.calls[1] === 'switch:gateway/glm-5.4'
+            && !chat.screen().includes(MODEL_SEARCH_MARK)), JSON.stringify(chat.calls))
+        await typeModelCommand('/model GLM-5.3')
+        await enter()
+        check(`${label} 未按 Tab 的模型 ID 参数 Enter 也执行匹配候选的完整 route`,
+          await settled(() => chat.calls.length === 3 && chat.calls[2] === 'switch:deepseek/glm-5.3'
+            && draft() === '' && !chat.screen().includes(MODEL_SEARCH_MARK)), JSON.stringify(chat.calls))
+      } finally {
+        await chat.unmount()
+      }
+    }
+  }
+}
+// 同一 stdin read 的两个事件不能读取上一帧的空参数/焦点（不跑整张矩阵）。
+{
+  const chat = await mountModelChat({ launchpadOnBoot: true, fullscreen: true, columns: 60 })
+  const enter = makeModelEnter(chat)
+  try {
+    await settle(() => chat.screen().includes(LAUNCHPAD_MARK))
+    await chat.type('/model ')
+    check('MB1 启动页裸命令的内联模型子候选已就绪',
+      await settled(() => chat.screen().includes('model deepseek/glm-5.3') && chat.calls.length === 0), chat.screen())
+    await chat.send('\x1b[B')
+    check('MB2 启动页已聚焦 glm 子候选',
+      await settled(() => chat.screen().split('\n').some(line =>
+        line.includes('❯') && line.includes('model deepseek/glm-5.3'))), chat.screen())
+    await enter('\t\r')
+    check('MB3 同批 Tab + Enter 执行刚填入的完整 route，不误开裸命令选择器',
+      await settled(() => chat.calls.length === 1 && chat.calls[0] === 'switch:deepseek/glm-5.3'
+        && !chat.screen().includes(MODEL_SEARCH_MARK) && chat.screen().includes(LAUNCHPAD_MARK)), JSON.stringify(chat.calls))
+  } finally {
+    await chat.unmount()
+  }
+}
+{
+  const chat = await mountModelChat({ fullscreen: true, columns: 60 })
+  const enter = makeModelEnter(chat)
+  try {
+    await settle(() => chat.promptControllerRef.current !== null)
+    await chat.type('/model')
+    await enter()
+    await settle(() => chat.screen().includes(MODEL_SEARCH_MARK))
+    await chat.type('glm-')
+    check('MB4 窄屏聊天选择器的搜索有两条匹配',
+      await settled(() => chat.screen().includes('Jade Alpha') && chat.screen().includes('Azure Beta')
+        && chat.calls.length === 0), chat.screen())
+    await chat.send('\x1b[B')
+    check('MB5 第二个搜索结果的焦点已落定',
+      await settled(() => chat.screen().split('\n').some(line => line.includes('❯') && line.includes('Azure Beta'))), chat.screen())
+    // CSI-u Return 保证编辑与 Enter 是同一 discreteUpdates 中的两个事件；
+    // 原始 '5.3\\r' 可被 tokenizer 当成一条 piped-line，测不到这个状态接缝。
+    await enter('5.3\x1b[13u')
+    check('MB6 同批收窄搜索 + Enter 只切换新匹配结果一次，不用旧 index 1',
+      await settled(() => chat.calls.length === 1 && chat.calls[0] === 'switch:deepseek/glm-5.3'
+        && !chat.screen().includes(MODEL_SEARCH_MARK)), JSON.stringify(chat.calls))
+  } finally {
+    await chat.unmount()
+  }
+}
+{
+  let loads = 0
+  let releaseRefresh: ((models: typeof MODEL_FIXTURES) => void) | undefined
+  const chat = await mountModelChat({ fullscreen: true, columns: 60 }, () => {
+    loads += 1
+    return loads === 1 ? Promise.resolve(MODEL_FIXTURES)
+      : new Promise(resolve => { releaseRefresh = resolve })
+  })
+  const enter = makeModelEnter(chat)
+  try {
+    await settle(() => chat.promptControllerRef.current !== null)
+    await chat.type('/model')
+    await enter()
+    check('MR1 首次模型 catalog 已加载，预热 reopen 缓存',
+      await settled(() => loads === 1 && chat.screen().includes(MODEL_SEARCH_MARK)
+        && chat.screen().includes('Cloud Gateway')), chat.screen())
+    await chat.send('\x1b')
+    await settle(() => !chat.screen().includes(MODEL_SEARCH_MARK))
+    await chat.type('/model')
+    await enter()
+    check('MR2 reopen 的刷新请求在途，缓存中的选择器仍可搜索',
+      await settled(() => releaseRefresh !== undefined && chat.screen().includes(MODEL_SEARCH_MARK)), chat.screen())
+    await chat.type('GLM')
+    await settle(() => chat.screen().includes('Jade Alpha') && chat.screen().includes('Azure Beta'))
+    await chat.send('\x1b[B')
+    check('MR3 在途刷新期间已聚焦旧列表的第二条搜索结果',
+      await settled(() => chat.screen().split('\n').some(line => line.includes('❯') && line.includes('Azure Beta'))), chat.screen())
+    releaseRefresh?.(MODEL_FIXTURES.filter(model => model.provider === 'deepseek'))
+    check('MR4 刷新缩小列表后保留搜索，焦点钳到唯一的真实结果',
+      await settled(() => chat.screen().includes('⌕ GLM') && !chat.screen().includes('Azure Beta')
+        && chat.screen().split('\n').some(line => line.includes('❯') && line.includes('Jade Alpha'))
+        && chat.calls.length === 0), chat.screen())
+    await enter()
+    check('MR5 异步刷新后的 Enter 使用钳制焦点，切换恰好一次',
+      await settled(() => chat.calls.length === 1 && chat.calls[0] === 'switch:deepseek/glm-5.3'
+        && !chat.screen().includes(MODEL_SEARCH_MARK)), JSON.stringify(chat.calls))
+  } finally {
+    await chat.unmount()
+  }
+}
 if (failures === 0) console.log(`\nverify-launchpad-onboarding-chat: ${checks} checks, all passed`)
 else console.error(`\nverify-launchpad-onboarding-chat: ${failures} of ${checks} checks FAILED`)
 process.exit(failures === 0 ? 0 : 1)

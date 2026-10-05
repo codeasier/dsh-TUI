@@ -2106,6 +2106,11 @@ export function PromptInput({
       editDocked(dockSelectedRef.current)
       return
     }
+    // Tab leaves a trailing space, which can already show model children.
+    // A bare /model still opens the picker, never switches to its first child.
+    const parsed = parseCommandName(value)
+    if ((overlayOpen || !channel.working)
+      && parsed?.name === 'model' && parsed.rawInput.trim() === '' && tryRunCommand(value)) return
     if (overlayOpen) {
       const command = suggestions[selectedCommand]
       if (command) {

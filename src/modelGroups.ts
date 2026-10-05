@@ -10,6 +10,7 @@
  */
 
 import type { LlmModelInfo, LlmProviderInfo } from './adapter/ports/channel-view.js'
+import { modelCompletionMatchTier } from './commands.js'
 
 /**
  * The pseudo provider key of the pinned "recently used" group. Provider
@@ -91,6 +92,27 @@ export function deriveModelGroups(
     }
   }
   return groups
+}
+
+/** Filter picker rows with the inline route ranking, plus display-name matches. */
+export function filterModelPickerModels(
+  models: readonly LlmModelInfo[],
+  query: string,
+  providerInfos: readonly LlmProviderInfo[],
+): readonly LlmModelInfo[] {
+  const normalized = query.trim().toLowerCase()
+  if (normalized === '') return models
+  const providerNames = new Map(providerInfos.map(info => [info.id, (info.name ?? info.id).toLowerCase()]))
+  const matches: { model: LlmModelInfo; tier: number }[] = []
+  for (const model of models) {
+    const routeTier = modelCompletionMatchTier(`${model.provider}/${model.id}`, normalized)
+    const displayMatch = model.name.toLowerCase().includes(normalized)
+      || providerNames.get(model.provider)?.includes(normalized) === true
+    const tier = displayMatch ? Math.min(routeTier ?? 1, 1) : routeTier
+    if (tier !== undefined) matches.push({ model, tier })
+  }
+  matches.sort((a, b) => a.tier - b.tier)
+  return matches.map(match => match.model)
 }
 
 /** Where `/model` should open (or re-land after the fresh catalog arrives). */

@@ -228,11 +228,16 @@ await typeKeys('/model')
 await sleep(200) // 固定窗:pacing 等补全浮层收键就绪
 stdin.write('\r')
 await sleep(600) // 固定窗:pacing 等 picker 收键就绪
-stdin.write('\x1b[B')
-await sleep(200) // 固定窗:pacing 按键步间
+// 首次切换后有两条 recents，重新打开会落在分组层；↓ + Enter 只是钻入
+// provider，不是切换。搜索目标后确认，确保下一段从已关闭的 picker 开始。
+await typeKeys('flash')
+check('二次切换前搜索焦点指向 Flash', await settled(() => fullBufferLines().some(
+  line => line.includes('❯') && line.includes('DeepSeek V4 Flash'),
+)))
 stdin.write('\r')
 // 固定窗:探针 同上，沉积「恰好一份」是不得改变的断言。
 await sleep(1500)
+check('二次切换后模型名生效', channel.model === 'deepseek-v4-flash', `实际 ${channel.model}`)
 check('二次切换后 splash 恰好一份', countMarker(SPLASH) === 1, `实际 ${countMarker(SPLASH)}`)
 
 // ---- Esc 只关不切换：浮层整体条件挂载的回归场景 -----------------------------
