@@ -11,6 +11,7 @@ import { t } from '../i18n.js'
 import { isMinimalUiMode } from '../minimalUiMode.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { isPlainReturn } from '../utils/modifiers.js'
+import { parseCommandName } from '../commands.js'
 import { actionMatches } from '../utils/keymap.js'
 import { formatClipboardInsert, readClipboard, type ClipboardRead } from '../utils/clipboard.js'
 import {
@@ -233,7 +234,7 @@ function CornerChip({
  * **输入框在这一屏是唯一有状态的部件**：用户敲进去的东西必须原样带进聊天页，
  * 否则"第一屏输入的字"就被这一屏吞了。第六版起行首 `/` 会弹出**命令补全面板**
  * （`commands`/`onCommandPick` 两缝，数据与组件都与聊天页 composer 同源），
- * 面板选中直接执行命令；面板没收掉时整行仍原样交给 `onSubmit`，由 `Chat`
+ * Tab 将选中项补全到输入框，Enter/点击才执行；其余提交仍交给 `onSubmit`，由 `Chat`
  * 走它既有的命令表判定（合并命令表，含 registry 命令）再决定 runCommand 或
  * 发送。本地只读一点：行首是不是 `/`，用来把输入框左边的提示符从 `❯` 换成
  * `⌘`。
@@ -349,9 +350,9 @@ export function Launchpad({
    * 补全**同一个来源、同一个组件**（CommandSuggestions），本屏不另造一套。
    * 不传（或空数组）= 不画面板（孤立回归夹具的默认形态）。
    */
-  commands?: readonly (import('../commands.js').LocalCommand & { descriptionKey?: string; commandLine?: string })[] | undefined
+  commands?: readonly (import('../commands.js').LocalCommand & { descriptionKey?: string; commandLine?: string; replacement?: string })[] | undefined
   /**
-   * 补全面板选中一条（Enter/Tab/点击）时交给 Chat 的**完整命令行**
+   * 补全面板选中一条（Enter/点击）时交给 Chat 的**完整命令行**
    * （如 /setup 加尾随空格）。Chat 走 runCommand 执行——与聊天页选中命令
    * 同一条路径，绝不是 submit。
    */
@@ -395,7 +396,7 @@ export function Launchpad({
 
   // ── 命令补全面板（第六版 BUG 1）──────────────────────────────────────────
   // 与聊天页 composer 同一套契约：行首 / + 有候选 → 面板上屏；↑/↓ 移选中、
-  // Enter/Tab/点击执行选中命令、Esc 只收面板（不清草稿——用户可能只是想
+  // Tab 补全输入，Enter/点击执行命令、Esc 只收面板（不清草稿——用户可能只是想
   // 看一眼）。`dismissedFor` 记住"这条 query 被收过"：Esc 之后继续打字
   // （query 变了）面板自然回来，与 PromptInput 的补全行为同源。
   const [paletteIndex, setPaletteIndex] = React.useState(0)
@@ -406,6 +407,7 @@ export function Launchpad({
   const paletteOpen = inputFocused && paletteCommands.length > 0 && onCommandPick !== undefined
   const paletteSelectedIndex = Math.min(paletteIndex, Math.max(0, paletteCommands.length - 1))
   const paletteSelected = paletteCommands[paletteSelectedIndex]
+  React.useEffect(() => { setPaletteIndex(0) }, [query])
   const pickCommand = (commandLine: string): void => {
     setPaletteDismissedFor(query)
     if (onCommandPick !== undefined) onCommandPick(commandLine)
@@ -427,6 +429,11 @@ export function Launchpad({
   queryRef.current = query
   const caretRef = React.useRef(caret)
   caretRef.current = caret
+  const changeQuery = (text: string, cursor: number): void => {
+    queryRef.current = text
+    caretRef.current = cursor
+    onQueryChange(text, cursor)
+  }
   const clipboardBusyRef = React.useRef(false)
   /** 粘贴提示：落地页没有 toast 基础设施，借 Tips 行显示 4 秒（失败不能静默）。 */
   const [pasteNotice, setPasteNotice] = React.useState<string | undefined>(undefined)
@@ -451,7 +458,7 @@ export function Launchpad({
     if (clean === '') return
     // 异步落点守则：读回那一刻的 query/caret 才算数（refs 每次渲染刷新）。
     const next = insertSingleLineAt(queryRef.current, caretRef.current, clean)
-    onQueryChange(next.text, next.caret)
+    changeQuery(next.text, next.caret)
     onFocusChange(-1)
   }
 
@@ -557,6 +564,9 @@ export function Launchpad({
     // 选择器盖在这一屏之上时键盘整块让位（Chat 的 overlay 分支处理；Esc 关
     // 选择器回到这里）。没有这道闸，选择器分支没消费的键会漏进草稿。
     if (inputPaused) return
+    // Controlled props lag behind keys coalesced into one stdin batch.
+    const query = queryRef.current
+    const caret = caretRef.current
     const composing = key.ctrl || key.meta || key.super
     // 终端原生粘贴（bracketed paste：Ctrl+Shift+V / 右键 / Shift+Insert）：
     // ink 把载荷标成 isPasted 交给 useInput；标记字节（\x1b[200~ / 201~）在
@@ -612,7 +622,7 @@ export function Launchpad({
       }
     }
     // 命令补全面板（第六版 BUG 1）：面板开着时 ↑/↓/Enter/Tab/Esc 全归面板——
-    // 与聊天页 composer 的补全菜单同一套键位。Enter/Tab/点击 = 执行选中命令
+    // 与聊天页 composer 同一套键位：Tab 只填回输入框，Enter/点击执行命令
     // （onCommandPick → Chat 的 runCommand，绝不 submit）；Esc 只收面板，
     // 草稿一字不动（用户可能只是想看一眼有什么命令）。
     if (paletteOpen && paletteSelected !== undefined) {
@@ -622,8 +632,21 @@ export function Launchpad({
         event.stopImmediatePropagation()
         return
       }
-      if (key.tab || isPlainReturn(key)) {
-        pickCommand(paletteSelected.commandLine ?? '/' + paletteSelected.name + ' ')
+      if (key.tab) {
+        const replacement = paletteSelected.replacement
+          ?? (paletteSelected.commandLine ?? '/' + paletteSelected.name).trimEnd() + ' '
+        changeQuery(replacement, replacement.length)
+        event.stopImmediatePropagation()
+        return
+      }
+      if (isPlainReturn(key)) {
+        // /model plus Tab's trailing space can already list model children.
+        // Bare Enter opens the picker instead of applying the first child.
+        const currentQuery = queryRef.current
+        const parsed = parseCommandName(currentQuery)
+        pickCommand(parsed?.name === 'model' && parsed.rawInput.trim() === ''
+          ? currentQuery.trimEnd()
+          : paletteSelected.commandLine ?? '/' + paletteSelected.name + ' ')
         event.stopImmediatePropagation()
         return
       }
@@ -636,13 +659,13 @@ export function Launchpad({
     if (key.escape) {
       // 空输入时 Esc 去看会话（首屏最常见的下一步）；已经有字就只清空它,
       // 免得辛苦打的半句话被一次性丢掉。
-      if (query !== '') onQueryChange('', 0)
+      if (query !== '') changeQuery('', 0)
       else onEscape('sessions')
       event.stopImmediatePropagation()
       return
     }
     if (key.ctrl && (input === 'c' || input === 'd')) {
-      if (query !== '') onQueryChange('', 0)
+      if (query !== '') changeQuery('', 0)
       else onEscape('exit')
       event.stopImmediatePropagation()
       return
@@ -701,7 +724,7 @@ export function Launchpad({
         : key.end ? query.length
           : key.leftArrow ? Math.max(0, prevBoundary(query, at))
             : Math.min(query.length, nextBoundary(query, at))
-      onQueryChange(query, next)
+      changeQuery(query, next)
       event.stopImmediatePropagation()
       return
     }
@@ -711,10 +734,10 @@ export function Launchpad({
       if (key.backspace) {
         if (at === 0) return
         const cut = prevBoundary(query, at)
-        onQueryChange(query.slice(0, cut) + query.slice(at), cut)
+        changeQuery(query.slice(0, cut) + query.slice(at), cut)
       } else {
         if (at >= query.length) return
-        onQueryChange(query.slice(0, at) + query.slice(nextBoundary(query, at)), at)
+        changeQuery(query.slice(0, at) + query.slice(nextBoundary(query, at)), at)
       }
       event.stopImmediatePropagation()
       return
@@ -724,7 +747,7 @@ export function Launchpad({
     const typed = input.replace(/[\r\n]+/gu, '')
     if (typed === '') return
     const at = caret
-    onQueryChange(query.slice(0, at) + typed + query.slice(at), at + typed.length)
+    changeQuery(query.slice(0, at) + typed + query.slice(at), at + typed.length)
     onFocusChange(-1)
     event.stopImmediatePropagation()
   })

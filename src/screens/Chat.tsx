@@ -23,6 +23,7 @@ import type { LlmModelInfo, LlmProviderInfo } from '../adapter/ports/channel-vie
 import { cleanRenderText, cleanScalarText } from '../dsh-adapter/sanitize.js'
 import {
   deriveModelGroups,
+  filterModelPickerModels,
   modelPickerLanding,
   recentCatalogModels,
   RECENTS_GROUP_PROVIDER,
@@ -617,6 +618,10 @@ export function Chat({
    *  hint renders — a pinned recents pseudo-group must not fake a two-level
    *  walk the user never saw (issue #527 regression: repro-picker-windowing). */
   const [modelPickerDirect, setModelPickerDirect] = React.useState(false)
+  const [modelSearch, setModelSearch] = React.useState({ query: '', cursor: 0 })
+  const modelSearchRef = React.useRef(modelSearch)
+  modelSearchRef.current = modelSearch
+  const modelPickerRequestRef = React.useRef(0)
   /** Group rows over the current catalog, first-appearance (registry) order,
    *  with the pinned recents pseudo-group first when any entry is catalogued. */
   const modelGroups = React.useMemo(
@@ -632,6 +637,30 @@ export function Chat({
     if (activeModelGroup === RECENTS_GROUP_PROVIDER) return recentCatalogModels(modelRecents, models)
     return models.filter(model => model.provider === activeModelGroup)
   }, [models, modelRecents, activeModelGroup])
+  const modelSearchActive = modelSearch.query.trim() !== ''
+  const modelPickerModels = React.useMemo(() => filterModelPickerModels(
+    activeModelGroup === undefined ? models : groupModels,
+    modelSearch.query,
+    providerInfos,
+  ), [models, groupModels, activeModelGroup, modelSearch.query, providerInfos])
+  const modelPickerShowsGroups = activeModelGroup === undefined && !modelSearchActive
+  const modelPickerRowCount = modelPickerShowsGroups ? modelGroups.length : modelPickerModels.length
+  const modelPickerIndex = overlay.kind === 'model'
+    ? Math.min(overlay.index, Math.max(0, modelPickerRowCount - 1))
+    : 0
+  // Search edits and navigation can precede Enter in the same stdin batch.
+  const modelPickerFocusRef = React.useRef<{ overlay: unknown; index: number } | null>(null)
+  React.useEffect(() => {
+    if (overlay.kind !== 'model') {
+      modelPickerFocusRef.current = null
+      return
+    }
+    modelPickerFocusRef.current = { overlay, index: modelPickerIndex }
+    // A fresh catalog may shrink the active search without editing its query.
+    if (modelPickerIndex !== overlay.index) {
+      dispatchOverlay({ type: 'set-index', kind: 'model', index: modelPickerIndex })
+    }
+  }, [overlay, modelPickerIndex])
   /** Switch + record: every successful switch feeds the /model recents group
    *  (picker Enter/click, `/model provider/id`, the wizard's live switch,
    *  and /reload's applied model all ride this one path). */
@@ -2604,6 +2633,9 @@ export function Chat({
           return true
         }
         setHelpOpen(false)
+        const pickerRequest = ++modelPickerRequestRef.current
+        modelSearchRef.current = { query: '', cursor: 0 }
+        setModelSearch(modelSearchRef.current)
         // Opens over the cached catalog (empty cache shows the loading
         // pane); the fresh list lands with the authoritative focus, and the
         // kind-guarded set-index cannot re-focus a picker the user left.
@@ -2628,7 +2660,10 @@ export function Chat({
           dispatchOverlay({ type: 'open', overlay: { kind: 'model', index: landing.index } })
         }
         void channel.listModels().then((list) => {
+          if (pickerRequest !== modelPickerRequestRef.current) return
           setModels(list)
+          // Do not replace a search the user started while the catalog loaded.
+          if (modelSearchRef.current.query !== '') return
           const landing = modelPickerLanding(list, channel.provider, channel.model, recentsNow)
           setModelGroup(landing.group)
           setModelPickerDirect(landing.group !== undefined)
@@ -4217,21 +4252,37 @@ export function Chat({
       return
     }
     if (overlay.kind === 'model') {
-      // Two-level picker: group rows at the top (Enter drills in), one
-      // provider's models below (Enter switches, the same live-fork path as
-      // the flat picker always had). Esc/⌫ climbs one level and only closes
-      // at the top; a single-group catalog never shows the group level, so
-      // Esc there closes directly.
-      const rowCount = activeModelGroup === undefined ? modelGroups.length : groupModels.length
+      // Typing at the group level searches every provider; inside a group it
+      // filters only that group's models. Esc clears search before navigating.
+      const { query, cursor } = modelSearchRef.current
+      const searching = query.trim() !== ''
+      const showsGroups = activeModelGroup === undefined && !searching
+      const pickerModels = filterModelPickerModels(
+        activeModelGroup === undefined ? models : groupModels, query, providerInfos,
+      )
+      const editSearch = (text: string, caret: number): void => {
+        modelSearchRef.current = { query: text, cursor: caret }
+        setModelSearch(modelSearchRef.current)
+        if (text !== query) {
+          modelPickerFocusRef.current = { overlay, index: 0 }
+          dispatchOverlay({ type: 'set-index', kind: 'model', index: 0 })
+        }
+      }
+      const rowCount = showsGroups ? modelGroups.length : pickerModels.length
+      const currentIndex = Math.min(
+        modelPickerFocusRef.current?.overlay === overlay ? modelPickerFocusRef.current.index : modelPickerIndex,
+        Math.max(0, rowCount - 1),
+      )
       if (key.upArrow || key.downArrow) {
-        dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: rowCount })
+        if (rowCount > 0) {
+          const index = wrapIndex(currentIndex, key.upArrow ? -1 : 1, rowCount)
+          modelPickerFocusRef.current = { overlay, index }
+          dispatchOverlay({ type: 'set-index', kind: 'model', index })
+        }
       } else if (plainReturn) {
-        if (activeModelGroup === undefined) {
-          const group = modelGroups[overlay.index]
-          if (!group) {
-            dispatchOverlay({ type: 'close' })
-            return
-          }
+        if (showsGroups) {
+          const group = modelGroups[currentIndex]
+          if (!group) return
           setModelGroup(group.provider)
           // The recents group opens on its most-recent entry; a provider
           // group on its current model when it owns one, else its first row.
@@ -4247,7 +4298,7 @@ export function Chat({
           dispatchOverlay({ type: 'set-index', kind: 'model', index: landing.index })
           return
         }
-        const model = groupModels[overlay.index]
+        const model = pickerModels[currentIndex]
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
         if (model) {
           // Enter switches the live model right away: the conversation is
@@ -4255,9 +4306,25 @@ export function Chat({
           // model (history replays unchanged) — and feeds the recents group.
           dispatchOverlay({ type: 'close' })
           void switchModelRecorded(model.provider, model.id, model.name)
-        } else {
-          dispatchOverlay({ type: 'close' })
         }
+      } else if (key.escape && query !== '') {
+        editSearch('', 0)
+      } else if (key.backspace && query !== '') {
+        if (cursor > 0) {
+          const previous = [...query.slice(0, cursor)].pop()!
+          editSearch(query.slice(0, cursor - previous.length) + query.slice(cursor), cursor - previous.length)
+        }
+      } else if (key.delete) {
+        const next = [...query.slice(cursor)][0]
+        if (next !== undefined) editSearch(query.slice(0, cursor) + query.slice(cursor + next.length), cursor)
+      } else if (key.leftArrow) {
+        if (cursor > 0) editSearch(query, cursor - [...query.slice(0, cursor)].pop()!.length)
+      } else if (key.rightArrow) {
+        if (cursor < query.length) editSearch(query, cursor + [...query.slice(cursor)][0]!.length)
+      } else if (key.home || key.end) {
+        editSearch(query, key.home ? 0 : query.length)
+      } else if (key.ctrl && input === 'u') {
+        editSearch('', 0)
       } else if (key.escape || key.backspace) {
         if (activeModelGroup !== undefined && modelGroups.length > 1 && !modelPickerDirect) {
           setModelGroup(undefined)
@@ -4266,6 +4333,9 @@ export function Chat({
         } else {
           dispatchOverlay({ type: 'close' })
         }
+      } else if (!key.ctrl && !key.meta && !key.super && !key.tab && !key.return && input) {
+        const typed = input.replace(/[\r\n]+/gu, ' ')
+        editSearch(query.slice(0, cursor) + typed + query.slice(cursor), cursor + typed.length)
       }
       return
     }
@@ -4992,10 +5062,13 @@ export function Chat({
             <Box flexDirection="column" marginTop={1}>
               {models.length === 0 ? (
                 <ModelPickerLoading />
-              ) : activeModelGroup === undefined ? (
+              ) : modelPickerShowsGroups ? (
                 <ModelPicker
                   groups={modelGroups}
-                  focusIndex={overlay.index}
+                  query={modelSearch.query}
+                  cursorOffset={modelSearch.cursor}
+                  isTerminalFocused={terminalFocused}
+                  focusIndex={modelPickerIndex}
                   currentProvider={channel.provider}
                   onPick={(index) => {
                     // 点击分组行 = 进入该组（与 Enter 同一条路径）
@@ -5016,17 +5089,20 @@ export function Chat({
                 />
               ) : (
                 <ModelPicker
-                  models={groupModels}
+                  models={modelPickerModels}
+                  query={modelSearch.query}
+                  cursorOffset={modelSearch.cursor}
+                  isTerminalFocused={terminalFocused}
                   groupLabel={activeModelGroup === RECENTS_GROUP_PROVIDER
                     ? t('picker-group-recent')
                     : modelGroups.find(group => group.provider === activeModelGroup)?.label}
-                  showBack={modelGroups.length > 1 && !modelPickerDirect}
-                  showProviderPrefix={activeModelGroup === RECENTS_GROUP_PROVIDER}
-                  focusIndex={overlay.index}
+                  showBack={activeModelGroup !== undefined && modelGroups.length > 1 && !modelPickerDirect}
+                  showProviderPrefix={activeModelGroup === undefined || activeModelGroup === RECENTS_GROUP_PROVIDER}
+                  focusIndex={modelPickerIndex}
                   currentModel={`${channel.provider}/${channel.model}`}
                   onPick={(index) => {
                     // 点击行 = 应用该行模型（与 Enter 同一条路径）
-                    const model = groupModels[index]
+                    const model = modelPickerModels[index]
                     if (!model) return
                     dispatchOverlay({ type: 'close' })
                     void switchModelRecorded(model.provider, model.id, model.name)
@@ -5698,7 +5774,7 @@ export function Chat({
             : channel.commandCompletions(launchpadDraft)
         }
         onCommandPick={(commandLine) => {
-          // 补全面板选中（Enter/Tab/点击）：走 runCommand，与快捷入口同一条
+          // 补全面板选中（Enter/点击）：走 runCommand，与快捷入口同一条
           // 白名单口径——覆盖层与整屏命令（第七版 launchpadScreenCommands）
           // 不收落地页（盖在它之上），其余收掉再执行。/help 与快捷入口同一条
           // 拦截：盖屏浮层，不进对话页（第八版）。

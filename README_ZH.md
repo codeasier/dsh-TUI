@@ -200,7 +200,7 @@ Markdown 的紧凑、松散、有序与嵌套列表保留标记；任务项显�
 
 `/resume` · `/home` · `/agentview` · `/bg` · `⌸` 打开同一个会话管理界面：工作区栏、实时状态、筛选、★ 固定。另有 `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/setup` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`。
 
-在 `/model` 补全中，可输入完整路由的前缀（如 `volceapi/glm`）、模型 ID 前缀（如 `glm`），或按序子序列模糊匹配（如 `dsv4.1` 命中 `volceapi/deepseek-v4.1-flash`）；前缀命中排在模糊命中之前，选中后会填入完整的 `provider/model` 路由。
+启动页与聊天页均支持 `/mo` + `Tab` 补全为 `/model `，不会执行命令。仅输入 `/model` 时按 `Enter` 打开模型选择框：继续输入可跨 provider 筛选模型（进入分组后只筛选该组），`Esc` 先清除筛选，再返回上级或关闭。在 `/model …` 补全中，可输入完整路由的前缀（如 `volceapi/glm`）、模型 ID 前缀（如 `glm`），或按序子序列模糊匹配（如 `dsv4.1` 命中 `volceapi/deepseek-v4.1-flash`）；前缀命中排在模糊命中之前。`Tab` 将完整的 `provider/model` 路由填入输入框，`Enter` 应用选中的模型。
 
 会话管理界面会立即显示上次成功读取的列表，同时核对持久化存储的变化。需要深度扫描日志的标题会先显示回退名称，恢复完成后在原行更新。
 移除工作区登记后，其历史会话仍可从侧栏的「仅历史」目录进入。

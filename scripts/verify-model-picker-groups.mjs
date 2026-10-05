@@ -14,6 +14,7 @@
  */
 import {
   deriveModelGroups,
+  filterModelPickerModels,
   modelPickerLanding,
   recentCatalogModels,
   RECENTS_GROUP_PROVIDER,
@@ -155,6 +156,34 @@ const model = (provider, id) => ({ provider, id, name: id })
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+}
+
+// 8. Search uses inline route ranking, plus localized/display identities.
+{
+  const models = [
+    { ...model('gateway', 'deepseek-v4.1-flash'), name: 'DeepSeek V4.1 Flash' },
+    { ...model('gateway', 'glm-5.3'), name: 'GLM 五号' },
+    model('other', 'ds-fast'),
+    model('gateway', 'ds-slow'),
+  ]
+  const infos = [{ id: 'gateway', name: '我的网关' }]
+  const routes = query => filterModelPickerModels(models, query, infos).map(m => `${m.provider}/${m.id}`)
+  check('8 search: route/model prefixes outrank fuzzy matches',
+    eq(routes('DS-'), ['other/ds-fast', 'gateway/ds-slow', 'gateway/deepseek-v4.1-flash']))
+  check('8 search: fuzzy matching equals inline model completion',
+    eq(routes('dsv4.1'), ['gateway/deepseek-v4.1-flash']))
+  check('8 search: provider display name and CJK model name match',
+    routes('我的').length === 3 && eq(routes('五号'), ['gateway/glm-5.3']))
+  check('8 search: casefolded display name includes spaces',
+    eq(routes('V4.1 FLASH'), ['gateway/deepseek-v4.1-flash']))
+  check('8 search: empty query preserves catalog order and identity',
+    filterModelPickerModels(models, ' ', infos) === models)
+  check('8 search: no matches stays empty', eq(routes('zz9'), []))
+  check('8 search: missing provider display names fall back to route IDs',
+    filterModelPickerModels(models, 'glm', [{ id: 'gateway' }]).length === 1)
+  check('8 search: supplied provider subset cannot leak other providers',
+    filterModelPickerModels(models.filter(m => m.provider === 'gateway'), 'ds-', infos)
+      .every(m => m.provider === 'gateway'))
 }
 
 console.log(failed === 0 ? '\nAll model-picker group checks passed' : `\n${failed} check(s) FAILED`)

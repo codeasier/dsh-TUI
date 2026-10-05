@@ -1085,6 +1085,9 @@ const dict = {
 
   // ── components/ModelPicker.tsx / ThemePicker.tsx / ActivityPicker.tsx / EffortSlider.tsx ──
   'picker-title-model': { zh: '模型', en: 'Model' },
+  'picker-model-search-placeholder': { zh: '输入以筛选模型…', en: 'Type to filter models…' },
+  'picker-model-empty': { zh: '没有匹配的模型', en: 'No matching models' },
+  'hint-model-search': { zh: '**Enter** 切换模型 · Esc 清除筛选', en: '**Enter** to switch · Esc to clear filter' },
   'picker-group-recent': { zh: '最近使用', en: 'Recently used' },
   'picker-group-count': { zh: '{{count}} 个模型', en: '{{count}} models' },
   'hint-model-groups': { zh: '**Enter** 查看模型 · Esc 退出', en: '**Enter** to view models · Esc to exit' },

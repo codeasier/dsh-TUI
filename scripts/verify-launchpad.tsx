@@ -146,12 +146,8 @@ interface OpenOptions {
   overlayPanel?: boolean
   /** 高探针面板（第七版：透明浮层回归）——探针行 + 6 行空白，盖住大字若干行。 */
   overlayPanelTall?: boolean
-  /** 命令补全面板数据源（第六版 BUG 1）：给了才会弹面板。 */
-  commands?: readonly { name: string; description: string; commandLine?: string }[]
-  /** 命令补全面板数据源（第六版 BUG 1）：给了才会弹面板。 */
-  commands?: readonly { name: string; description: string; commandLine?: string }[]
-  /** 命令补全面板数据源（第六版 BUG 1）：给了才会弹面板。 */
-  commands?: readonly { name: string; description: string; commandLine?: string }[]
+  /** 命令补全面板数据源：commandLine 执行，replacement 只填回输入。 */
+  commands?: readonly { name: string; description: string; commandLine?: string; replacement?: string }[]
   /** 模拟"选择器开着"（第五版：本屏键盘整块让位）。 */
   inputPaused?: boolean
   /** Tips 自动轮换间隔（第七版；短间隔确定性驱动相位）。 */
@@ -1174,7 +1170,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   s.close()
 }
 {
-  // ↓ 移选中、Enter 执行第二条；Tab 与 Enter 同路径。
+  // ↓ 移选中、Enter 执行第二条；Tab 只补全，不执行。
   const ev: Ev[] = []
   const s = await openLaunchpad(ev, {
     commands: [
@@ -1190,14 +1186,31 @@ for (const cols of [120, 100, 72, 60, 48]) {
   s.close()
   const ev2: Ev[] = []
   const s2 = await openLaunchpad(ev2, {
-    commands: [{ name: 'setup', description: 'Re-run the first-run guide', commandLine: '/setup ' }],
+    commands: [{ name: 'setup', description: 'Re-run the first-run guide', commandLine: '/setup', replacement: '/setup ' }],
   })
   await s2.send('/')
   await s2.send('\t')
-  check('K4 Tab 也是执行选中命令（与聊天页补全菜单同键位）',
-    last(ev2, 'command')?.value === '/setup ' && last(ev2, 'submit') === undefined,
+  check('K4 Tab 填入 replacement 与尾随空格，光标到末尾，绝不执行或提交',
+    await settled(() => last(ev2, 'query')?.value === '/setup '
+      && last(ev2, 'query')?.cursor === '/setup '.length
+      && last(ev2, 'command') === undefined && last(ev2, 'submit') === undefined),
     JSON.stringify(ev2.slice(-2)))
   s2.close()
+}
+{
+  // 同一个 stdin read 里的 Tab 与后续文字必须组合到补全后的同步草稿。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, {
+    query: '/mo',
+    commands: [{ name: 'model', description: 'Show the active model', commandLine: '/model', replacement: '/model ' }],
+  })
+  await settle(() => s.screen().includes('/mo'))
+  await s.send('\tglm')
+  check('K4b /mo 后同批 Tab + glm 保留补全与新文字，不执行或提交',
+    await settled(() => last(ev, 'query')?.value === '/model glm'
+      && last(ev, 'query')?.cursor === '/model glm'.length
+      && last(ev, 'command') === undefined && last(ev, 'submit') === undefined), JSON.stringify(ev))
+  s.close()
 }
 {
   // Esc 只收面板（草稿不动）；收掉后 Enter 才走 onSubmit 原文。
