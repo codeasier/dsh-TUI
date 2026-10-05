@@ -267,6 +267,7 @@ async function mountChat(flags: Flags, over: Record<string, unknown> = {}, chatP
   const stdout = new FakeStdout(term)
   const stdin = new FakeStdin()
   const { channel, notifications, calls } = makeChannel(over)
+  const promptControllerRef = React.createRef<import('../src/components/PromptInput.js').PromptController | null>()
   const instance = await render(
     <ThemeProvider theme="dark">
       {/* 与真机同构：根是整屏尺寸（Chat 的每个整屏 early-return 都按整屏排版）。 */}
@@ -275,6 +276,7 @@ async function mountChat(flags: Flags, over: Record<string, unknown> = {}, chatP
           channel={channel as never}
           questionStore={new QuestionStore()}
           starPrompt={null}
+          promptControllerRef={promptControllerRef}
           openHomeOnBoot={flags.openHomeOnBoot === true}
           launchpadOnBoot={flags.launchpadOnBoot === true}
           onboardingOnBoot={flags.onboardingOnBoot === true}
@@ -307,7 +309,7 @@ async function mountChat(flags: Flags, over: Record<string, unknown> = {}, chatP
     stdin.write(`\u001b[<0;${cell.col};${cell.row}M\u001b[<0;${cell.col};${cell.row}m`)
     await settle(() => stdout.frames.length > before, { timeoutMs: 400 })
   }
-  return { term, stdout, stdin, channel, notifications, calls, screen, send, type, click, unmount: async () => { await instance.unmount() } }
+  return { term, stdout, stdin, channel, notifications, calls, promptControllerRef, screen, send, type, click, unmount: async () => { await instance.unmount() } }
 }
 
 const LAUNCHPAD_MARK = '说点什么，或输入 /' + ' 看命令…'
@@ -848,6 +850,37 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
     stillThere && samples >= 5, 'samples=' + samples)
   check('W2 期间没有任何整屏被异步打开顶掉它', noCover)
   await chat.unmount()
+}
+
+// 带参数的命令已经执行后必须消费输入；无参选择器与参数按钮不丢未提交草稿。
+for (const launchpad of [false, true]) {
+  for (const [command, applied] of [
+    ['/model deepseek/deepseek-reasoner', 'switch:deepseek/deepseek-reasoner'],
+    ['/effort max', 'effort:max'],
+  ]) {
+    const chat = await mountChat({ launchpadOnBoot: launchpad }, {
+      commandCompletions: (input: string) => completeCommands(input, LOCAL_COMMANDS, path =>
+        path.length !== 1 ? [] : path[0] === 'model'
+          ? [{ name: 'deepseek/deepseek-reasoner', description: 'Fixture model' }]
+          : path[0] === 'effort' ? [{ name: 'max', description: 'Fixture effort' }] : []),
+    })
+    const label = `${launchpad ? '启动页' : '聊天页'} ${command}`
+    check(`${label} 输入就绪`, await settled(() => launchpad
+      ? chat.screen().includes(LAUNCHPAD_MARK) : chat.promptControllerRef.current !== null))
+    await chat.type(command)
+    check(`${label} 完整命令在输入框`, await settled(() => chat.screen().includes(command)))
+    await chat.send('\r')
+    check(`${label} 已生效且没有提交给模型`,
+      await settled(() => chat.calls.includes(applied)) && !chat.calls.some(c => c.startsWith('submit:')))
+    check(`${label} 生效后草稿清空`, await settled(() => launchpad
+      ? chat.screen().includes(LAUNCHPAD_MARK) && !chat.screen().includes(command)
+      : chat.promptControllerRef.current?.text() === ''))
+    await chat.type('新的草稿')
+    check(`${label} 清理后光标与新草稿正常`, await settled(() => launchpad
+      ? chat.screen().includes('新的草稿') && !chat.screen().includes(command)
+      : chat.promptControllerRef.current?.text() === '新的草稿'))
+    await chat.unmount()
+  }
 }
 
 // ── Q. 命令面板与入口动作 ──

@@ -6259,7 +6259,13 @@ export function Chat({
           } else if (!overlayCommandNames.has(parsed.name)) {
             setLaunchpadOpen(false)
           }
-          void runCommand(parsed.name, parsed.rawInput)
+          const consumed = runCommand(parsed.name, parsed.rawInput)
+          // Bare commands open pickers and keep the landing-page draft for
+          // Esc/back. A handled local command with arguments has consumed it.
+          if (consumed === true && parsed.rawInput.trim() !== '') {
+            setLaunchpadDraft('')
+            setLaunchpadCaret(0)
+          }
         }}
         cwd={channel.displayCwd}
         branch={channel.gitBranch}
