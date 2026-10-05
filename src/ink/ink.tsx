@@ -40,7 +40,7 @@ import reconciler, { dispatcher, getLastCommitMs, getLastYogaMs, isDebugRepaints
 import renderNodeToOutput, { consumeFollowScroll, consumeViewportResizes, didLayoutShift } from './render-node-to-output.js';
 import { applyPositionedHighlight, type MatchPosition, scanPositions } from './render-to-screen.js';
 import createRenderer, { type Renderer } from './renderer.js';
-import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
+import { CellWidth, CharPool, cellAt, clearRegion, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
 import { applySearchHighlight } from './transcript-highlight.js';
 import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, refreshSelectionFingerprint, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
 import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, terminalImagesBindToCells, type Terminal, writeDiffToTerminal } from './terminal.js';
@@ -1340,6 +1340,42 @@ export default class Ink {
    */
   invalidatePrevFrame(): void {
     this.prevFrameContaminated = true;
+  }
+
+  /**
+   * Reclaim the rows around the declared cursor on the next frame, because
+   * the TERMINAL wrote them out-of-band.
+   *
+   * Terminal emulators render IME preedit (and the composition band they
+   * reserve for it) at the physical cursor themselves, painting those cells
+   * with the terminal's DEFAULT background — not the app's canvas. A diff
+   * engine can only repair what it knows changed, so the band survives every
+   * later frame: the app's model of those cells still holds the canvas
+   * background it wrote once, and identical cells are never written twice
+   * (observed as a black bar trailing the input caret, worst in CJK input).
+   *
+   * A committed composition is the one reliable signal an input method gives
+   * us (see `isImeCommit`), and by then the preedit is gone, so the input
+   * layer calls this to drop the declared cursor's rows from the previous
+   * frame. The next render re-derives them from the tree and writes them
+   * again; `prevFrameContaminated` keeps the renderer's blit from copying
+   * the cleared cells straight back out of `prevScreen` (which would make the
+   * diff a no-op and erase the content instead of repairing it).
+   *
+   * Cheap and scoped: one row per declared input, no screen clear, no
+   * flicker. A no-op when no cursor is declared (nothing focused) — guessing
+   * a row would cost a full repaint for no reason.
+   */
+  repaintCursorRow(): void {
+    if (!this.options.stdout.isTTY || this.isUnmounted || this.isPaused) return;
+    const decl = this.cursorDeclaration;
+    const rect = decl !== null ? nodeCache.get(decl.node) : undefined;
+    if (rect === undefined) return;
+    const y = Math.max(0, Math.floor(rect.y));
+    const height = Math.max(1, Math.ceil(rect.height));
+    this.prevFrameContaminated = true;
+    clearRegion(this.frontFrame.screen, 0, y, this.frontFrame.screen.width, height);
+    this.scheduleRender();
   }
 
   /**
