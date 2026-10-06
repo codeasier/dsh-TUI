@@ -19,6 +19,7 @@ process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
 const tree = await import('../src/dsh-adapter/sessionTree.js')
+const { CHECKPOINT_PREAMBLE, SUMMARY_OPEN_TAG, SUMMARY_CLOSE_TAG, frameCompactSummary } = await import('./lib/compact-summary-fixture.mjs')
 
 let failed = 0
 function check(name: string, ok: boolean, extra = '') {
@@ -119,6 +120,63 @@ function rootLog(): Ev[] {
     entries.filter(e => e.kind === 'assistant').length === 1
       && entries.find(e => e.kind === 'assistant')?.text.includes('settled') === true,
   )
+}
+
+// ── 模型层：压缩仅改变显示，不改变搜索与原始事件 ─────────────────────────
+{
+  const bodyBlocks = [' \nTree compact first body', '\nnext step 🚀 \t']
+  const bodyPreview = 'Tree compact first body next step 🚀'
+  const framedContent = frameCompactSummary(...bodyBlocks)
+  const raw = framedContent.map(block => block.text).join('')
+  const preamblePreview = `${CHECKPOINT_PREAMBLE.slice(0, 120)}…`
+  const cases = [
+    { name: 'legacy plugin compact', source: { kind: 'plugin', plugin: 'compact' }, content: framedContent, display: bodyPreview },
+    { name: 'V4 compact-checkpoint', source: { kind: 'compact-checkpoint' }, content: frameCompactSummary(...bodyBlocks), display: bodyPreview },
+    { name: 'plain fallback', source: { kind: 'compact-checkpoint' }, content: [{ type: 'text', text: 'Plain checkpoint body' }], display: 'Plain checkpoint body' },
+    { name: 'unknown preamble fallback', source: { kind: 'compact-checkpoint' }, content: [{ type: 'text', text: `Unknown checkpoint\n\n${SUMMARY_OPEN_TAG}Fallback body${SUMMARY_CLOSE_TAG}` }], display: `Unknown checkpoint ${SUMMARY_OPEN_TAG}Fallback body${SUMMARY_CLOSE_TAG}` },
+    { name: 'incomplete frame fallback', source: { kind: 'compact-checkpoint' }, content: [{ type: 'text', text: `${CHECKPOINT_PREAMBLE}\n\n${SUMMARY_OPEN_TAG}Incomplete body` }], display: preamblePreview },
+    { name: 'whitespace body fallback', source: { kind: 'compact-checkpoint' }, content: frameCompactSummary(' \t\n '), display: preamblePreview },
+    { name: 'empty summary fallback', source: { kind: 'compact-checkpoint' }, content: [], display: '(compaction)' },
+  ]
+  const log = cases.map((item, seq) => ev('user/message', seq, { source: item.source, content: item.content }))
+  // filterTree unconditionally preserves the active leaf. Put a later user
+  // message there so unrelated-query exclusion really tests checkpoint search.
+  log.push(userMsg(cases.length, 'Later active leaf'))
+  const eventBytes = JSON.stringify(log)
+  const events = log as unknown as Parameters<typeof tree.extractEntries>[1]
+  const entries = tree.extractEntries('compact-fixture', events)
+  for (const [seq, item] of cases.entries()) {
+    const entry = entries.find(candidate => candidate.seq === seq)
+    const rawText = item.content.map(block => block.text).join('')
+    check(`compact extractEntries: ${item.name} display`, entry?.kind === 'compact' && entry.text === item.display, entry?.text ?? 'missing')
+    check(`compact extractEntries: ${item.name} searchText keeps exact raw text`, entry?.searchText === `compact ${rawText}`)
+    check(`compact extractEntries: ${item.name} anchors unchanged`, entry?.seq === seq && entry.time === 1000 + seq && entry.sessionId === 'compact-fixture')
+  }
+  check('compact extractEntries: real frame has opener + two body blocks + closer',
+    framedContent.length === 4 &&
+    framedContent[0]!.text === `${CHECKPOINT_PREAMBLE}\n\n${SUMMARY_OPEN_TAG}` &&
+    framedContent[3]!.text === SUMMARY_CLOSE_TAG)
+  check('compact extractEntries: both source displays hide framing', entries.slice(0, 2).every(entry =>
+    entry.text === bodyPreview && !entry.text.includes('automatically generated') &&
+    !entry.text.includes(SUMMARY_OPEN_TAG) && !entry.text.includes(SUMMARY_CLOSE_TAG)))
+  check('compact extractEntries: framed raw remains exact in search', entries.slice(0, 2).every(entry => entry.searchText === `compact ${raw}`))
+  const data = tree.buildSessionTree([
+    { id: 'compact-fixture', createdAt: 1, events, live: true, tailComplete: true },
+  ], 'compact-fixture')
+  const flat = tree.flattenTree(data.roots, data.activeLeafId)
+  const checkpointIds = ['compact-fixture:0', 'compact-fixture:1']
+  check('compact filterTree: tested checkpoints are not active leaf',
+    data.activeLeafId === `compact-fixture:${cases.length}` && checkpointIds.every(id => id !== data.activeLeafId))
+  for (const query of ['without acknowledging this checkpoint.', SUMMARY_OPEN_TAG, SUMMARY_CLOSE_TAG, 'Tree compact first body', 'next step 🚀']) {
+    const hits = tree.filterTree(flat, data.activeLeafId, 'default', query)
+    check(`compact filterTree: raw/body query stays a hit (${query})`, checkpointIds.every(id => hits.some(row => row.node.id === id)))
+  }
+  const unrelated = tree.filterTree(flat, data.activeLeafId, 'default', 'unrelated-no-checkpoint-match')
+  check('compact filterTree: unrelated search excludes every checkpoint',
+    unrelated.every(row => row.node.entry?.kind !== 'compact') && unrelated.some(row => row.node.id === data.activeLeafId))
+  check('compact tree: entry sequences and times preserved',
+    entries.length === log.length && entries.every((entry, index) => entry.seq === log[index]!.seq && entry.time === log[index]!.time))
+  check('compact tree: extraction, assembly and search preserve raw event bytes', JSON.stringify(log) === eventBytes)
 }
 
 // ── 模型层：回退/分叉边界 ────────────────────────────────────────────────

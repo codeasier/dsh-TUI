@@ -28,6 +28,7 @@ import { StreamingMarkdown } from './StreamingMarkdown.js'
 import { MessageMetadata } from './messages/MessageMetadata.js'
 import { stripNarration } from '../utils/narration.js'
 import { foldLongLines } from '../utils/fold-long-lines.js'
+import { compactSummaryDisplayText } from '../utils/compact-summary.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
 import { clipPreview, type TimelineSnapshot, type TimelineTurn } from '../ink/timeline-rail.js'
@@ -2029,10 +2030,10 @@ function TranscriptRow({
           </Box>
         </Box>
       )
-    case 'compact':
-      // The post-compaction summary defaults to a folded one-liner with a
-      // text preview; Ctrl+O (global), message-selection Enter, or a click
-      // reveals the full summary.
+    case 'compact': {
+      // Decode raw framing before any long-line folding can clip its closing tag.
+      // Ctrl+O, message-selection Enter, or a click reveals the same summary body.
+      const summary = compactSummaryDisplayText(text)
       return (
         <Box
           marginTop={marginTopOnTurn ? 1 : 0}
@@ -2044,16 +2045,17 @@ function TranscriptRow({
           onMouseLeave={() => setCompactHovered(false)}
         >
           {expanded || isExpanded ? (
-            <Text dimColor>{text}</Text>
+            <Text dimColor>{summary}</Text>
           ) : (
             <Text dimColor italic color={compactHovered ? 'text' : undefined}>
               <Text color={compactHovered ? 'text' : undefined}>∴</Text>
-              {' '}{t('compact-summary-folded')} · {compactPreview(displayText)}{' '}
+              {' '}{t('compact-summary-folded')} · {compactPreview(summary)}{' '}
               {t('hint-expand-ctrl-o', { key: primaryComboString('transcript') })}
             </Text>
           )}
         </Box>
       )
+    }
     case 'subagent':
       if (!subagent) return null
       return (

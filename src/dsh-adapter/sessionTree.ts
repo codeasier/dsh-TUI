@@ -18,6 +18,7 @@ export type { SessionTreeData, TreeNode, TreeEntry, TreeEntryKind, SessionTreeMe
  */
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { isCompactionCheckpointSource, toolResultPayload } from './compat/messages.js'
+import { compactSummaryDisplayText } from '../utils/compact-summary.js'
 
 /** Filter modes cycled in the tree screen (pi parity, minus labels). */
 export type TreeFilter = 'default' | 'no-tools' | 'user-only' | 'all'
@@ -443,7 +444,7 @@ export function extractEntries(sessionId: string, events: readonly SessionEvent[
           push({
             seq: event.seq,
             kind: 'compact',
-            text: preview(summary || '(compaction)'),
+            text: preview(compactSummaryDisplayText(summary) || '(compaction)'),
             searchText: `compact ${summary}`,
             time: event.time,
           })
