@@ -30,8 +30,10 @@ export function useDeclaredCursor(options: {
   line: number
   column: number
   active: boolean
+  /** See {@link CursorDeclaration.imeProtectColumns}. */
+  imeProtectColumns?: number
 }): (element: DOMElement | null) => void {
-  const { line, column, active } = options
+  const { line, column, active, imeProtectColumns } = options
   const setCursorDeclaration = useContext(CursorDeclarationContext)
   const nodeRef = useRef<DOMElement | null>(null)
 
@@ -55,7 +57,12 @@ export function useDeclaredCursor(options: {
   useLayoutEffect(() => {
     const node = nodeRef.current
     if (active && node) {
-      setCursorDeclaration({ relativeX: column, relativeY: line, node })
+      setCursorDeclaration({
+        relativeX: column,
+        relativeY: line,
+        node,
+        ...(imeProtectColumns === undefined ? {} : { imeProtectColumns }),
+      })
     } else {
       setCursorDeclaration(null, node)
     }

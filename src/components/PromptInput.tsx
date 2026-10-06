@@ -3919,6 +3919,9 @@ export function PromptInput({
       expanded ? editorGutterCols + 1 + inputWidth : inputWidth,
     ),
     active: !suspended && !selectionActive,
+    // 声明盒是文字区，右侧还有 ⛶（2 列，关闭时不渲染）和左轨边框没有右缘。
+    // 裁切从这些铬之后开始，页边距不再被输入法铺成黑带、光标条也不再停在框外。
+    imeProtectColumns: expanded ? 1 : (expandEnabled ? 2 : 0),
   })
 
   /**

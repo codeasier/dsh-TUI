@@ -44,13 +44,21 @@ import { CellWidth, CharPool, cellAt, clearRegion, createScreen, HyperlinkPool, 
 import { applySearchHighlight } from './transcript-highlight.js';
 import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, refreshSelectionFingerprint, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
 import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, terminalImagesBindToCells, type Terminal, writeDiffToTerminal } from './terminal.js';
-import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
-import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
-import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
+import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, eraseToEndOfLine, SGR_RESET } from './termio/csi.js';
+import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, HIDE_CURSOR, SHOW_CURSOR } from './termio/dec.js';
+import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, osc, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
 import { decrqm, kittyGraphics, terminalCellSizePixels, terminalWindowSizePixels, xtversion } from './terminal-querier.js';
 import { TerminalWriteProvider } from './useTerminalNotification.js';
 import { TerminalImagesContext } from './hooks/use-terminal-images.js';
 import { DEFAULT_TERMINAL_CELL_SIZE, resolveTerminalCellSize, type TerminalImagePlacement } from './terminal-image.js';
+
+/** Steady bar + show, so an input method anchors on the caret we park. */
+const INPUT_CURSOR_STYLE = SHOW_CURSOR + '\x1b[6 q';
+
+/** `0..255` → two lowercase hex digits (OSC 11 colour spec). */
+function hexByte(value: number): string {
+  return Math.max(0, Math.min(255, Math.round(value))).toString(16).padStart(2, '0');
+}
 
 // Alt-screen: renderer.ts sets cursor.visible = !isTTY || screen.height===0,
 // which is always false in alt-screen (TTY + content fills screen).
@@ -243,6 +251,12 @@ export default class Ink {
     x: number;
     y: number;
   } | null = null;
+  // Canvas colour published as the terminal's default background (OSC 11)
+  // while a themed frame is up. Input methods paint their composition band
+  // with that default — on a #191919 canvas a #111111 default reads as a
+  // black bar. Null means "not ours"; unmount restores OSC 111.
+  private imeSurface: { r: number; g: number; b: number } | null = null;
+  private imeSurfaceApplied: string | null = null;
   private handleStdinError(error: NodeJS.ErrnoException): void {
     if (this.isUnmounted && error.code === 'EIO') {
       return;
@@ -1131,14 +1145,28 @@ export default class Ink {
         }
       }
       if (target !== null) {
+        // Steady bar at the caret. The hardware cursor stays hidden except
+        // while a text input owns the declaration — that is the cell an
+        // input method anchors to. A hidden cursor lets the emulator invent
+        // a caret at the end of the composition band (outside the box).
+        const showInputCursor = decl?.imeProtectColumns !== undefined;
+        const clip = showInputCursor
+          ? this.imeTailClip(rect, decl, target, terminalWidth)
+          : null;
         if (this.altScreenActive) {
           // Absolute CUP (1-indexed); next frame's CSI H resets regardless.
           // Emitted after altScreenParkPatch so the declared position wins.
           const row = Math.min(Math.max(target.y + 1, 1), terminalRows);
           const col = Math.min(Math.max(target.x + 1, 1), terminalWidth);
+          if (clip !== null) {
+            optimized.push({
+              type: 'stdout',
+              content: cursorPosition(clip.y + 1, clip.x + 1) + clip.sequence
+            });
+          }
           optimized.push({
             type: 'stdout',
-            content: cursorPosition(row, col)
+            content: cursorPosition(row, col) + (showInputCursor ? INPUT_CURSOR_STYLE : '')
           });
         } else {
           // After the diff (or preamble), cursor is at frame.cursor. If no
@@ -1148,13 +1176,22 @@ export default class Ink {
             x: frame.cursor.x,
             y: frame.cursor.y
           };
-          const dx = target.x - from.x;
-          const dy = target.y - from.y;
-          if (dx !== 0 || dy !== 0) {
+          if (clip !== null) {
+            const cdx = clip.x - from.x;
+            const cdy = clip.y - from.y;
             optimized.push({
               type: 'stdout',
-              content: cursorMove(dx, dy)
+              content: (cdx !== 0 || cdy !== 0 ? cursorMove(cdx, cdy) : '') + clip.sequence + cursorMove(target.x - clip.x, target.y - clip.y) + INPUT_CURSOR_STYLE
             });
+          } else {
+            const dx = target.x - from.x;
+            const dy = target.y - from.y;
+            if (dx !== 0 || dy !== 0 || showInputCursor) {
+              optimized.push({
+                type: 'stdout',
+                content: cursorMove(dx, dy) + (showInputCursor ? INPUT_CURSOR_STYLE : '')
+              });
+            }
           }
         }
         this.displayCursor = target;
@@ -1172,9 +1209,13 @@ export default class Ink {
           if (rdx !== 0 || rdy !== 0) {
             optimized.push({
               type: 'stdout',
-              content: cursorMove(rdx, rdy)
+              content: cursorMove(rdx, rdy) + HIDE_CURSOR
             });
+          } else {
+            optimized.push({ type: 'stdout', content: HIDE_CURSOR });
           }
+        } else if (parked !== null) {
+          optimized.push({ type: 'stdout', content: HIDE_CURSOR });
         }
         this.displayCursor = null;
       }
@@ -2233,6 +2274,65 @@ export default class Ink {
     this.stylePool.setShadeTarget(rgb);
   }
 
+  /**
+   * Publish the theme canvas as the terminal default background (OSC 11)
+   * for the TUI's lifetime, and remember it for the IME tail clip.
+   *
+   * An input method paints its composition overlay with the terminal's
+   * default background, not the SGR colour of the cells underneath. On a
+   * themed canvas that default (#111111 in the reported terminal) is a
+   * black bar from the caret to the end of the row, and the composition
+   * caret it parks at the end of that bar sits outside the input box.
+   * Matching OSC 11 to the canvas makes the band disappear; `null` restores
+   * the terminal's own default (OSC 111) on theme clear and on unmount.
+   */
+  setImeSurfaceColor(color: { r: number; g: number; b: number } | null): void {
+    this.imeSurface = color;
+    this.applyImeSurfaceColor();
+  }
+
+  private applyImeSurfaceColor(): void {
+    if (!this.options.stdout.isTTY || this.isUnmounted) return;
+    const next = this.imeSurface === null
+      ? null
+      : `${this.imeSurface.r},${this.imeSurface.g},${this.imeSurface.b}`;
+    if (next === this.imeSurfaceApplied) return;
+    const sequence = next === null
+      ? osc(111)
+      : osc(11, `#${hexByte(this.imeSurface!.r)}${hexByte(this.imeSurface!.g)}${hexByte(this.imeSurface!.b)}`);
+    this.options.stdout.write(wrapForMultiplexer(sequence));
+    this.imeSurfaceApplied = next;
+  }
+
+  /**
+   * Erase the cursor row from just past the input box to the end of the
+   * line, with the canvas background (BCE), so an IME composition band
+   * cannot trail into the page margin. The caret itself is left alone —
+   * the preedit is a terminal overlay, not buffer text, and rewriting the
+   * caret cell would erase it.
+   *
+   * Returns the column to stand on before the erase, plus the SGR+EL
+   * sequence. Null when this declaration is not a text input, the canvas
+   * colour is unknown, or the box already reaches the screen edge.
+   */
+  private imeTailClip(
+    rect: { x: number; y: number; width: number } | undefined,
+    decl: CursorDeclaration | null,
+    target: { x: number; y: number },
+    terminalWidth: number,
+  ): { x: number; y: number; sequence: string } | null {
+    const protect = decl?.imeProtectColumns;
+    if (protect === undefined || rect === undefined || this.imeSurface === null) return null;
+    const clipX = Math.floor(rect.x + Math.max(0, rect.width)) + protect;
+    if (clipX <= target.x || clipX >= terminalWidth) return null;
+    const { r, g, b } = this.imeSurface;
+    return {
+      x: clipX,
+      y: target.y,
+      sequence: `\x1b[48;2;${r};${g};${b}m${eraseToEndOfLine()}${SGR_RESET}`,
+    };
+  }
+
   setSelectionBgColor(color: string): void {
     // Wrap a NUL marker, then split on it to extract the open/close SGR.
     // colorize returns the input unchanged if the color string is bad —
@@ -2800,6 +2900,11 @@ export default class Ink {
       writeSync(stdoutFd, DBP);
       // Show cursor
       writeSync(stdoutFd, SHOW_CURSOR);
+      // Drop the canvas colour we published as the terminal default background.
+      if (this.imeSurfaceApplied !== null) {
+        writeSync(stdoutFd, wrapForMultiplexer(osc(111)));
+        this.imeSurfaceApplied = null;
+      }
       // Clear iTerm2 progress bar
       writeSync(stdoutFd, CLEAR_ITERM2_PROGRESS);
       // Clear tab status (OSC 21337) so a stale dot doesn't linger

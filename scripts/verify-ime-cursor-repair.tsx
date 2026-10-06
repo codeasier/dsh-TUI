@@ -12,8 +12,8 @@
  *
  * 断言口径（逐格读终端背景，xterm cell API）：
  *   A. 基线：画布挂载树下，输入行没有「终端默认底」的格子（D=0）；
- *   B. 带外涂黑后，普通帧（闪烁 tick / 内容变化）**不修**——这是缺失的能力，
- *      任何"顺手修好"的假象都不许让本组变成空断言；
+ *   B. 带外涂黑后，普通帧裁掉**输入框右缘之外**的默认底（IME 尾裁，光标条
+ *      不许停在页边距），框内光标旁的损伤留着——整行回收仍只在提交时发生；
  *   C. 喂一个中文字（IME 提交）→ 行被重写，D 归零；
  *   D. 喂方向键（非提交）→ 不回收（别在合成期间擦掉 preedit）；
  *   E. `isImeCommit` 判定表（含粘贴/控制字节/多码点）。
@@ -187,23 +187,26 @@ await writeParsed(term, '')
   check('B0 带外涂黑生效（模拟输入法把光标右侧刷成默认底）',
     painted.holes.length >= 15, `holes=${painted.holes.length} start=${bandStart}`)
 }
-// 普通帧：闪烁 tick（只改反显那一格）与内容变化都不该修带外损伤——
-// 修不了才轮到「回收」这个能力，本组因此不会退化成空断言。
+// 普通帧会裁掉输入框右缘之外的默认底（IME 尾裁），但光标旁、框内的那一段
+// 必须留着——那是 preedit 可能占用的格子，整行回收仍只在提交时发生。
 await sleep(700) // 固定窗:墙钟 光标闪烁相位（~550ms）就是被测语义：跨一个相位看 diff
 {
   const afterTick = inspect()
-  check('B1 普通帧（闪烁 tick）不修带外损伤（diff 看不见的写入）',
-    afterTick.holes.length >= 15, `holes=${afterTick.holes.length}`)
+  const pastBox = afterTick.holes.filter(x => x > afterTick.right)
+  const inside = afterTick.holes.filter(x => x <= afterTick.right)
+  check('B1 普通帧裁掉框外黑带，框内光标旁的损伤留着（别擦 preedit）',
+    pastBox.length === 0 && inside.length >= 4,
+    `past=${pastBox.length} inside=${inside.length}@${inside[0]} right=${afterTick.right}`)
 }
 query = query + '吗'
 app.rerender(<ThemeProvider theme="dark"><Harness /></ThemeProvider>)
 await settled(() => viewportLines(term).some(line => line.includes('吗')))
 {
   const afterEdit = inspect()
-  // 文字变长、窗口左滑：光标左侧的格子被重写，但它**右侧的行尾**仍旧是黑的
-  // ——正是"黑方块条"在用户眼里拖到输入框外/边缘的原因。
-  check('B2 内容变化的一帧只重写文字格：光标右侧尾巴仍是默认底',
-    afterEdit.holes.length >= 10, `holes=${afterEdit.holes.length}@${afterEdit.holes[0]}`)
+  const pastBox = afterEdit.holes.filter(x => x > afterEdit.right)
+  check('B2 内容变化也不把框外默认底留在行尾，框内损伤仍在',
+    pastBox.length === 0 && afterEdit.holes.length >= 4,
+    `holes=${afterEdit.holes.length}@${afterEdit.holes[0]} past=${pastBox.length}`)
 }
 
 // C. IME 提交 → 回收光标行。
@@ -223,8 +226,10 @@ stdin.write('\u001b[C')
 await sleep(350) // 固定窗:探针 断言「不得改变」（方向键不许回收）：等观察窗再验不变量
 {
   const afterArrow = inspect()
-  check('D 方向键（非 IME 提交）不触发回收：带外损伤维持原样',
-    afterArrow.holes.length >= 10, `holes=${afterArrow.holes.length}`)
+  const pastBox = afterArrow.holes.filter(x => x > afterArrow.right)
+  check('D 方向键不回收框内损伤（合成期间别擦 preedit），框外仍被裁掉',
+    pastBox.length === 0 && afterArrow.holes.length >= 4,
+    `holes=${afterArrow.holes.length} past=${pastBox.length}`)
 }
 
 app.unmount()
