@@ -254,7 +254,11 @@ export function SearchBox({
   const declarationRef = useDeclaredCursor({
     // 多行时行号跟着光标行走（行窗口已把光标行夹在可见区间里）。
     line: (borderless ? 0 : 1) + (multi === null ? 0 : multi.caretRow),
-    column: multi === null ? caretColumn : Math.min(edge + multi.caretColumn, maxColumn),    active: showCaret,
+    column: multi === null ? caretColumn : Math.min(edge + multi.caretColumn, maxColumn),
+    active: showCaret,
+    // 落地页把本框嵌在外层圆角卡片里（padding 1 + border 1）。裁切必须从边框
+    // 外侧开始，否则输入法合成带会把页边距刷成终端默认底，光标条停在框外。
+    imeProtectColumns: borderless ? 2 : 0,
   })
   const boxNodeRef = useRef<DOMElement | null>(null)
   const boxRef = useCallback(

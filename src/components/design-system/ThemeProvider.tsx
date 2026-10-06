@@ -6,6 +6,7 @@ import {
   setActiveThemeName,
   setAutoThemeBase,
   getAutoThemeBase,
+  getTheme,
   AUTO_THEME_NAME,
 } from '../../theme.js'
 import instances from '../../ink/instances.js'
@@ -318,6 +319,14 @@ export function ThemeProvider({
       detectedBackground
         ?? (isLightThemeActive(renderedTheme) ? { r: 255, g: 255, b: 255 } : { r: 0, g: 0, b: 0 }),
     )
+    // Input methods paint the composition band with the terminal default
+    // background. Publish the canvas colour (OSC 11) so that band matches
+    // the themed surface instead of reading as a black bar. Restored on
+    // unmount by Ink; a theme switch republishes the new canvas.
+    ink.setImeSurfaceColor(parseThemeRgb(getTheme(renderedTheme).sessionBackground))
+    return () => {
+      ink.setImeSurfaceColor(null)
+    }
   }, [active, renderedTheme, autoBase, detectedBackground, stdout])
 
   if (active === null) return null
@@ -331,6 +340,13 @@ export function ThemeProvider({
 export function useTheme(): [string, (name: string) => boolean] {
   const { theme, setTheme } = useContext(ThemeContext)
   return [theme, setTheme]
+}
+
+/** `rgb(r,g,b)` theme token → components, or null for ansi/empty surfaces. */
+function parseThemeRgb(color: string): { r: number; g: number; b: number } | null {
+  const match = /^rgb\((\d+),(\d+),(\d+)\)$/.exec(color)
+  if (match === null) return null
+  return { r: Number(match[1]), g: Number(match[2]), b: Number(match[3]) }
 }
 
 /** `{r,g,b}` → `#rrggbb` for colour strings the style layer accepts. */

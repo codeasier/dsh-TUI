@@ -161,14 +161,14 @@ results back to the chat screen and add no new behavior.
 
 **CJK input methods (IME)**: the terminal paints the composition (preedit) itself at the **physical
 cursor** and reserves part of that row with the terminal's own default background — on a themed canvas
-that reads as a black bar trailing the caret, and the composition spills past the input box when the
-caret sits at its right edge. The app therefore (a) parks the cursor exactly on the caret cell, never a
-cell off, and keeps a few cells of slack to its right (the windowed single-line input reserves 4), and
-(b) rewrites the caret's row the moment a composition **commits** — committed text is the only signal an
-input method hands an app — reclaiming the cells the terminal painted out-of-band. Ordinary typing,
-arrows and pastes never rewrite that row, so a live preedit is never erased. The band during composition
-is the terminal's own drawing and is out of the app's hands; if anything else writes over the frame,
-`Ctrl+L` repaints the whole screen.
+that reads as a black bar trailing the caret, and the composition caret can sit past the input box.
+The app publishes the canvas colour as that default background for the session (restored on exit) and
+erases the row past the input box, so the band and its end caret stay inside. It also parks the cursor
+exactly on the caret cell, with a few cells of slack to its right (the windowed single-line input
+reserves 4), and rewrites the caret's row the moment a composition **commits** — committed text is the
+only signal an input method hands an app. Ordinary typing, arrows and pastes never rewrite the caret
+cell, so a live preedit is never erased. If anything else writes over the frame, `Ctrl+L` repaints the
+whole screen.
 
 ### vim editing mode (`/vim`)
 

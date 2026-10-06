@@ -12,6 +12,15 @@ export type CursorDeclaration = {
   readonly relativeY: number
   /** The ink-box DOMElement whose yoga layout provides the absolute origin */
   readonly node: DOMElement
+  /**
+   * Columns past the node's right edge that must survive the IME tail clip
+   * (parent border, padding, a sibling button). Set only by a real text
+   * input: the renderer then erases the rest of that row so an input method's
+   * composition band — and the caret it parks at the end of that band —
+   * cannot run out of the box into the page margin. Undefined means do not
+   * clip (a one-cell list caret must not wipe the rest of its row).
+   */
+  readonly imeProtectColumns?: number
 }
 
 /**
