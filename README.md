@@ -227,6 +227,8 @@ Full reference: [Interaction and commands](docs/interaction.en.md).
 
 `/resume` · `/home` · `/agentview` · `/bg` · `⌸` open the same session manager: workspace rail, live state, filter, ★ pins. Also `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/setup` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`.
 
+Compaction checkpoints default to a folded summary preview; click or press `Ctrl+O` to expand. Recognized checkpoint framing is hidden in the transcript and `/tree` previews so they show the summary body. Plain or malformed checkpoints remain unchanged; stored context and search retain the original text.
+
 On both the launchpad and chat screen, `/mo` + `Tab` fills `/model ` without executing it. Press `Enter` on bare `/model` to open the model picker: type to filter across providers (or within the opened group), and `Esc` clears the filter before going back or closing. In `/model …` completion, type a provider/model prefix (`volceapi/glm`), a model ID prefix (`glm`), or a fuzzy subsequence (`dsv4.1` → `volceapi/deepseek-v4.1-flash`); prefix hits rank above fuzzy hits. `Tab` inserts the full provider/model route; `Enter` applies the selection.
 
 The session manager paints the last successful list immediately while it checks the persistence store for changes. Titles that require a deeper log scan appear first with a fallback name and update in place when recovery finishes.

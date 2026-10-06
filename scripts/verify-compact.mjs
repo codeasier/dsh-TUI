@@ -20,8 +20,11 @@ import { t } from '../lib/types/i18n.js'
 import React from 'react'
 import { render } from '../lib/types/ui.js'
 import { MessageList } from '../lib/types/components/MessageList.js'
+import { compactSummaryDisplayText } from '../lib/types/utils/compact-summary.js'
+import { stringWidth } from '../lib/types/ink/stringWidth.js'
 import { Writable, PassThrough } from 'node:stream'
 import { settled, sleep } from './lib/term-test.mjs'
+import { CHECKPOINT_PREAMBLE, SUMMARY_OPEN_TAG, SUMMARY_CLOSE_TAG, frameCompactSummary } from './lib/compact-summary-fixture.mjs'
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -37,8 +40,8 @@ const toPlain = s =>
 
 // Independent ASCII-only oracle for the channel's segment estimate: the shared
 // `estimateTokens` (src/dsh-adapter/channel/usage.ts) charges pure ASCII at
-// exactly this rate, and every fixture below is ASCII, so this stays an exact
-// expectation. The CJK-aware semantics (and the rates themselves) are pinned
+// exactly this rate, so the ASCII projection fixtures use exact expectations.
+// The CJK-aware semantics (and the rates themselves) are pinned
 // separately by scripts/verify-cjk-token-estimate.ts.
 const est = text => Math.ceil(text.length / 4)
 
@@ -80,6 +83,44 @@ const USER_TEXT = 'user question here'
 const ASSISTANT_TEXT = 'assistant answer text'
 const SUMMARY = 'Summary of the entire conversation history up to this point.'
 const LONG_SUMMARY = '这是一个很长的压缩摘要，用来验证折叠后预览会被截断，不会把全文都显示在一行里。'.repeat(3)
+const FRAMED_BODIES = [
+  [' \nAlpha checkpoint: keep display raw.', '\nNext: finish tests. \t'],
+  [' \nBeta checkpoint: preserve context.', '\nNext: review patch. \t'],
+]
+const PREFIX = `${CHECKPOINT_PREAMBLE}\n\n${SUMMARY_OPEN_TAG}`
+const framed = body => `${PREFIX}${body}${SUMMARY_CLOSE_TAG}`
+
+// ---- helper-level: only the exact, complete, unambiguous upstream frame decodes
+const preservedBody = ' \t\n## Current Work\n- Preserve 中文 🚀 body bytes.\n\n '
+const helperCases = [
+  { name: 'plain summary', raw: SUMMARY },
+  { name: 'empty raw', raw: '' },
+  { name: 'whitespace raw', raw: ' \n\t ' },
+  { name: 'tags without preamble', raw: `${SUMMARY_OPEN_TAG}body${SUMMARY_CLOSE_TAG}` },
+  { name: 'unknown preamble', raw: `Unknown checkpoint\n\n${SUMMARY_OPEN_TAG}body${SUMMARY_CLOSE_TAG}` },
+  { name: 'altered known preamble', raw: framed('body').replace('automatically', 'manually') },
+  { name: 'wrong preamble separator', raw: `${CHECKPOINT_PREAMBLE}\n${SUMMARY_OPEN_TAG}body${SUMMARY_CLOSE_TAG}` },
+  { name: 'leading bytes before frame', raw: ` ${framed('body')}` },
+  { name: 'preamble only', raw: CHECKPOINT_PREAMBLE },
+  { name: 'missing opener', raw: `${CHECKPOINT_PREAMBLE}\n\nbody${SUMMARY_CLOSE_TAG}` },
+  { name: 'missing closer', raw: `${PREFIX}body` },
+  { name: 'partial closer', raw: `${PREFIX}body</compacted-summary` },
+  { name: 'wrong tag ordering', raw: `${CHECKPOINT_PREAMBLE}\n\n${SUMMARY_CLOSE_TAG}body${SUMMARY_OPEN_TAG}` },
+  { name: 'excess suffix', raw: `${framed('body')}extra` },
+  { name: 'trailing newline after closer', raw: `${framed('body')}\n` },
+  { name: 'nested frame', raw: framed(`${SUMMARY_OPEN_TAG}body${SUMMARY_CLOSE_TAG}`) },
+  { name: 'interior opener only', raw: framed(`body${SUMMARY_OPEN_TAG}tail`) },
+  { name: 'interior closer only', raw: framed(`body${SUMMARY_CLOSE_TAG}tail`) },
+  { name: 'duplicate opener', raw: `${PREFIX}${SUMMARY_OPEN_TAG}body${SUMMARY_CLOSE_TAG}` },
+  { name: 'duplicate closer', raw: `${framed('body')}${SUMMARY_CLOSE_TAG}` },
+  { name: 'duplicate complete frames', raw: `${framed('body')}${framed('other')}` },
+  { name: 'empty framed body', raw: framed('') },
+  { name: 'whitespace framed body', raw: framed(' \t\r\n　') },
+  { name: 'valid body bytes are not trimmed', raw: framed(preservedBody), expected: preservedBody },
+]
+for (const { name, raw, expected = raw } of helperCases) {
+  check(`compactSummaryDisplayText: ${name}`, compactSummaryDisplayText(raw) === expected)
+}
 
 emit({ type: 'request/context', seq: 1, data: { contextWindow: 100000 } })
 emit({ type: 'request/header', seq: 2, data: { header: { system: SYSTEM } } })
@@ -181,6 +222,54 @@ check(
   `prompt=${channel.contextSegments.prompt} chars=${CJK_PROMPT.length}`,
 )
 
+// Real upstream framing is multi-block: opener+preamble, two body blocks, closer.
+// Keep both producer source generations and their raw context/accounting intact.
+const framedRows = []
+const framedEvents = []
+const framedEventBytes = []
+for (const [index, source] of [
+  { kind: 'plugin', plugin: 'compact' },
+  { kind: 'compact-checkpoint' },
+].entries()) {
+  const bodyBlocks = FRAMED_BODIES[index]
+  const content = frameCompactSummary(...bodyBlocks)
+  const raw = content.map(block => block.text).join('')
+  const event = { type: 'user/message', seq: 8 + index, data: { source, content } }
+  const eventBytes = JSON.stringify(event)
+  emit(event)
+  const row = channel.rows.at(-1)
+  const notice = channel.rows.at(-2)
+  const label = index === 0 ? 'legacy plugin compact' : 'V4 compact-checkpoint'
+  check(`${label}: opener, two body blocks, closer`, content.length === 4 && content[0].text === PREFIX && content[3].text === SUMMARY_CLOSE_TAG)
+  check(`${label}: notice and compact row keep complete raw framing`, notice?.kind === 'notice' && row?.kind === 'compact' && row.text === raw)
+  check(`${label}: helper keeps both body blocks byte-for-byte`, compactSummaryDisplayText(raw) === bodyBlocks.join(''))
+  check(`${label}: raw event content unchanged`, JSON.stringify(event) === eventBytes)
+  check(
+    `${label}: segments charge framing as well as body`,
+    channel.contextSegments.system === sysEst &&
+      channel.contextSegments.prompt === est(raw) &&
+      channel.contextSegments.prompt > est(bodyBlocks.join('')) &&
+      channel.contextSegments.assistant === 0 &&
+      channel.contextSegments.thinking === 0 &&
+      channel.contextSegments.tools === 0,
+    JSON.stringify(channel.contextSegments),
+  )
+  check(
+    `${label}: occupancy and cumulative billing unchanged`,
+    channel.tokens.input === 5000 &&
+      channel.lastUsage?.input === 5000 &&
+      channel.lastUsage?.output === 100 &&
+      channel.lastUsage?.cacheRead === 3000 &&
+      channel.lastUsage?.cacheWrite === 0 &&
+      channel.contextOccupancy?.source === 'sample' &&
+      channel.contextOccupancy?.usedTokens === 8000 &&
+      channel.contextOccupancy?.contextWindow === 100000,
+  )
+  framedRows.push(row)
+  framedEvents.push(event)
+  framedEventBytes.push(eventBytes)
+}
+
 // ---- render-level: folded by default, full text when expanded
 function makeStreams() {
   const stdout = new Writable({
@@ -204,13 +293,13 @@ function makeStreams() {
   return { stdout, stderr, stdin }
 }
 
-const listProps = (expanded) => ({
+const listProps = (expanded, summaryRows = [{ id: 2, kind: 'compact', text: LONG_SUMMARY }], expandedRows = new Set()) => ({
   rows: [
     { id: 1, kind: 'notice', text: t('compact-done') },
-    { id: 2, kind: 'compact', text: LONG_SUMMARY },
+    ...summaryRows,
   ],
   expanded,
-  expandedRows: new Set(),
+  expandedRows,
   selectedId: null,
   onToggleRow() {},
   model: 'deepseek-chat',
@@ -254,5 +343,93 @@ const listProps = (expanded) => ({
   check('expanded summary hides the fold line', !shot.includes('摘要已折叠'), '')
   instance.unmount()
 }
+
+// Positive body anchors avoid vacuous negative checks; flatten only terminal
+// wrapping for matching, retaining the line-oriented shot for preview widths.
+async function compactShot(name, summaryRows, expanded, expandedRows, anchors) {
+  const { stdout, stderr, stdin } = makeStreams()
+  const rawRows = JSON.stringify(summaryRows)
+  const instance = await render(
+    React.createElement(MessageList, listProps(expanded, summaryRows, expandedRows)),
+    { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
+  )
+  const frame = () => toPlain(stdout.frames.at(-1) ?? '')
+  try {
+    check(`${name}: body anchors render`, await settled(() => {
+      const flat = frame().replace(/\n/g, '')
+      return flat.includes(t('compact-done')) && anchors.every(anchor => flat.includes(anchor))
+    }))
+    const shot = frame()
+    check(`${name}: rendering does not mutate raw rows`, JSON.stringify(summaryRows) === rawRows)
+    return shot
+  } finally {
+    await instance.unmount()
+  }
+}
+
+const noFraming = shot => !shot.includes('automatically generated checkpoint') &&
+  !shot.includes(SUMMARY_OPEN_TAG) && !shot.includes(SUMMARY_CLOSE_TAG)
+const previewOf = line => line.split(' · ')[1]?.split(' （')[0] ?? ''
+
+for (const { name, expanded, expandedRows } of [
+  { name: 'framed folded', expanded: false, expandedRows: new Set() },
+  { name: 'framed global expand', expanded: true, expandedRows: new Set() },
+  { name: 'framed per-row expand', expanded: false, expandedRows: new Set([framedRows[0].id]) },
+]) {
+  const shot = await compactShot(name, framedRows, expanded, expandedRows, ['Alpha checkpoint:', 'Beta checkpoint:'])
+  const flat = shot.replace(/\n/g, '')
+  const foldLines = shot.split('\n').filter(line => line.includes(t('compact-summary-folded')))
+  check(`${name}: only body is displayed, never preamble or tags`, noFraming(flat))
+  if (name === 'framed folded') {
+    check('framed folded: different bodies produce distinct previews',
+      foldLines.length === 2 &&
+      previewOf(foldLines[0]) === 'Alpha checkpoint: keep display raw. Next: finish tests.' &&
+      previewOf(foldLines[1]) === 'Beta checkpoint: preserve context. Next: review patch.' &&
+      previewOf(foldLines[0]) !== previewOf(foldLines[1]))
+  } else {
+    check(`${name}: both blocks of the first summary are revealed`,
+      flat.includes('Alpha checkpoint: keep display raw.') && flat.includes('Next: finish tests.'))
+    check(`${name}: expected expansion scope`, expanded
+      ? foldLines.length === 0 && flat.includes('Next: review patch.')
+      : foldLines.length === 1 && previewOf(foldLines[0]).startsWith('Beta checkpoint:'))
+  }
+}
+check('framed display preserves both source event contents', framedEvents.every((event, index) => JSON.stringify(event) === framedEventBytes[index]))
+check('framed display preserves projected raw row text', framedRows.every((row, index) =>
+  row.text === frameCompactSummary(...FRAMED_BODIES[index]).map(block => block.text).join('')))
+
+const oneLineBody = `Long checkpoint body: ${'x'.repeat(1200)} LONG_BODY_END`
+const longLineRows = [{ id: 2, kind: 'compact', text: framed(oneLineBody) }]
+check('long one-line body exceeds generic folding threshold', oneLineBody.length > 1000 && !oneLineBody.includes('\n'))
+check('long one-line helper decodes body bytes before folding', compactSummaryDisplayText(longLineRows[0].text) === oneLineBody)
+for (const expanded of [false, true]) {
+  const name = `long one-line ${expanded ? 'expanded' : 'folded'}`
+  const shot = await compactShot(name, longLineRows, expanded, new Set(), expanded
+    ? ['Long checkpoint body:', 'LONG_BODY_END']
+    : ['Long checkpoint body:', t('compact-summary-folded')])
+  const flat = shot.replace(/\n/g, '')
+  check(`${name}: no framing after long-line handling`, noFraming(flat))
+  check(`${name}: body tail follows expansion`, expanded ? flat.includes('LONG_BODY_END') : !flat.includes('LONG_BODY_END'))
+}
+
+const wideBody = `起点🚀\n${'中😀'.repeat(30)}\n末尾`
+const wideRows = [{ id: 2, kind: 'compact', text: framed(wideBody) }]
+const wideShot = await compactShot('multiline CJK/emoji folded', wideRows, false, new Set(), ['起点🚀', t('compact-summary-folded')])
+const wideFoldLine = wideShot.split('\n').find(line => line.includes(t('compact-summary-folded'))) ?? ''
+const widePreview = previewOf(wideFoldLine)
+check('multiline CJK/emoji preview flattens body with intact glyphs', widePreview === `起点🚀 ${'中😀'.repeat(13)}…`, widePreview)
+check('multiline CJK/emoji preview stays within 60 terminal cells', widePreview !== '' && stringWidth(widePreview) <= 60, String(stringWidth(widePreview)))
+check('multiline CJK/emoji folded preview omits framing', noFraming(wideShot))
+
+const malformedRows = [
+  { id: 2, kind: 'compact', text: `Unknown checkpoint\n\n${SUMMARY_OPEN_TAG}Fallback body remains visible.${SUMMARY_CLOSE_TAG}` },
+  { id: 3, kind: 'compact', text: `${PREFIX}Fallback incomplete body.` },
+]
+const malformedShot = await compactShot('malformed fallback expanded', malformedRows, true, new Set(), [
+  'Unknown checkpoint', 'Fallback body remains visible.', 'Fallback incomplete body.',
+])
+const malformedFlat = malformedShot.replace(/\n/g, '')
+check('unknown preamble fallback retains wrapper tags', malformedFlat.includes(`${SUMMARY_OPEN_TAG}Fallback body remains visible.${SUMMARY_CLOSE_TAG}`))
+check('incomplete known frame fallback retains preamble and opener', malformedFlat.includes('automatically generated checkpoint') && malformedFlat.includes(`${SUMMARY_OPEN_TAG}Fallback incomplete body.`))
 
 process.exit(failed)
