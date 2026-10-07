@@ -20,6 +20,11 @@ export type { ProviderSetupHost, CatalogProviderCandidate, ConfiguredProvider, P
  */
 
 import { t } from '../i18n.js'
+import {
+  syncableCatalogRoutes,
+  syncCatalogRoutes,
+  type CatalogSyncResult,
+} from './catalogSync.js'
 import { isReservedCredentialRef } from './credentialRefGuard.js'
 import {
   UserQuestionError,
@@ -63,7 +68,7 @@ export interface ProviderWizardDeps {
   readonly switchModel: (provider: string, model: string) => Promise<boolean>
 }
 
-export type ProviderWizardOutcome = 'added' | 'updated' | 'deleted' | 'signed-out' | 'cancelled' | 'failed'
+export type ProviderWizardOutcome = 'added' | 'updated' | 'synced' | 'deleted' | 'signed-out' | 'cancelled' | 'failed'
 
 /** Max attempts for validated free-text prompts before giving up. */
 const MAX_RETRY = 3
@@ -124,14 +129,15 @@ function textQuestion(id: string, question: string, detail?: string): AskUserQue
 }
 
 /**
- * Run the provider wizard. Opens with an action choice (add / edit); the
- * add path runs the guided config flow, and edit picks a configured route
- * then opens a menu of targeted edits (API key, base URL, wire protocol,
- * model list, delete this provider) with the route locked. Each menu item
- * applies immediately and exits — no confirmation between picking an edit
- * and writing it — and patches only the picked field, leaving every other
- * stored setting (including fields the wizard does not model) in place.
- * For built-in (catalog) routes the menu is limited to API
+ * Run the provider wizard. Opens with an action choice (add / edit, plus
+ * "sync official models" while a configured catalog route has a known vendor
+ * listing); the add path runs the guided config flow, and edit picks a
+ * configured route then opens a menu of targeted edits (API key, base URL,
+ * wire protocol, model list, delete this provider) with the route locked.
+ * Each menu item applies immediately and exits — no confirmation between
+ * picking an edit and writing it — and patches only the picked field, leaving
+ * every other stored setting (including fields the wizard does not model) in
+ * place. For built-in (catalog) routes the menu is limited to API
  * key, model list, and delete; base URL and wire protocol are only
  * meaningful for custom endpoints. Resolves 'cancelled' when the user
  * dismisses any question (Esc) — nothing has been written at that point.
@@ -140,13 +146,23 @@ export async function runProviderWizard(
   deps: ProviderWizardDeps,
 ): Promise<ProviderWizardOutcome> {
   const { ask, notify } = deps
-  let action: 'add' | 'edit' = 'add'
+  let action: 'add' | 'edit' | 'sync' = 'add'
   try {
+    const actionOptions = [
+      { label: t('provider-opt-action-add'), description: t('provider-opt-action-add-desc') },
+      { label: t('provider-opt-action-edit'), description: t('provider-opt-action-edit-desc') },
+    ]
+    // The sync branch exists only while a configured catalog route has a
+    // known vendor listing; without one the action question stays two options
+    // (same optional-branch contract as the OAuth mode below).
+    if (syncableCatalogRoutes(deps.host).length > 0) {
+      actionOptions.push({
+        label: t('provider-opt-action-sync'),
+        description: t('provider-opt-action-sync-desc'),
+      })
+    }
     const actionAnswer = await ask({
-      questions: [optionQuestion('action', t('provider-q-action'), [
-        { label: t('provider-opt-action-add'), description: t('provider-opt-action-add-desc') },
-        { label: t('provider-opt-action-edit'), description: t('provider-opt-action-edit-desc') },
-      ], { hideCustomInput: true })],
+      questions: [optionQuestion('action', t('provider-q-action'), actionOptions, { hideCustomInput: true })],
     })
     const pickedAction = answerSelected(actionAnswer, 'action')[0]
     if (pickedAction === t('provider-opt-action-edit')) {
@@ -156,18 +172,120 @@ export async function runProviderWizard(
       // a bare `return promise` would bypass the catch below.
       return await runEditWizard(deps)
     }
+    if (pickedAction === t('provider-opt-action-sync')) {
+      action = 'sync'
+      return await runCatalogSyncWizard(deps)
+    }
     return await runAddFlow(deps)
   } catch (error) {
     if (error instanceof UserQuestionError) {
       notify(action === 'edit'
         ? t('provider-edit-cancelled')
-        : t('provider-cancelled'))
+        : action === 'sync'
+          ? t('provider-sync-cancelled')
+          : t('provider-cancelled'))
       return 'cancelled'
     }
     const err = error instanceof Error ? error.message : String(error)
     notify(t('provider-write-failed', { err }), { color: 'error', timeoutMs: 8000 })
     return 'failed'
   }
+}
+
+/**
+ * The sync branch behind `/provider`'s "Sync official models": pick one
+ * eligible catalog route, read the vendor's own listing, and mirror the
+ * models the installed catalog does not describe into the derived route the
+ * sync owns (see `catalogSync.ts`). Read-only against the picked route — its
+ * own `models` selection is the user's and stays exactly as they left it.
+ */
+async function runCatalogSyncWizard(deps: ProviderWizardDeps): Promise<ProviderWizardOutcome> {
+  const { host, ask, notify, pushLocal } = deps
+  const candidates = syncableCatalogRoutes(host)
+  if (candidates.length === 0) {
+    notify(t('provider-sync-no-route'), { color: 'warning', timeoutMs: 8000 })
+    return 'cancelled'
+  }
+  let route = candidates[0]!.route
+  if (candidates.length > 1) {
+    const pickAnswer = await ask({
+      questions: [optionQuestion('sync-route', t('provider-q-sync-route'), candidates.map(candidate => ({
+        label: candidate.route,
+        description: candidate.displayName === candidate.route ? undefined : candidate.displayName,
+      })), { hideCustomInput: true })],
+    })
+    const picked = candidates.find(candidate => candidate.route === answerSelected(pickAnswer, 'sync-route')[0])
+    if (picked === undefined) return 'cancelled'
+    route = picked.route
+  }
+  notify(t('provider-sync-running'))
+  let result: CatalogSyncResult | undefined
+  try {
+    [result] = await syncCatalogRoutes(host, { route })
+  } catch (error) {
+    // Only the settings write can reject here (discovery failures are
+    // reported as results), and it really did change nothing.
+    const err = error instanceof Error ? error.message : String(error)
+    notify(t('provider-write-failed', { err }), { color: 'error', timeoutMs: 8000 })
+    return 'failed'
+  }
+  if (result === undefined) {
+    notify(t('provider-sync-no-route'), { color: 'warning', timeoutMs: 8000 })
+    return 'cancelled'
+  }
+  return reportCatalogSync(deps, result)
+}
+
+/**
+ * Translate one sync pass into the transcript + toast vocabulary. Only a
+ * pass that changed the served catalog resolves 'synced' (the caller drops
+ * its model caches on that); a pass that changed nothing is 'cancelled' —
+ * the wizard's own word for "nothing was written".
+ */
+function reportCatalogSync(
+  deps: ProviderWizardDeps,
+  result: CatalogSyncResult,
+): ProviderWizardOutcome {
+  const { notify, pushLocal } = deps
+  if (result.status === 'synced') {
+    pushLocal('/provider', [
+      t('provider-sync-transcript-route', { route: result.route, derived: result.derived }),
+      modelsSummaryLine(result.models, { added: result.added, removed: result.removed }),
+    ])
+    notify(t('provider-sync-success', {
+      route: result.route,
+      derived: result.derived,
+      n: result.added.length,
+    }), { color: 'success' })
+    return 'synced'
+  }
+  if (result.status === 'removed') {
+    pushLocal('/provider', [
+      t('provider-sync-transcript-route', { route: result.route, derived: result.derived }),
+      t('provider-sync-line-pruned', { n: result.removed.length }),
+    ])
+    notify(t('provider-sync-removed', { route: result.route, derived: result.derived }), { color: 'success' })
+    return 'synced'
+  }
+  if (result.status === 'unchanged') {
+    notify(t('provider-sync-unchanged', { route: result.route, derived: result.derived }))
+    return 'cancelled'
+  }
+  // Refusals name their cause: each reason is its own message, so a no-op
+  // never reads as a mysterious success.
+  const reason = result.reason
+  if (result.status === 'failed') {
+    notify(t(reason === 'listing-empty' ? 'provider-sync-listing-empty' : 'provider-sync-listing-failed',
+      { route: result.route }), { color: 'warning', timeoutMs: 8000 })
+    return 'failed'
+  }
+  const key = reason === 'no-credential' ? 'provider-sync-no-credential'
+    : reason === 'derived-conflict' ? 'provider-sync-derived-conflict'
+      : reason === 'not-catalog' ? 'provider-sync-not-catalog'
+        : reason === 'catalog-failed' ? 'provider-sync-catalog-failed'
+          : 'provider-sync-listing-failed'
+  notify(t(key, { route: result.route, derived: result.derived }), { color: 'warning', timeoutMs: 8000 })
+  return 'cancelled'
 }
 
 /**

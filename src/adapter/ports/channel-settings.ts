@@ -29,13 +29,17 @@ export interface ProviderSetupHost {
   listRefUsers(ref: string, exceptRoute?: string): readonly string[]
   /** Whether a profile (any layer) already exists for the route. */
   routeExists(route: string): boolean
-  /** Interrogate a draft endpoint; the draft key is never persisted. */
+  /**
+   * Interrogate a draft endpoint; the draft key is never persisted. The
+   * optional signal cancels the request — the interactive wizard never needs
+   * one, while a background pass must not hold a socket open past its turn.
+   */
   discoverModels(request: {
     provider?: string
     baseURL?: string
     api?: string
     apiKey?: string
-  }): Promise<readonly LlmDiscoveredModel[]>
+  }, options?: { signal?: AbortSignal }): Promise<readonly LlmDiscoveredModel[]>
   /** Whether the process environment already provides this ref (shadow). */
   envShadows(ref: string): boolean
   /** The process-environment value for a shadowed ref; undefined when absent. */

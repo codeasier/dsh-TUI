@@ -97,6 +97,9 @@ export function createSettingsHosts(ctx: Context, assertActive: () => void = () 
               api?: string
               apiKey?: string
             },
+            // rc.6 already accepts the optional signal; older typings omit it,
+            // so the structural shape carries it explicitly.
+            signal?: AbortSignal,
           ): Promise<readonly LlmDiscoveredModel[]>
         }
         | undefined
@@ -250,8 +253,8 @@ export function createSettingsHosts(ctx: Context, assertActive: () => void = () 
             }]
           })
         },
-        discoverModels(request) {
-          return llm.discoverModels('llm-pi-ai', request)
+        discoverModels(request, options) {
+          return llm.discoverModels('llm-pi-ai', request, options?.signal)
         },
         envShadows(ref) {
           return process.env[ref] !== undefined
