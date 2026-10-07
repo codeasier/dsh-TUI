@@ -23,9 +23,11 @@ import { t } from '../i18n.js'
 import {
   catalogLiveTarget,
   derivedCatalogRoute,
+  inspectCatalogRoutes,
   syncableCatalogRoutes,
-  syncCatalogRoutes,
-  type CatalogSyncResult,
+  writeCatalogSyncSelection,
+  type CatalogSyncStatus,
+  type CatalogSyncWrite,
 } from './catalogSync.js'
 import { isReservedCredentialRef } from './credentialRefGuard.js'
 import {
@@ -195,11 +197,15 @@ export async function runProviderWizard(
 }
 
 /**
- * The sync branch behind `/provider`'s "Sync official models": pick one
- * eligible catalog route, read the vendor's own listing, and mirror the
- * models the installed catalog does not describe into the derived route the
- * sync owns (see `catalogSync.ts`). Read-only against the picked route — its
- * own `models` selection is the user's and stays exactly as they left it.
+ * The management branch behind `/provider`'s "Manage official models": pick
+ * one eligible catalog route, read the vendor's own listing, and edit the set
+ * of vendor-only models ENABLED on the derived route (see `catalogSync.ts`).
+ *
+ * Read-only against the picked route — its own `models` selection is the
+ * user's and stays exactly as they left it. Enablement is the user's too: the
+ * currently enabled ids arrive pre-checked and nothing is enabled or disabled
+ * that the user did not tick, so a newly advertised model only ever shows up
+ * here (and in the add flow's question detail) until they enable it.
  */
 async function runCatalogSyncWizard(deps: ProviderWizardDeps): Promise<ProviderWizardOutcome> {
   const { host, ask, notify, pushLocal } = deps
@@ -221,132 +227,109 @@ async function runCatalogSyncWizard(deps: ProviderWizardDeps): Promise<ProviderW
     route = picked.route
   }
   notify(t('provider-sync-running'))
-  let result: CatalogSyncResult | undefined
+  let status: CatalogSyncStatus | undefined
   try {
-    [result] = await syncCatalogRoutes(host, { route })
+    [status] = await inspectCatalogRoutes(host, { route })
   } catch (error) {
-    // Only the settings write can reject here (discovery failures are
-    // reported as results), and it really did change nothing.
     const err = error instanceof Error ? error.message : String(error)
     notify(t('provider-write-failed', { err }), { color: 'error', timeoutMs: 8000 })
     return 'failed'
   }
-  if (result === undefined) {
+  if (status === undefined) {
     notify(t('provider-sync-no-route'), { color: 'warning', timeoutMs: 8000 })
     return 'cancelled'
   }
-  return reportCatalogSync(deps, result)
-}
+  if (status.reason !== undefined) {
+    notify(t(catalogSyncReasonKey(status), {
+      route: status.route,
+      derived: status.derived,
+    }), { color: 'warning', timeoutMs: 8000 })
+    return status.failed === true ? 'failed' : 'cancelled'
+  }
 
-/**
- * Translate one sync pass into the transcript + toast vocabulary. Only a
- * pass that changed the served catalog resolves 'synced' (the caller drops
- * its model caches on that); a pass that changed nothing is 'cancelled' —
- * the wizard's own word for "nothing was written".
- */
-function reportCatalogSync(
-  deps: ProviderWizardDeps,
-  result: CatalogSyncResult,
-): ProviderWizardOutcome {
-  const { notify, pushLocal } = deps
-  if (result.status === 'synced') {
-    pushLocal('/provider', catalogSyncTranscriptLines(result))
-    notify(t('provider-sync-success', {
-      route: result.route,
-      derived: result.derived,
-      n: result.added.length,
-    }), { color: 'success' })
-    return 'synced'
-  }
-  if (result.status === 'removed') {
-    pushLocal('/provider', catalogSyncTranscriptLines(result))
-    notify(t('provider-sync-removed', { route: result.route, derived: result.derived }), { color: 'success' })
-    return 'synced'
-  }
-  if (result.status === 'unchanged') {
-    notify(t('provider-sync-unchanged', { route: result.route, derived: result.derived }))
-    return 'cancelled'
-  }
-  // Refusals name their cause: each reason is its own message, so a no-op
-  // never reads as a mysterious success.
-  notify(t(catalogSyncReasonKey(result), {
-    route: result.route,
-    derived: result.derived,
-  }), { color: 'warning', timeoutMs: 8000 })
-  return result.status === 'failed' ? 'failed' : 'cancelled'
-}
+  // Rows: every vendor-only model, plus any enabled id the vendor no longer
+  // advertises (so it can be turned off, not silently inherited). Enabled ids
+  // are pre-checked; custom input stays available because the derived route
+  // declares protocol and endpoint, so it can serve an id the listing omits.
+  const vendorRows = status.vendorOnly ?? []
+  const vendorIds = new Set(vendorRows.map(row => row.id))
+  const retiredRows = status.enabled.filter(id => !vendorIds.has(id))
+  const modelsAnswer = await ask({
+    questions: [optionQuestion('sync-models', t('provider-q-sync-models', { route: status.route }), [
+      ...vendorRows.map(row => ({
+        label: row.id,
+        description: modelRowDescription(row, true),
+      })),
+      ...retiredRows.map(id => ({ label: id, description: t('provider-sync-row-retired') })),
+    ], {
+      multiSelect: true,
+      defaultSelected: status.enabled,
+      detail: t('provider-sync-detail', {
+        total: vendorRows.length,
+        enabled: status.enabled.length,
+        unenabled: status.unenabled?.length ?? 0,
+        derived: status.derived,
+      }),
+    })],
+  })
+  const selected = mergeModelIds(
+    answerSelected(modelsAnswer, 'sync-models'),
+    answerText(modelsAnswer, 'sync-models'),
+  )
 
-/**
- * Mirror a just-connected catalog route's vendor extras into the derived
- * route, and translate the pass into the add flow's own vocabulary: a real
- * change is a transcript line plus a toast, a refusal is a warning that never
- * fails the connect (the profile write already landed), and an unchanged
- * route says nothing at all.
- * @returns the transcript lines to append to the add summary.
- */
-async function syncConnectedRoute(
-  deps: ProviderWizardDeps,
-  route: string,
-): Promise<string[]> {
-  const { host, notify } = deps
-  let result: CatalogSyncResult | undefined
+  let write: CatalogSyncWrite
   try {
-    [result] = await syncCatalogRoutes(host, { route })
+    write = await writeCatalogSyncSelection(host, status, selected)
   } catch (error) {
     const err = error instanceof Error ? error.message : String(error)
-    notify(t('provider-sync-write-failed', { err }), { color: 'warning', timeoutMs: 8000 })
-    return []
+    notify(t('provider-write-failed', { err }), { color: 'error', timeoutMs: 8000 })
+    return 'failed'
   }
-  if (result === undefined || result.status === 'unchanged') return []
-  if (result.status === 'synced') {
-    notify(t('provider-sync-success', {
-      route: result.route,
-      derived: result.derived,
-      n: result.added.length,
-    }), { color: 'success' })
-    return catalogSyncTranscriptLines(result)
+  if (write.status === 'unchanged' || write.status === 'nothing') {
+    notify(t('provider-sync-unchanged', { route: status.route, derived: status.derived }))
+    return 'cancelled'
   }
-  if (result.status === 'removed') {
-    notify(t('provider-sync-removed', { route: result.route, derived: result.derived }), { color: 'success' })
-    return catalogSyncTranscriptLines(result)
+  if (write.status === 'removed') {
+    pushLocal('/provider', [
+      t('provider-sync-transcript-route', { route: status.route, derived: status.derived }),
+      t('provider-sync-line-pruned', { n: write.removed.length }),
+    ])
+    notify(t('provider-sync-removed', { route: status.route, derived: status.derived }), { color: 'success' })
+    return 'synced'
   }
-  notify(t(catalogSyncReasonKey(result), {
-    route: result.route,
-    derived: result.derived,
-  }), { color: 'warning', timeoutMs: 8000 })
-  return []
-}
-
-/** The transcript lines one sync pass reports (see {@link reportCatalogSync}). */
-function catalogSyncTranscriptLines(result: CatalogSyncResult): string[] {
-  return [
-    t('provider-sync-transcript-route', { route: result.route, derived: result.derived }),
-    result.status === 'removed'
-      ? t('provider-sync-line-pruned', { n: result.removed.length })
-      : modelsSummaryLine(result.models, { added: result.added, removed: result.removed }),
-  ]
+  pushLocal('/provider', [
+    t('provider-sync-transcript-route', { route: status.route, derived: status.derived }),
+    modelsSummaryLine(write.models, { added: write.added, removed: write.removed }),
+  ])
+  notify(t('provider-sync-success', {
+    route: status.route,
+    derived: status.derived,
+    n: write.models.length,
+    added: write.added.length,
+    removed: write.removed.length,
+  }), { color: 'success' })
+  return 'synced'
 }
 
 /**
- * The message key one refusal or failed pass reports under, so the interactive
- * branch and the connect-time pass name the same cause.
+ * The message key one refusal reports under, so every branch names the same
+ * cause for the same condition.
  */
-function catalogSyncReasonKey(result: CatalogSyncResult): Parameters<typeof t>[0] {
-  const reason = result.reason
-  if (result.status === 'failed') {
-    return reason === 'listing-empty' ? 'provider-sync-listing-empty' : 'provider-sync-listing-failed'
-  }
+function catalogSyncReasonKey(status: CatalogSyncStatus): Parameters<typeof t>[0] {
+  const reason = status.reason
   return reason === 'no-credential' ? 'provider-sync-no-credential'
     : reason === 'derived-conflict' ? 'provider-sync-derived-conflict'
       : reason === 'not-catalog' ? 'provider-sync-not-catalog'
         : reason === 'catalog-failed' ? 'provider-sync-catalog-failed'
-          : 'provider-sync-listing-failed'
+          : status.failed === true && reason === 'listing-empty'
+            ? 'provider-sync-listing-empty'
+            : 'provider-sync-listing-failed'
 }
 
 /**
  * The question detail for the model list of a catalog route: which extra
- * models the vendor publishes (and the derived route they are enabled under),
- * else the installed-snapshot origin when there is nothing live to report.
+ * models the vendor publishes (and the route they are managed on), else the
+ * installed-snapshot origin when there is nothing live to report.
  */
 function modelsQuestionDetail(
   isCatalog: boolean,
@@ -588,20 +571,12 @@ async function runAddFlow(
     return 'failed'
   }
 
-  // ── 9. mirror the vendor's extra models ────────────────────────────
-  // The profile just written serves the installed snapshot only, so a model
-  // the vendor added after that snapshot stays unreachable until a sync pass
-  // runs — which would otherwise wait for the next boot or a manual sync. Run
-  // it here so the derived route exists by the time the wizard returns and
-  // /model lists those models right away.
-  const syncLines = isCatalog && catalogLiveTarget(route) !== undefined
-    ? await syncConnectedRoute(deps, route)
-    : []
-
-  // ── 10. success: transcript summary + optional live switch ─────────
+  // ── 9. success: transcript summary + optional live switch ──────────
+  // Nothing is enabled on the derived route here: the model question only
+  // reports the vendor's extras (their route is <route>-live), and turning one
+  // on is the user's call through the management branch.
   pushLocal('/provider', [
     ...summaryLines,
-    ...syncLines,
     ...(deps.working() || models.length === 0
       ? [t('provider-switch-hint')]
       : []),

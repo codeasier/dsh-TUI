@@ -13,7 +13,7 @@ import { createChannel } from './channel.js'
 import { createChannelSceneOutlet } from './channel-scene-outlet.js'
 import { mountChannelUi } from './channel-ui.js'
 import type { ChannelUi } from '../adapter/ports/channel-ui.js'
-import { CATALOG_SYNC_TIMEOUT_MS, syncCatalogRoutesQuietly } from './catalogSync.js'
+import { CATALOG_SYNC_TIMEOUT_MS, reportCatalogRoutesQuietly } from './catalogSync.js'
 import { bindChannelCommands } from './channel/commands.js'
 import { registerTuiChannel } from '../adapter/channel/host-registry.js'
 import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
@@ -1776,31 +1776,32 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // sessions at once while a killed process is reclaimed by liveness.
   ctx.effect(() => startSessionMountHeartbeat(ctx))
 
-  // Official-model sync for catalog routes (see catalogSync.ts; opt out with
-  // cordis.yml `catalogModelSync: false`). The installed pi-ai snapshot is
-  // the only catalog a settings profile can serve, and a profile carries
+  // Official-model report for catalog routes (see catalogSync.ts; opt out
+  // with cordis.yml `catalogModelSync: false`). The installed pi-ai snapshot
+  // is the only catalog a settings profile can serve, and a profile carries
   // protocol/endpoint per ROUTE, so a model the vendor added after that
-  // snapshot can never join the catalog route itself — the boot pass mirrors
-  // those models into the derived `<route>-live` route instead.
+  // snapshot can never join the catalog route itself — such models live on the
+  // derived `<route>-live` route, where the USER decides which are enabled.
   //
-  // Fire-and-forget on purpose: the first frame never waits on the network,
-  // and this is best effort in the strict sense — offline, unauthenticated or
-  // an unchanged listing writes nothing and says nothing, so repeated starts
-  // stay quiet. The pass is bounded (CATALOG_SYNC_TIMEOUT_MS) so a hung
-  // socket cannot outlive the mount, and only a real write failure warns.
-  // Observational modes are exempt: a shadow/replay mount must not write
-  // settings a real session did not ask for.
+  // This pass therefore only reports (debug log): what the vendor publishes
+  // and the user has not enabled, and what the vendor retired. It never writes
+  // — which models a session can pick is the user's call, and a boot must not
+  // change it. Fire-and-forget: the first frame never waits on the network, an
+  // offline or unauthenticated host is silent, and the pass is bounded
+  // (CATALOG_SYNC_TIMEOUT_MS) so a hung socket cannot outlive the mount.
+  // Observational modes are exempt: a shadow/replay mount has no business
+  // reporting on settings a real session owns.
   if (config.catalogModelSync !== false && !shadow) {
     const logCatalogSync = (message: string, level: 'debug' | 'warn'): void => {
-      const line = `dsh-tui: catalog model sync — ${message}`
+      const line = `dsh-tui: catalog model report — ${message}`
       if (level === 'warn') ctx.logger.warn(line)
       else ctx.logger.debug(line)
     }
     // An async helper, never an inline call: even the synchronous
     // `providerSetup()` policy check must land as a rejection, not as a boot
     // failure, when the mount is malformed.
-    void syncCatalogModelsAtBoot(channel, logCatalogSync).catch((error: unknown) => {
-      ctx.logger.warn(`dsh-tui: catalog model sync failed — ${error instanceof Error ? error.message : String(error)}`)
+    void reportCatalogModelsAtBoot(channel, logCatalogSync).catch((error: unknown) => {
+      ctx.logger.warn(`dsh-tui: catalog model report failed — ${error instanceof Error ? error.message : String(error)}`)
     })
   }
 
@@ -1851,31 +1852,29 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
 }
 
 /**
- * One boot pass of the official-model sync (see `catalogSync.ts`): mirror the
+ * One boot pass of the official-model report (see `catalogSync.ts`): read the
  * vendor-published models of every configured catalog route that has a live
- * target into its derived `<route>-live` route.
+ * target and log what the user has not enabled (and what the vendor retired).
  *
- * Nothing here is required for a frame to render, so every failure is the
- * caller's to log: an absent provider-setup host (bare `cordis.yml` start)
- * returns silently, and an unreachable or unauthenticated vendor is reported
- * by the engine as a result, not as a throw. A changed catalog drops the
- * model caches so the next picker open fetches the synced list instead of a
- * stale one.
+ * Nothing here is required for a frame to render, and nothing is written: an
+ * absent provider-setup host (bare `cordis.yml` start) returns silently, and an
+ * unreachable or unauthenticated vendor is reported by the engine as a result,
+ * not as a throw. No model cache is dropped either — the enabled set can only
+ * change through the wizard, which invalidates on its own.
  * @param channel - the mounted UI channel (its provider-setup seam).
  * @param log - one line per real event; the caller picks level and prefix.
  */
-async function syncCatalogModelsAtBoot(
-  channel: Pick<ChannelUi, 'providerSetup' | 'invalidateModelCompletion'>,
+async function reportCatalogModelsAtBoot(
+  channel: Pick<ChannelUi, 'providerSetup'>,
   log: (message: string, level: 'debug' | 'warn') => void,
 ): Promise<void> {
   const host = channel.providerSetup()
   if (host === undefined) return
-  const changed = await syncCatalogRoutesQuietly(
+  await reportCatalogRoutesQuietly(
     host,
     log,
     { signal: AbortSignal.timeout(CATALOG_SYNC_TIMEOUT_MS) },
   )
-  if (changed) channel.invalidateModelCompletion()
 }
 
 /**
