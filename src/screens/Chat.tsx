@@ -2976,8 +2976,9 @@ export function Chat({
           // same consistency the picker's per-open refetch provides, minus
           // the stale flash on the next open. The wizard's live-switch branch
           // already dropped the completion cache via switchModelRecorded;
-          // this covers keep-current, add, edit, delete and OAuth login/logout.
-          if (outcome === 'added' || outcome === 'updated'
+          // this covers keep-current, add, edit, delete, OAuth login/logout
+          // and an official-model sync that changed the derived route.
+          if (outcome === 'added' || outcome === 'updated' || outcome === 'synced'
             || outcome === 'deleted' || outcome === 'signed-out') {
             channel.invalidateModelCompletion()
             void channel.listModels().then(setModels)

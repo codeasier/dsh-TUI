@@ -82,6 +82,7 @@ Config；旧版仍使用 `~/.dsh/settings.yaml`。不要把旧文件路径当成
 | `preset` | 名册默认 `standard` | 新会话 Agent preset；显式配置优先于持久化偏好 |
 | `sessionId` | 未设置 | 要恢复的会话 ID，通常由 Windows `--resume` 启动器注入 |
 | `backend` | 未设置（`/kernel` 记住的选择，否则 `dsh`） | 会话后端：`dsh`，或实验性的 `claude` / `codex`（不区分大小写，未知值按 `dsh`）。profile 行读取 `DSH_TUI_BACKEND`，`dsh-tui --backend <id>` 会设置它。见 [Claude 后端](claude-backend.md) |
+| `catalogModelSync` | `true` | 启动时把 catalog 路由的厂商官方新增模型同步到派生路由（详见 [`/provider`](configuration.md#provider运行时管理模型提供方) 一节）；`false` 只关闭启动自动同步，`/provider` 的手动同步仍可用。观测模式（shadow/replay）不执行 |
 
 ### 优先级与强制关闭
 
@@ -272,6 +273,15 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、`DSH_TUI_COMPACT_RETA
   配置了自定义请求头的 catalog 路由也会明确提示并回退到目录快照，不把线上
   新模型写入无法验证的 profile。
 - 逐项菜单细节见[用户指南](user-guide.md)。
+- 「同步官方新增模型」分支与启动自动同步：catalog 路由的模型来自**安装版 pi-ai
+  快照**，厂商后加的模型不在其中，而 profile 只能按路由声明协议与端点，所以这些
+  模型无法并入原路由。同步改为实时读取厂商端点公布的清单（`opencode-go` 取
+  `https://opencode.ai/zen/go/v1/models`），把安装目录未覆盖的模型写入派生路由
+  `<路由名>-live`，并共用同一把密钥。catalog 路由自身配置（含已启用的模型子集）
+  不会被改写，官方已有的模型仍由原路由按各自原生协议服务；厂商不再公布额外模型
+  时派生路由被移除。启动时默认跑一次（`catalogModelSync: false` 关闭）；离线、
+  无可用密钥或清单无变化时既不写入也不提示。派生路由由同步整表维护，手工往其中
+  增删模型会在下次同步被覆盖。
 
 写入位置：
 

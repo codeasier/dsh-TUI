@@ -396,7 +396,7 @@ The command menu = built-in commands (58, aliases included) + DSH registry comma
 
 | Command | Args | Effect |
 |---|---|---|
-| `/provider` | none | interactive model-provider wizard (add / edit / delete; standard-profile account sign-in includes DeepSeek on DSH 0.2.0-rc.1+, plus ChatGPT/Codex / Claude / Grok and, when supported by host pi-ai, OpenAI direct / Meta Muse) |
+| `/provider` | none | interactive model-provider wizard (add / edit / delete / sync the vendor's new official models; standard-profile account sign-in includes DeepSeek on DSH 0.2.0-rc.1+, plus ChatGPT/Codex / Claude / Grok and, when supported by host pi-ai, OpenAI direct / Meta Muse) |
 | `/auth` | `status` / `login [provider]` / `logout <provider>` | inspect account status, sign in, or sign out (`deepseek-account` for DeepSeek; `openai-codex` / `anthropic` / `xai` for pi-ai subscriptions; newer pi-ai also `openai` / `meta`) |
 | `/fast` | none / `toggle` / `on` / `off` / `status` | fast switch registered by the OAuth plugin: bare/`toggle` switches, `on` sets `priority`, `off` sets `default`, `status` reports; applies from the next model request, leaving `effort` unchanged |
 | `/login` | none | credential status (source, store writability, base URL; account states are listed when the OAuth module is mounted) |
@@ -524,9 +524,10 @@ Keys are in §2.7. Key points:
   (open and start a new session).
 - `dsh-tui <路径>` also accepts a workspace target.
 - `/doctor` check: Node/platform, API key, model routing, cwd, context window, session storage, plugin host.
-- `/provider` interactive wizard to manage model providers: add / edit / delete. Focus a model and press `Tab` to edit its context window, max output tokens, reasoning efforts, and image input; `Enter` saves to the provider draft, and cancelling the outer wizard leaves it unwritten.
+- `/provider` interactive wizard to manage model providers: add / edit / delete / sync the vendor's new official models. Focus a model and press `Tab` to edit its context window, max output tokens, reasoning efforts, and image input; `Enter` saves to the provider draft, and cancelling the outer wizard leaves it unwritten.
   - The standard profile's built-in OAuth module offers **subscription sign-in** (ChatGPT/Codex / Claude / Grok; OpenAI direct / Meta Muse on newer pi-ai, no API key); `/auth login <provider>` also signs in, and `/auth logout <provider>` removes the stored OAuth credential.
   - DSH 0.2.0-rc.1+ delegates DeepSeek account browser authorization to the Host: run `/auth login deepseek-account`, then select the separate `deepseek-account` route with `/model`; `/auth logout deepseek-account` delegates sign-out to the Host. It does not change the `deepseek-official` API key.
+  - "Sync official models" (also run once automatically at boot) reads the vendor's published listing and writes the models the installed pi-ai snapshot lacks into the derived route `<route>-live`, which then shows up in `/model`; the catalog route's own configuration and enabled-model subset are left untouched. See the [configuration reference](configuration.en.md#provider-manage-model-providers-at-runtime).
 - Non-env-variable API keys are written to `~/.dsh/.credentials.yaml` (0600), and the UI shows only `••••••`; pi-ai subscription OAuth credentials instead live in `$DSH_HOME/dsh-auth/credentials.json` (`~/.dsh/dsh-auth/credentials.json` when DSH_HOME is unset). The Host credential service owns DeepSeek account grants; they are not written to that OAuth file.
   - Custom endpoints need route name, API key, baseURL, and protocol (`openai-completions` / `openai-responses` /
   `anthropic-messages`).

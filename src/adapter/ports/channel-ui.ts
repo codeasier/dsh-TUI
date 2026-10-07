@@ -9,8 +9,9 @@ import type { ProviderSetupHost, OAuthProviderStatus, OAuthSetupHost, SettingsHo
 
 /** One backend session's sign-in surface (`ChannelUi.backendAuth`). */
 export interface BackendAuthHost {
-  /** Report status, present OAuth, then reconnect after sign-in or sign-out. */
-  login(present: (oauth: OAuthSetupHost, provider: string) => Promise<'added' | 'updated' | 'deleted' | 'signed-out' | 'cancelled' | 'failed'>): Promise<void>
+  /** Report status, present OAuth, then reconnect after sign-in or sign-out.
+   *  `synced` mirrors the provider wizard's catalog-sync outcome. */
+  login(present: (oauth: OAuthSetupHost, provider: string) => Promise<'added' | 'updated' | 'synced' | 'deleted' | 'signed-out' | 'cancelled' | 'failed'>): Promise<void>
   /** Remove only this backend's host OAuth credential, never its native login. */
   logout?(): Promise<boolean>
 }

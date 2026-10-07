@@ -486,6 +486,11 @@
         fullscreen: true
         # 以下为 /settings 可改的显示设置；每项说明与默认值见应用内 /settings 屏。
         terminalImages: true
+        # 启动时把 catalog 路由（当前为 opencode-go）的厂商官方新增模型同步到
+        # 派生路由 <路由名>-live：内置 pi-ai 快照之后厂商新增的模型只有这样才
+        # 能进 /model。默认开启；离线、无密钥或清单无变化时不写入。false 只关闭
+        # 启动这一遍，/provider 的「同步官方新增模型」仍可手动执行。
+        # catalogModelSync: false
         # diffLayout: auto
         # toolBackground: subtle # none / subtle（默认）/ strong
         # mermaidDiagrams: true

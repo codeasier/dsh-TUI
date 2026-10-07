@@ -85,6 +85,7 @@ A complete common override looks like this:
 | `preset` | roster default `standard` | Agent preset for new sessions; explicit configuration wins over persisted preference |
 | `sessionId` | unset | Session to resume, normally injected by the Windows `--resume` launcher |
 | `backend` | unset (the backend `/kernel` remembers, else `dsh`) | Session backend: `dsh`, or the experimental `claude` / `codex` (case-insensitive; an unknown value means `dsh`). The profile row reads `DSH_TUI_BACKEND`, which `dsh-tui --backend <id>` sets. See [Claude backend](claude-backend.en.md) |
+| `catalogModelSync` | `true` | Mirror a catalog route's vendor-published models at boot into a derived route (see the [`/provider`](configuration.en.md#provider-manage-model-providers-at-runtime) section); `false` disables the boot pass only, while `/provider`'s on-demand sync stays available. Observational modes (shadow/replay) never run it |
 
 ### Precedence and force-off
 
@@ -309,6 +310,21 @@ providers without a restart.
   detail. Catalog routes with no single known protocol or custom request
   headers also explain the limitation and stay on the snapshot, rather than
   saving endpoint-only models into an unverifiable profile.
+- The "sync official models" branch and its boot pass: a catalog route's models
+  come from the **installed pi-ai snapshot**, so models the vendor added later
+  are missing — and because a profile declares protocol and endpoint per
+  ROUTE, those ids cannot join the catalog route itself. The sync instead reads
+  the vendor's published listing live (`opencode-go` uses
+  `https://opencode.ai/zen/go/v1/models`) and writes the models the installed
+  catalog does not cover into the derived route `<route>-live`, sharing the
+  parent's key. The catalog route's own configuration (including its enabled
+  model subset) is never rewritten, and the models the catalog already
+  describes keep being served by that route over their native protocols. When
+  the vendor stops advertising anything extra, the derived route is removed.
+  The pass runs once at boot by default (`catalogModelSync: false` disables it);
+  offline, without a usable key, or with an unchanged listing it writes nothing
+  and says nothing. The derived route is maintained wholesale by the sync —
+  models added to it by hand are overwritten on the next pass.
 
 Where it writes:
 
