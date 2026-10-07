@@ -312,7 +312,14 @@ providers without a restart.
   currently enabled ones pre-checked. The selection is written to the derived
   route `<route>-live` (protocol and endpoint declared there, sharing the
   parent's key). **Nothing is ever enabled automatically**: unchecked ids stay
-  off, and clearing every row removes the derived route. The catalog route's own
+  off, and clearing every row removes the derived route. Both the row
+  descriptions and the written model entries come from the vendor catalog
+  [models.dev](https://models.dev) (the endpoint publishes ids only): name,
+  context/output capacities, input modalities (text/image, narrowed when the
+  vendor declares video/pdf) and thinking tiers (an effort list maps onto
+  off/low/medium/high/xhigh/max, a toggle onto off/high). Fields already stated
+  by a stored entry win over the catalog. When models.dev is unreachable the
+  pass says so and falls back to bare ids with the route defaults. The catalog route's own
   configuration (including its enabled model subset) is never rewritten, and the
   models the catalog already describes keep being served by that route over
   their native protocols. A model the vendor added shows up in that panel (and in

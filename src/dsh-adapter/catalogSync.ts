@@ -49,6 +49,13 @@ export interface CatalogLiveTarget {
    * through pi-ai's own ambient discovery.
    */
   readonly envRef: string
+  /**
+   * models.dev providers holding this route's model metadata, most specific
+   * first (default: the route's own id). The vendor's two catalogs overlap —
+   * `opencode-go` documents most Go models while a few live only under the
+   * plain `opencode` (zen) provider — so a lookup falls through the list.
+   */
+  readonly metadataProviders?: readonly string[]
 }
 
 /**
@@ -64,6 +71,7 @@ export const CATALOG_LIVE_TARGETS: Readonly<Record<string, CatalogLiveTarget>> =
     api: 'openai-completions',
     baseURL: 'https://opencode.ai/zen/go/v1',
     envRef: 'OPENCODE_API_KEY',
+    metadataProviders: ['opencode-go', 'opencode'],
   },
 }
 
@@ -269,6 +277,7 @@ export async function writeCatalogModels(
   host: ProviderSetupHost,
   spec: { readonly route: string; readonly ref: string },
   selectedIds: readonly string[],
+  metadata?: ReadonlyMap<string, VendorModelMetadata>,
 ): Promise<CatalogSyncWrite> {
   const target = catalogLiveTarget(spec.route)
   if (target === undefined) throw new Error(`dsh-tui: "${spec.route}" has no live target`)
@@ -284,15 +293,27 @@ export async function writeCatalogModels(
   }
   const added = selectedIds.filter(id => !previous.includes(id))
   const removed = previous.filter(id => !selectedIds.includes(id))
-  if (stored !== undefined && added.length === 0 && removed.length === 0 && stored.ref === spec.ref) {
-    return { status: 'unchanged', added: [], removed: [], models: [...selectedIds] }
-  }
+  const storedEntries = stored?.modelEntries ?? []
   const displayName = host.listCatalogProviders().find(row => row.provider === spec.route)?.displayName
     ?? spec.route
   const storedById = new Map((stored?.modelEntries ?? [])
     .flatMap(entry => typeof entry['id'] === 'string' ? [[entry['id'], entry] as const] : []))
+  // Catalog metadata fills what a stored entry does not state; the entry
+  // itself always wins, so a hand-tuned capacity (or a name) survives every
+  // management pass. An id the vendor catalog does not describe stays a bare
+  // `{id}` and keeps the adapter's route-level defaults.
+  const entries = selectedIds.map(id => ({
+    ...(metadata?.get(id) ?? {}),
+    ...(storedById.get(id) ?? { id }),
+  }))
+  // Unchanged means the entries themselves match: an enrichment pass that
+  // adds a name or a capacity really does change the profile, while a
+  // re-submitted identical set must not rewrite settings.
+  if (stored !== undefined && stored.ref === spec.ref && sameEntries(entries, storedEntries)) {
+    return { status: 'unchanged', added: [], removed: [], models: [...selectedIds] }
+  }
   await host.mutateProfile(derived, [
-    { op: 'set', path: ['models'], value: selectedIds.map(id => storedById.get(id) ?? { id }) },
+    { op: 'set', path: ['models'], value: entries },
     { op: 'set', path: ['api'], value: target.api },
     { op: 'set', path: ['baseURL'], value: target.baseURL },
     { op: 'set', path: ['apiKeyEnv'], value: spec.ref },
@@ -310,11 +331,181 @@ export async function writeCatalogSyncSelection(
   host: ProviderSetupHost,
   status: CatalogSyncStatus,
   selectedIds: readonly string[],
+  metadata?: ReadonlyMap<string, VendorModelMetadata>,
 ): Promise<CatalogSyncWrite> {
   if (status.reason !== undefined || status.ref === undefined) {
     throw new Error(`dsh-tui: cannot write a catalog selection for "${status.route}" (${status.reason ?? 'not inspected'})`)
   }
-  return await writeCatalogModels(host, { route: status.route, ref: status.ref }, selectedIds)
+  return await writeCatalogModels(host, { route: status.route, ref: status.ref }, selectedIds, metadata)
+}
+
+/**
+ * One model's metadata as a vendor catalog publishes it — the fields a
+ * `llm-pi-ai` model entry accepts that the vendor's own `/v1/models` listing
+ * does not carry (it answers ids only). Absent fields stay undeclared, so the
+ * adapter's own defaults apply exactly as before.
+ */
+export interface VendorModelMetadata {
+  readonly name?: string
+  readonly contextWindow?: number
+  readonly maxTokens?: number
+  /** Modalities the model accepts, restricted to what a profile can declare. */
+  readonly input?: readonly ('text' | 'image')[]
+  /**
+   * Thinking levels, as `llm-pi-ai` spells them: level → wire value (`false`
+   * is its explicit "not a reasoning model").
+   */
+  readonly reasoningEfforts?: Readonly<Record<string, string>> | false
+}
+
+/** A models.dev-shaped catalog document (`{ [provider]: { models: {…} } }`). */
+export type VendorCatalogDocument = unknown
+
+/** The community catalog the OpenCode vendor's own metadata lives in. */
+export const VENDOR_CATALOG_URL = 'https://models.dev/api.json'
+
+/** Thinking levels a profile may declare (mirrors llm-pi-ai's THINKING_LEVELS). */
+const PROFILE_THINKING_LEVELS: ReadonlySet<string> = new Set([
+  'minimal', 'low', 'medium', 'high', 'xhigh', 'max',
+])
+
+/** Cache one catalog read per process: it is a multi-megabyte document. */
+let vendorCatalogCache: { at: number; document: VendorCatalogDocument } | undefined
+/** How long a fetched catalog is reused before another read is attempted. */
+const VENDOR_CATALOG_TTL_MS = 10 * 60_000
+
+/**
+ * Read the vendor catalog (`models.dev/api.json`) for model metadata. Nothing
+ * here is required for the wizard to work — a failure returns `undefined` and
+ * the caller falls back to bare ids — so every error is swallowed on purpose.
+ * @param signal - cancels the read.
+ * @param url - override for tests/proxies.
+ */
+export async function readVendorCatalog(
+  signal?: AbortSignal,
+  url: string = VENDOR_CATALOG_URL,
+): Promise<VendorCatalogDocument | undefined> {
+  if (vendorCatalogCache !== undefined && Date.now() - vendorCatalogCache.at < VENDOR_CATALOG_TTL_MS) {
+    return vendorCatalogCache.document
+  }
+  try {
+    const response = await fetch(url, {
+      headers: { accept: 'application/json' },
+      signal: signal ?? AbortSignal.timeout(CATALOG_SYNC_TIMEOUT_MS),
+    })
+    if (!response.ok) return undefined
+    const document: unknown = await response.json()
+    vendorCatalogCache = { at: Date.now(), document }
+    return document
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The metadata the catalog holds for `ids` of one catalog route. Lookups run
+ * through the target's `metadataProviders` in order, so the route's own
+ * provider wins and the vendor's sibling catalog fills the gaps.
+ * @param route - the catalog route the ids belong to.
+ * @param ids - the model ids to describe.
+ * @param catalog - the document {@link readVendorCatalog} returned.
+ */
+export function vendorMetadataFor(
+  route: string,
+  ids: readonly string[],
+  catalog: VendorCatalogDocument,
+): ReadonlyMap<string, VendorModelMetadata> {
+  const providers = catalogLiveTarget(route)?.metadataProviders ?? [route]
+  const found = new Map<string, VendorModelMetadata>()
+  for (const id of ids) {
+    for (const provider of providers) {
+      const entry = catalogEntry(catalog, provider, id)
+      if (entry === undefined) continue
+      const metadata = metadataFromEntry(entry)
+      if (metadata !== undefined) {
+        found.set(id, metadata)
+        break
+      }
+    }
+  }
+  return found
+}
+
+/** One `catalog[provider].models[id]` entry, when it is a plain object. */
+function catalogEntry(catalog: VendorCatalogDocument, provider: string, id: string): Record<string, unknown> | undefined {
+  const models = asRecord(asRecord(asRecord(catalog)?.[provider])?.['models'])
+  return asRecord(models?.[id])
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
+/** A positive integer, or undefined for anything else (junk never reaches a profile). */
+function positiveInt(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined
+}
+
+/** Map one catalog entry onto the fields a model entry accepts. */
+function metadataFromEntry(entry: Record<string, unknown>): VendorModelMetadata | undefined {
+  const limit = asRecord(entry['limit'])
+  const contextWindow = positiveInt(limit?.['context'])
+  const maxTokens = positiveInt(limit?.['output'])
+  const input = modalitiesFrom(entry)
+  const reasoningEfforts = reasoningEffortsFrom(entry)
+  const name = typeof entry['name'] === 'string' && entry['name'] !== '' ? entry['name'] : undefined
+  if (name === undefined && contextWindow === undefined && maxTokens === undefined
+    && input === undefined && reasoningEfforts === undefined) return undefined
+  return {
+    ...(name === undefined ? {} : { name }),
+    ...(contextWindow === undefined ? {} : { contextWindow }),
+    ...(maxTokens === undefined ? {} : { maxTokens }),
+    ...(input === undefined ? {} : { input }),
+    ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
+  }
+}
+
+/**
+ * Declared input modalities, narrowed to what a profile can carry
+ * (`llm-pi-ai` models text and image only): a catalog naming video/pdf keeps
+ * the modalities this build can actually honour, never a wider claim.
+ */
+function modalitiesFrom(entry: Record<string, unknown>): readonly ('text' | 'image')[] | undefined {
+  const declared = asRecord(entry['modalities'])?.['input']
+  if (!Array.isArray(declared)) return undefined
+  const allowed = declared.filter((value): value is 'text' | 'image' => value === 'text' || value === 'image')
+  return allowed.length > 0 ? allowed : undefined
+}
+
+/**
+ * Thinking levels from a catalog entry. An explicit `reasoning: false` is the
+ * profile's own "not a reasoning model"; an effort list maps its values onto
+ * the levels a profile declares (`none` is the wire value for `off`), and a
+ * toggle becomes the vendor's customary off/high pair. Anything else stays
+ * undeclared — guessing tiers a vendor never published would send a request
+ * the model rejects.
+ */
+function reasoningEffortsFrom(entry: Record<string, unknown>): Readonly<Record<string, string>> | false | undefined {
+  if (entry['reasoning'] === false) return false
+  if (entry['reasoning'] !== true) return undefined
+  const options = Array.isArray(entry['reasoning_options']) ? entry['reasoning_options'] : []
+  for (const option of options) {
+    const record = asRecord(option)
+    if (record?.['type'] === 'effort' && Array.isArray(record['values'])) {
+      const efforts: Record<string, string> = {}
+      for (const value of record['values']) {
+        if (value === 'none') efforts['off'] = 'none'
+        else if (typeof value === 'string' && PROFILE_THINKING_LEVELS.has(value)) efforts[value] = value
+      }
+      // A list offering nothing beyond "off" cannot be declared (the adapter
+      // refuses an efforts map with no thinking level), so it stays undeclared.
+      if (Object.keys(efforts).some(level => level !== 'off')) return efforts
+    }
+    if (record?.['type'] === 'toggle') return { off: 'none', high: 'high' }
+  }
+  return undefined
 }
 
 /**
@@ -344,6 +535,24 @@ export async function reportCatalogRoutesQuietly(
       log(`${status.route}: ${retired.length} enabled model(s) the endpoint no longer advertises (${retired.join(', ')})`, 'debug')
     }
   }
+}
+
+/**
+ * Structural equality for model entries, key order ignored: two entries with
+ * the same fields are the same entry no matter how a previous write happened
+ * to order them.
+ */
+function sameEntries(a: readonly unknown[], b: readonly unknown[]): boolean {
+  if (a.length !== b.length) return false
+  return a.every((entry, index) => canonicalJson(entry) === canonicalJson(b[index]))
+}
+
+/** JSON with object keys sorted at every depth, for stable comparison. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  const record = asRecord(value)
+  if (record === undefined) return JSON.stringify(value) ?? 'null'
+  return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
 }
 
 /** The ref the derived route stores: the profile's own, else the vendor's env var. */
