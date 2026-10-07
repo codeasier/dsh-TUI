@@ -90,10 +90,14 @@
  * offline editing, inheritance resets, validation and no-op saves.
  * 63. managing official models: the vendor's extra ids are the selectable
  *    rows (enabled ones pre-checked), nothing is enabled that the user did not
- *    tick, and the derived route is written with exactly that set.
+ *    tick, and the derived route is written with exactly that set — enriched
+ *    with the vendor catalog's name, capacities, modalities and thinking tiers.
+ * 43b. without the vendor catalog (models.dev unreachable) the same pass still
+ *    works: rows say so, entries stay bare, and the user is told.
  * 64. un-checking an enabled model removes it while a kept id re-enters its
- *    stored entry, per-model fields intact.
- * 65. a selection that matches the enabled set writes nothing.
+ *    stored entry, hand-tuned fields beating the catalog.
+ * 65. a selection that already matches writes nothing, while a bare stored
+ *    entry gains the catalog fields exactly once.
  * 66. no resolvable key refuses by name and never probes.
  * 67. a failed vendor listing changes nothing.
  * 68. clearing every row retires the derived route; with no derived route it
@@ -238,6 +242,11 @@ function makeDeps(script, options = {}) {
     },
     ...(options.oauth ? { oauth: options.oauth } : {}),
   }
+  // Vendor metadata source: the fixture by default, `null` to simulate an
+  // offline/unreachable models.dev.
+  const readVendorCatalog = options.vendorCatalog === null
+    ? async () => undefined
+    : async () => options.vendorCatalog ?? VENDOR_CATALOG
   const deps = {
     host,
     ask: async request => {
@@ -270,6 +279,7 @@ function makeDeps(script, options = {}) {
     },
     notify: (text, opts) => { calls.notifications.push({ text, color: opts?.color }) },
     pushLocal: (title, lines) => { calls.pushed.push({ title, lines }) },
+    readVendorCatalog,
     working: () => options.working ?? false,
     switchModel: async (provider, model) => {
       calls.switches.push([provider, model])
@@ -287,6 +297,38 @@ const KEEP_MODEL = { selected: [t('provider-opt-switch-keep')] }
 const ACTION_ADD = { selected: [t('provider-opt-action-add')] }
 const ACTION_EDIT = { selected: [t('provider-opt-action-edit')] }
 const ACTION_SYNC = { selected: [t('provider-opt-action-sync')] }
+// models.dev-shaped fixture: the fields the wizard maps onto a model entry.
+const VENDOR_CATALOG = {
+  'opencode-go': {
+    models: {
+      'grok-4.5': {
+        name: 'Grok 4.5',
+        limit: { context: 500000, output: 500000 },
+        modalities: { input: ['text', 'image'] },
+        reasoning: true,
+        reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high'] }],
+      },
+      'longcat-2.5-preview-free': {
+        name: 'LongCat 2.5 Preview Free',
+        limit: { context: 1000000, output: 131072 },
+        modalities: { input: ['text', 'image'] },
+        reasoning: true,
+        reasoning_options: [{ type: 'toggle' }],
+      },
+    },
+  },
+  'opencode': {
+    models: {
+      'glm-5': {
+        name: 'GLM-5',
+        limit: { context: 204800, output: 131072 },
+        modalities: { input: ['text'] },
+        reasoning: true,
+        reasoning_options: [{ type: 'toggle' }],
+      },
+    },
+  },
+}
 // Edit-menu picks (asked exactly once per edit session).
 const MENU_KEY = { selected: [t('provider-opt-edit-key')] }
 const MENU_BASEURL = { selected: [t('provider-opt-edit-baseurl')] }
@@ -1780,7 +1822,8 @@ for (const invalid of [
 
 // 43. Managing official models: only the vendor's extra ids are selectable
 // (the catalog route cannot carry them), nothing is pre-checked on a first
-// pass, and the write carries exactly what the user ticked.
+// pass, and the write carries exactly what the user ticked — enriched with the
+// vendor catalog's name, capacities, modalities and thinking tiers.
 {
   const { deps, calls } = makeDeps({
     'action': ACTION_SYNC,
@@ -1805,6 +1848,24 @@ for (const invalid of [
     eq(Object.keys(calls.optionDescriptions['sync-models'] ?? {}).sort(), ['grok-4.5', 'longcat-2.5-preview-free'])
       && eq(calls.defaults['sync-models'], []),
     JSON.stringify({ rows: Object.keys(calls.optionDescriptions['sync-models'] ?? {}), defaults: calls.defaults['sync-models'] }))
+  check('43 manage: rows describe the catalog metadata (name, capacities, modalities, tiers)',
+    calls.optionDescriptions['sync-models']?.['longcat-2.5-preview-free']
+      === [
+        'LongCat 2.5 Preview Free',
+        t('provider-row-meta-ctx', { value: '1M' }),
+        t('provider-row-meta-out', { value: '128k' }),
+        t('provider-row-meta-input', { value: 'text+image' }),
+        t('provider-row-meta-effort', { value: 'off/high' }),
+      ].join(' · ')
+      && calls.optionDescriptions['sync-models']?.['grok-4.5']
+        === [
+          'Grok 4.5',
+          t('provider-row-meta-ctx', { value: '500k' }),
+          t('provider-row-meta-out', { value: '500k' }),
+          t('provider-row-meta-input', { value: 'text+image' }),
+          t('provider-row-meta-effort', { value: 'low/medium/high' }),
+        ].join(' · '),
+    JSON.stringify(calls.optionDescriptions['sync-models']))
   check('43 manage: the detail counts enabled versus un-enabled',
     calls.details['sync-models'] === t('provider-sync-detail', {
       total: 2,
@@ -1812,17 +1873,23 @@ for (const invalid of [
       unenabled: 2,
       derived: 'opencode-go-live',
     }), JSON.stringify(calls.details['sync-models']))
-  check('43 manage: the derived route enables exactly the ticked id',
-    eq(calls.mutations, [[
-      'opencode-go-live',
-      [
-        { op: 'set', path: ['models'], value: [{ id: 'longcat-2.5-preview-free' }] },
-        { op: 'set', path: ['api'], value: 'openai-completions' },
-        { op: 'set', path: ['baseURL'], value: 'https://opencode.ai/zen/go/v1' },
-        { op: 'set', path: ['apiKeyEnv'], value: 'OPENCODE_GO_API_KEY' },
-        { op: 'set', path: ['displayName'], value: 'OpenCode Go (live)' },
-      ],
-    ]]), JSON.stringify(calls.mutations))
+  const written = calls.mutations[0]?.[1]?.[0]?.value ?? []
+  check('43 manage: the derived route enables exactly the ticked id, enriched',
+    calls.mutations.length === 1 && calls.mutations[0]?.[0] === 'opencode-go-live'
+      && written.length === 1 && written[0].id === 'longcat-2.5-preview-free'
+      && written[0].name === 'LongCat 2.5 Preview Free'
+      && written[0].contextWindow === 1000000
+      && written[0].maxTokens === 131072
+      && eq(written[0].input, ['text', 'image'])
+      && eq(written[0].reasoningEfforts, { off: 'none', high: 'high' }),
+    JSON.stringify(calls.mutations))
+  check('43 manage: the route identity rides the same write',
+    eq(calls.mutations[0]?.[1]?.slice(1), [
+      { op: 'set', path: ['api'], value: 'openai-completions' },
+      { op: 'set', path: ['baseURL'], value: 'https://opencode.ai/zen/go/v1' },
+      { op: 'set', path: ['apiKeyEnv'], value: 'OPENCODE_GO_API_KEY' },
+      { op: 'set', path: ['displayName'], value: 'OpenCode Go (live)' },
+    ]), JSON.stringify(calls.mutations[0]?.[1]))
   check('43 manage: the catalog route profile is untouched',
     calls.profiles.length === 0 && calls.credentials.length === 0,
     JSON.stringify({ profiles: calls.profiles, credentials: calls.credentials }))
@@ -1843,8 +1910,34 @@ for (const invalid of [
     JSON.stringify(calls.notifications))
 }
 
-// 44. Un-checking an enabled model disables it, while a kept id re-enters its
-// STORED entry so per-model fields this module never models survive.
+// 43b. Without the vendor catalog (models.dev unreachable) the same pass still
+// works: rows say so, entries stay bare, and the user is told.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['longcat-2.5-preview-free'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    vendorCatalog: null,
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'longcat-2.5-preview-free' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  const written = calls.mutations[0]?.[1]?.[0]?.value ?? []
+  check('43b manage without metadata: outcome synced with a bare entry',
+    outcome === 'synced' && eq(written, [{ id: 'longcat-2.5-preview-free' }]),
+    JSON.stringify({ outcome, mutations: calls.mutations }))
+  check('43b manage without metadata: the row and the toast say so',
+    calls.optionDescriptions['sync-models']?.['longcat-2.5-preview-free'] === t('provider-sync-row-no-meta')
+      && calls.notifications.some(n => n.color === 'warning' && n.text === t('provider-sync-meta-unavailable')),
+    JSON.stringify({ rows: calls.optionDescriptions['sync-models'], notifications: calls.notifications }))
+}
+
+// 44. Un-checking an enabled model disables it, while a kept id keeps the
+// fields its stored entry states (hand-tuned values beat the catalog).
 {
   const { deps, calls } = makeDeps({
     'action': ACTION_SYNC,
@@ -1870,25 +1963,19 @@ for (const invalid of [
       : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }, { id: 'longcat-2.5-preview-free' }],
   })
   const outcome = await runProviderWizard(deps)
+  const written = calls.mutations[0]?.[1]?.[0]?.value ?? []
   check('44 manage disable: outcome synced', outcome === 'synced', outcome)
   check('44 manage disable: the enabled ids arrive pre-checked',
     eq(calls.defaults['sync-models'], ['grok-4.5', 'longcat-2.5-preview-free']),
     JSON.stringify(calls.defaults['sync-models']))
-  check('44 manage disable: the kept entry keeps its stored fields, the disabled id leaves',
-    eq(calls.mutations, [[
-      'opencode-go-live',
-      [
-        {
-          op: 'set',
-          path: ['models'],
-          value: [{ id: 'grok-4.5', contextWindow: 1000000, compat: { supportsStore: false } }],
-        },
-        { op: 'set', path: ['api'], value: 'openai-completions' },
-        { op: 'set', path: ['baseURL'], value: 'https://opencode.ai/zen/go/v1' },
-        { op: 'set', path: ['apiKeyEnv'], value: 'OPENCODE_GO_API_KEY' },
-        { op: 'set', path: ['displayName'], value: 'OpenCode Go (live)' },
-      ],
-    ]]), JSON.stringify(calls.mutations))
+  check('44 manage disable: the disabled id leaves, the kept entry keeps its hand-tuned field',
+    written.length === 1 && written[0].id === 'grok-4.5'
+      && written[0].contextWindow === 1000000
+      && eq(written[0].compat, { supportsStore: false })
+      && written[0].name === 'Grok 4.5'
+      && written[0].maxTokens === 500000
+      && eq(written[0].reasoningEfforts, { low: 'low', medium: 'medium', high: 'high' }),
+    JSON.stringify(written))
   check('44 manage disable: the toast counts the change',
     calls.notifications.some(n => n.color === 'success'
       && n.text === t('provider-sync-success', {
@@ -1901,8 +1988,17 @@ for (const invalid of [
     JSON.stringify(calls.notifications))
 }
 
-// 45. Re-applying the current enabled set writes nothing and drops no cache.
+// 45. Re-applying the current enabled set writes nothing — but a stored entry
+// that predates the metadata (a bare id) is enriched exactly once.
 {
+  const ENRICHED_GROK = {
+    name: 'Grok 4.5',
+    contextWindow: 500000,
+    maxTokens: 500000,
+    input: ['text', 'image'],
+    reasoningEfforts: { low: 'low', medium: 'medium', high: 'high' },
+    id: 'grok-4.5',
+  }
   const { deps, calls } = makeDeps({
     'action': ACTION_SYNC,
     'sync-models': { selected: ['grok-4.5'] },
@@ -1910,7 +2006,7 @@ for (const invalid of [
     catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
     configured: [
       { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
-      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], modelEntries: [ENRICHED_GROK] },
     ],
     storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
     discover: request => request.provider !== undefined
@@ -1923,6 +2019,29 @@ for (const invalid of [
   check('45 manage no-op: toast says it already matches',
     calls.notifications.some(n => n.text === t('provider-sync-unchanged', { route: 'opencode-go', derived: 'opencode-go-live' })),
     JSON.stringify(calls.notifications))
+
+  // Same selection over a bare stored entry: the catalog fields are added once.
+  const bare = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['grok-4.5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], modelEntries: [{ id: 'grok-4.5' }] },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const bareOutcome = await runProviderWizard(bare.deps)
+  const enriched = bare.calls.mutations[0]?.[1]?.[0]?.value ?? []
+  check('45 manage enrichment: a bare entry gains the catalog fields once',
+    bareOutcome === 'synced' && enriched.length === 1 && enriched[0].id === 'grok-4.5'
+      && enriched[0].name === 'Grok 4.5' && enriched[0].contextWindow === 500000
+      && eq(enriched[0].reasoningEfforts, { low: 'low', medium: 'medium', high: 'high' }),
+    JSON.stringify({ outcome: bareOutcome, mutations: bare.calls.mutations }))
 }
 
 // 46. No resolvable key: refused by name, and no probe is attempted.

@@ -24,10 +24,14 @@ import {
   catalogLiveTarget,
   derivedCatalogRoute,
   inspectCatalogRoutes,
+  readVendorCatalog,
   syncableCatalogRoutes,
+  vendorMetadataFor,
   writeCatalogSyncSelection,
   type CatalogSyncStatus,
   type CatalogSyncWrite,
+  type VendorCatalogDocument,
+  type VendorModelMetadata,
 } from './catalogSync.js'
 import { isReservedCredentialRef } from './credentialRefGuard.js'
 import {
@@ -75,6 +79,12 @@ export interface ProviderWizardDeps {
   /** Live turn state; the model-switch question is skipped while working. */
   readonly working: () => boolean
   readonly switchModel: (provider: string, model: string) => Promise<boolean>
+  /**
+   * Vendor-catalog source for model metadata (models.dev by default). Absent
+   * means the real read; a failure anywhere degrades to bare ids, never to a
+   * failed pass. Tests inject a stub.
+   */
+  readonly readVendorCatalog?: (signal?: AbortSignal) => Promise<VendorCatalogDocument | undefined>
 }
 
 export type ProviderWizardOutcome = 'added' | 'updated' | 'synced' | 'deleted' | 'signed-out' | 'cancelled' | 'failed'
@@ -261,10 +271,19 @@ async function runCatalogSyncWizard(deps: ProviderWizardDeps): Promise<ProviderW
     return status.failed === true ? 'failed' : 'cancelled'
   }
 
-  // Rows: every vendor-only model, plus any enabled id the vendor no longer
-  // advertises (so it can be turned off, not silently inherited). Enabled ids
-  // are pre-checked; custom input stays available because the derived route
-  // declares protocol and endpoint, so it can serve an id the listing omits.
+  // Metadata is what makes the rows readable and the enabled entries usable:
+  // the vendor listing carries ids only, so name, capacities, modalities and
+  // thinking tiers come from the vendor catalog (models.dev). Best effort —
+  // without it the rows fall back to ids and the written entries stay bare.
+  const catalog = await (deps.readVendorCatalog ?? readVendorCatalog)()
+  const ids = [...(status.vendorOnly ?? []).map(row => row.id), ...status.enabled]
+  const metadata = catalog === undefined
+    ? new Map<string, VendorModelMetadata>()
+    : vendorMetadataFor(status.route, ids, catalog)
+  if (catalog === undefined) {
+    notify(t('provider-sync-meta-unavailable'), { color: 'warning', timeoutMs: 8000 })
+  }
+
   const vendorRows = status.vendorOnly ?? []
   const vendorIds = new Set(vendorRows.map(row => row.id))
   const retiredRows = status.enabled.filter(id => !vendorIds.has(id))
@@ -272,7 +291,7 @@ async function runCatalogSyncWizard(deps: ProviderWizardDeps): Promise<ProviderW
     questions: [optionQuestion('sync-models', t('provider-q-sync-models', { route: status.route }), [
       ...vendorRows.map(row => ({
         label: row.id,
-        description: modelRowDescription(row, true),
+        description: vendorRowDescription(row.id, metadata.get(row.id)),
       })),
       ...retiredRows.map(id => ({ label: id, description: t('provider-sync-row-retired') })),
     ], {
@@ -293,7 +312,7 @@ async function runCatalogSyncWizard(deps: ProviderWizardDeps): Promise<ProviderW
 
   let write: CatalogSyncWrite
   try {
-    write = await writeCatalogSyncSelection(host, status, selected)
+    write = await writeCatalogSyncSelection(host, status, selected, metadata)
   } catch (error) {
     const err = error instanceof Error ? error.message : String(error)
     notify(t('provider-write-failed', { err }), { color: 'error', timeoutMs: 8000 })
@@ -323,6 +342,32 @@ async function runCatalogSyncWizard(deps: ProviderWizardDeps): Promise<ProviderW
     removed: write.removed.length,
   }), { color: 'success' })
   return 'synced'
+}
+
+/**
+ * The panel description for one vendor-only model: what the vendor catalog
+ * says about it, in the wizard's own words. An id the catalog does not
+ * describe says so instead of pretending to know.
+ */
+function vendorRowDescription(id: string, metadata: VendorModelMetadata | undefined): string | undefined {
+  if (metadata === undefined) return t('provider-sync-row-no-meta')
+  const parts = [metadata.name ?? id]
+  if (metadata.contextWindow !== undefined) {
+    parts.push(t('provider-row-meta-ctx', { value: formatCapacity(metadata.contextWindow) }))
+  }
+  if (metadata.maxTokens !== undefined) {
+    parts.push(t('provider-row-meta-out', { value: formatCapacity(metadata.maxTokens) }))
+  }
+  if (metadata.input !== undefined) {
+    parts.push(t('provider-row-meta-input', { value: metadata.input.join('+') }))
+  }
+  const efforts = metadata.reasoningEfforts
+  if (efforts === false) parts.push(t('provider-row-meta-no-reasoning'))
+  else if (efforts !== undefined) {
+    const levels = Object.keys(efforts)
+    if (levels.length > 0) parts.push(t('provider-row-meta-effort', { value: levels.join('/') }))
+  }
+  return parts.join(' · ')
 }
 
 /**
@@ -1478,10 +1523,16 @@ function notifyDiscoveryStatus(
   }
 }
 
-/** Compact capacity rendering for picker rows: 1000000 → 1M, 384000 → 384k. */
+/**
+ * Compact capacity rendering for picker rows: 1000000 → 1M, 384000 → 384k,
+ * and binary-ish windows round to the k they are read as (131072 → 131k,
+ * 262144 → 262k) instead of printing six digits.
+ */
 function formatCapacity(n: number): string {
   if (n >= 1_000_000 && n % 1_000_000 === 0) return `${n / 1_000_000}M`
   if (n >= 1_000 && n % 1_000 === 0) return `${n / 1_000}k`
+  if (n >= 1_000 && n % 1_024 === 0) return `${n / 1_024}k`
+  if (n >= 10_000) return `${Math.round(n / 1_000)}k`
   return `${n}`
 }
 
