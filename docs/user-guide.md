@@ -479,7 +479,7 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 - `/provider` 交互向导管理模型提供方：添加 / 编辑 / 删除 / 同步官方新增模型。
   - 标准 profile 的内置 OAuth 模块提供 **订阅账号登录**（ChatGPT/Codex / Claude / Grok；较新 pi-ai 另有 OpenAI 直连 / Meta Muse，免 API key）；也可用 `/auth login <provider>`，`/auth logout <provider>` 删除保存的 OAuth 凭据。
   - DSH 0.2.0-rc.1+ 的 DeepSeek 账号经宿主浏览器授权：`/auth login deepseek-account`，随后用 `/model` 选独立的 `deepseek-account` 路由；`/auth logout deepseek-account` 由宿主退登。它不修改 `deepseek-official` 的 API key。
-  - 「同步官方新增模型」（启动时默认自动跑一次）实时读取厂商端点清单，把安装版 pi-ai 目录快照没有的模型写入派生路由 `<路由名>-live`，`/model` 里随即出现；catalog 路由自身配置与已启用模型子集不改动。详见[配置参考](configuration.md#provider运行时管理模型提供方)。
+  - 「同步官方新增模型」（启动时默认自动跑一次，**连接该 provider 时也会立刻跑一次**）实时读取厂商端点清单，把安装版 pi-ai 目录快照没有的模型写入派生路由 `<路由名>-live`，`/model` 里随即出现；catalog 路由自身配置与已启用模型子集不改动，这些新增 id 也不会出现在该路由自己的候选行里。详见[配置参考](configuration.md#provider运行时管理模型提供方)。
 - 非环境变量 API key 写入 `~/.dsh/.credentials.yaml`（0600），界面只显示 `••••••`；pi-ai 订阅 OAuth 凭据另存于 `$DSH_HOME/dsh-auth/credentials.json`（未设置 DSH_HOME 时为 `~/.dsh/dsh-auth/credentials.json`）。DeepSeek 账号授权记录由宿主凭据服务持有，不写入此 OAuth 文件。
   - 自定义端点需填路由名、API key、baseURL 与协议（`openai-completions` / `openai-responses` /
   `anthropic-messages`）。
