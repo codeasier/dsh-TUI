@@ -21,6 +21,8 @@ export type { ProviderSetupHost, CatalogProviderCandidate, ConfiguredProvider, P
 
 import { t } from '../i18n.js'
 import {
+  catalogLiveTarget,
+  derivedCatalogRoute,
   syncableCatalogRoutes,
   syncCatalogRoutes,
   type CatalogSyncResult,
@@ -262,10 +264,7 @@ function reportCatalogSync(
 ): ProviderWizardOutcome {
   const { notify, pushLocal } = deps
   if (result.status === 'synced') {
-    pushLocal('/provider', [
-      t('provider-sync-transcript-route', { route: result.route, derived: result.derived }),
-      modelsSummaryLine(result.models, { added: result.added, removed: result.removed }),
-    ])
+    pushLocal('/provider', catalogSyncTranscriptLines(result))
     notify(t('provider-sync-success', {
       route: result.route,
       derived: result.derived,
@@ -274,10 +273,7 @@ function reportCatalogSync(
     return 'synced'
   }
   if (result.status === 'removed') {
-    pushLocal('/provider', [
-      t('provider-sync-transcript-route', { route: result.route, derived: result.derived }),
-      t('provider-sync-line-pruned', { n: result.removed.length }),
-    ])
+    pushLocal('/provider', catalogSyncTranscriptLines(result))
     notify(t('provider-sync-removed', { route: result.route, derived: result.derived }), { color: 'success' })
     return 'synced'
   }
@@ -287,26 +283,116 @@ function reportCatalogSync(
   }
   // Refusals name their cause: each reason is its own message, so a no-op
   // never reads as a mysterious success.
+  notify(t(catalogSyncReasonKey(result), {
+    route: result.route,
+    derived: result.derived,
+  }), { color: 'warning', timeoutMs: 8000 })
+  return result.status === 'failed' ? 'failed' : 'cancelled'
+}
+
+/**
+ * Mirror a just-connected catalog route's vendor extras into the derived
+ * route, and translate the pass into the add flow's own vocabulary: a real
+ * change is a transcript line plus a toast, a refusal is a warning that never
+ * fails the connect (the profile write already landed), and an unchanged
+ * route says nothing at all.
+ * @returns the transcript lines to append to the add summary.
+ */
+async function syncConnectedRoute(
+  deps: ProviderWizardDeps,
+  route: string,
+): Promise<string[]> {
+  const { host, notify } = deps
+  let result: CatalogSyncResult | undefined
+  try {
+    [result] = await syncCatalogRoutes(host, { route })
+  } catch (error) {
+    const err = error instanceof Error ? error.message : String(error)
+    notify(t('provider-sync-write-failed', { err }), { color: 'warning', timeoutMs: 8000 })
+    return []
+  }
+  if (result === undefined || result.status === 'unchanged') return []
+  if (result.status === 'synced') {
+    notify(t('provider-sync-success', {
+      route: result.route,
+      derived: result.derived,
+      n: result.added.length,
+    }), { color: 'success' })
+    return catalogSyncTranscriptLines(result)
+  }
+  if (result.status === 'removed') {
+    notify(t('provider-sync-removed', { route: result.route, derived: result.derived }), { color: 'success' })
+    return catalogSyncTranscriptLines(result)
+  }
+  notify(t(catalogSyncReasonKey(result), {
+    route: result.route,
+    derived: result.derived,
+  }), { color: 'warning', timeoutMs: 8000 })
+  return []
+}
+
+/** The transcript lines one sync pass reports (see {@link reportCatalogSync}). */
+function catalogSyncTranscriptLines(result: CatalogSyncResult): string[] {
+  return [
+    t('provider-sync-transcript-route', { route: result.route, derived: result.derived }),
+    result.status === 'removed'
+      ? t('provider-sync-line-pruned', { n: result.removed.length })
+      : modelsSummaryLine(result.models, { added: result.added, removed: result.removed }),
+  ]
+}
+
+/**
+ * The message key one refusal or failed pass reports under, so the interactive
+ * branch and the connect-time pass name the same cause.
+ */
+function catalogSyncReasonKey(result: CatalogSyncResult): Parameters<typeof t>[0] {
   const reason = result.reason
   if (result.status === 'failed') {
-    notify(t(reason === 'listing-empty' ? 'provider-sync-listing-empty' : 'provider-sync-listing-failed',
-      { route: result.route }), { color: 'warning', timeoutMs: 8000 })
-    return 'failed'
+    return reason === 'listing-empty' ? 'provider-sync-listing-empty' : 'provider-sync-listing-failed'
   }
-  const key = reason === 'no-credential' ? 'provider-sync-no-credential'
+  return reason === 'no-credential' ? 'provider-sync-no-credential'
     : reason === 'derived-conflict' ? 'provider-sync-derived-conflict'
       : reason === 'not-catalog' ? 'provider-sync-not-catalog'
         : reason === 'catalog-failed' ? 'provider-sync-catalog-failed'
           : 'provider-sync-listing-failed'
-  notify(t(key, { route: result.route, derived: result.derived }), { color: 'warning', timeoutMs: 8000 })
-  return 'cancelled'
 }
+
+/**
+ * The question detail for the model list of a catalog route: which extra
+ * models the vendor publishes (and the derived route they are enabled under),
+ * else the installed-snapshot origin when there is nothing live to report.
+ */
+function modelsQuestionDetail(
+  isCatalog: boolean,
+  discovery: RouteDiscovery,
+  discoveredCount: number,
+): string | undefined {
+  if (!isCatalog) return undefined
+  const vendorOnly = discovery.vendorOnly
+  if (vendorOnly !== undefined && vendorOnly.length > 0 && discovery.vendorDerived !== undefined) {
+    return t('provider-catalog-vendor-note', {
+      n: vendorOnly.length,
+      models: vendorOnly.slice(0, VENDOR_NOTE_IDS).map(model => model.id).join(', ')
+        + (vendorOnly.length > VENDOR_NOTE_IDS ? ', …' : ''),
+      derived: discovery.vendorDerived,
+    })
+  }
+  return discovery.reason === 'no-base-url'
+    ? t('provider-catalog-snapshot-note', { n: discoveredCount })
+    : undefined
+}
+
+/** Vendor-only ids named in the model question before the list is elided. */
+const VENDOR_NOTE_IDS = 6
 
 /**
  * The guided add flow behind `/provider`'s "Add a new provider" branch:
  * mode (catalog / custom / optional OAuth), route, API key, endpoint /
  * protocol, model discovery + selection, confirm, then persist with
- * credential rollback. Esc anywhere cancels with nothing written.
+ * credential rollback. A catalog route with a vendor listing then gets one
+ * sync pass, so the models the installed snapshot lacks are enabled under the
+ * derived route before the flow ends (see `catalogSync.ts`). Esc anywhere
+ * cancels with nothing written.
  */
 async function runAddFlow(
   deps: ProviderWizardDeps,
@@ -419,6 +505,9 @@ async function runAddFlow(
     discoveredById,
   )
   if (discovered.length > 0) {
+    // The id→model map is already built above; the fork's re-assignment is
+    // redundant in the merged shape (upstream hoisted the construction).
+    const modelsDetail = modelsQuestionDetail(isCatalog, discovery, discovered.length)
     const modelsAnswer = await ask({
       questions: [optionQuestion('models', t('provider-q-models'),
         discovered.map(model => ({
@@ -431,9 +520,7 @@ async function runAddFlow(
         {
           multiSelect: true,
           modelEditor: capabilities.editor,
-          ...(isCatalog && discovery.reason === 'no-base-url'
-            ? { detail: t('provider-catalog-snapshot-note', { n: discovered.length }) }
-            : {}),
+          ...(modelsDetail === undefined ? {} : { detail: modelsDetail }),
         },
       )],
     })
@@ -532,9 +619,20 @@ async function runAddFlow(
     return 'failed'
   }
 
-  // ── 9. success: transcript summary + optional live switch ──────────
+  // ── 9. mirror the vendor's extra models ────────────────────────────
+  // The profile just written serves the installed snapshot only, so a model
+  // the vendor added after that snapshot stays unreachable until a sync pass
+  // runs — which would otherwise wait for the next boot or a manual sync. Run
+  // it here so the derived route exists by the time the wizard returns and
+  // /model lists those models right away.
+  const syncLines = isCatalog && catalogLiveTarget(route) !== undefined
+    ? await syncConnectedRoute(deps, route)
+    : []
+
+  // ── 10. success: transcript summary + optional live switch ─────────
   pushLocal('/provider', [
     ...summaryLines,
+    ...syncLines,
     ...(deps.working() || models.length === 0
       ? [t('provider-switch-hint')]
       : []),
@@ -863,6 +961,7 @@ async function editModelList(
         label: id,
         description: t('provider-row-model-missing'),
       }))
+    const editModelsDetail = modelsQuestionDetail(isCatalog, discovery, discovered.length)
     const modelsAnswer = await ask({
       questions: [optionQuestion('models', t('provider-q-models'),
         [...optionRows, ...missingRows],
@@ -870,9 +969,7 @@ async function editModelList(
           multiSelect: true,
           defaultSelected: previous,
           modelEditor: capabilities.editor,
-          ...(isCatalog && discovery.reason === 'no-base-url'
-            ? { detail: t('provider-catalog-snapshot-note', { n: discovered.length }) }
-            : {}),
+          ...(editModelsDetail === undefined ? {} : { detail: editModelsDetail }),
         },
       )],
     })
@@ -1258,6 +1355,16 @@ export interface RouteDiscovery {
   readonly catalog: RouteDiscoveryCatalog
   readonly live: RouteDiscoveryLive
   readonly reason?: RouteDiscoveryReason
+  /**
+   * Ids the route's own vendor listing advertises and the installed catalog
+   * does not describe — present only when this build knows that listing (a
+   * live target) and the probe succeeded. They are NOT selectable rows: the
+   * catalog route cannot carry them (see `catalogSync.ts`), so they are
+   * reported as a question detail and enabled under {@link vendorDerived}.
+   */
+  readonly vendorOnly?: readonly LlmDiscoveredModel[]
+  /** The derived route {@link vendorOnly} ids are enabled under. */
+  readonly vendorDerived?: string
 }
 
 /**
@@ -1270,6 +1377,12 @@ export interface RouteDiscovery {
  * seam cannot carry the named route's headers into an anonymous request).
  * The listings merge: an id present in both resolves to its catalog row,
  * endpoint-only ids append — those are the new models the wizard can surface.
+ *
+ * A route with a known live target gets one more probe even when it stores no
+ * baseURL: the vendor's own endpoint is a fact of the route (not of the
+ * profile), and its extras are what the sync enables under the derived route.
+ * Those rows stay OUT of `rows` — the catalog route cannot serve them — and
+ * travel as {@link RouteDiscovery.vendorOnly} for the question detail.
  *
  * The `apiKey` field is omitted rather than sent empty when no key is
  * knowable: an empty string is a hard invalid-credential upstream, while an
@@ -1294,13 +1407,38 @@ async function discoverRouteModels(
     : { rows: [] as const, catalog: 'unavailable' as const }
   const catalogRows = catalogResult.rows
   const catalogIds = new Set(catalogRows.map(row => row.id))
+  const provider = draft.provider
+  const target = provider === undefined ? undefined : catalogLiveTarget(provider)
   if (draft.baseURL === undefined || draft.baseURL === '') {
+    if (target === undefined || provider === undefined || draft.hasCustomHeaders) {
+      return {
+        rows: catalogRows,
+        catalogIds,
+        catalog: catalogResult.catalog,
+        live: 'unavailable',
+        reason: 'no-base-url',
+      }
+    }
+    const vendor = await host.discoverModels({
+      baseURL: target.baseURL,
+      api: target.api,
+      ...(draft.apiKey !== undefined && draft.apiKey !== '' ? { apiKey: draft.apiKey } : {}),
+    }).then(
+      rows => ({ rows, live: 'fetched' as const }),
+      () => ({ rows: [] as const, live: 'failed' as const }),
+    )
     return {
       rows: catalogRows,
       catalogIds,
       catalog: catalogResult.catalog,
-      live: 'unavailable',
+      live: vendor.live,
       reason: 'no-base-url',
+      ...(vendor.live === 'fetched'
+        ? {
+          vendorOnly: vendor.rows.filter(row => !catalogIds.has(row.id)),
+          vendorDerived: derivedCatalogRoute(provider),
+        }
+        : {}),
     }
   }
   if (draft.hasCustomHeaders) {

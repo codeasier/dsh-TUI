@@ -325,6 +325,12 @@ providers without a restart.
   offline, without a usable key, or with an unchanged listing it writes nothing
   and says nothing. The derived route is maintained wholesale by the sync —
   models added to it by hand are overwritten on the next pass.
+- While adding a catalog route, the model question also names the models the
+  vendor endpoint advertises beyond the snapshot and the derived route they are
+  enabled under. Those ids are never selectable rows on that route (it cannot
+  serve them); they are synced right after the write, so `/model` can pick them
+  as soon as the connect flow ends — no restart needed. Editing the same route's
+  model list repeats the note, and those ids stay unselectable there too.
 
 Where it writes:
 

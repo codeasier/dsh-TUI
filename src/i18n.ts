@@ -2049,6 +2049,8 @@ const dict = {
   'provider-live-fetch-unavailable': { zh: '该路由无法安全实时拉取模型，已回退到内置目录', en: 'Live model fetch is unavailable for this route — showing the installed catalog only' },
   'provider-catalog-models-only': { zh: '该 catalog 路由的协议无法确定，线上新增模型请先改用自定义端点并指定协议', en: 'This catalog route has no single known protocol; use a custom endpoint with an explicit protocol for new models' },
   'provider-catalog-snapshot-note': { zh: '下方 {{n}} 项来自内置目录快照；该路由未设置 baseURL，无法实时拉取端点模型', en: 'The {{n}} items below come from the installed catalog snapshot; this route sets no baseURL, so its endpoint cannot be probed live' },
+  'provider-catalog-vendor-note': { zh: '该路由只承载内置目录快照；官方端点另有 {{n}} 个新增模型（{{models}}）由同步写入派生路由 {{derived}}，连接后即可在 /model 选择', en: 'This route only serves the installed snapshot; the {{n}} model(s) the vendor added ({{models}}) are written by the sync into the derived route {{derived}} and become selectable in /model' },
+  'provider-sync-write-failed': { zh: '官方新增模型同步写入失败：{{err}}（provider 已连接，可稍后用「同步官方新增模型」重试）', en: 'Writing the synced official models failed: {{err}} (the provider is connected; retry with “Sync official models”)' },
   'provider-rollback-ok': { zh: '已回滚刚写入的密钥', en: 'Rolled back the just-written key' },
   'provider-rollback-failed': { zh: '密钥回滚失败，请手动检查 ~/.dsh/.credentials.yaml', en: 'Key rollback failed — check ~/.dsh/.credentials.yaml manually' },
   'provider-write-failed': { zh: 'provider 配置写入失败 · {{{err}}}', en: 'Failed to write the provider configuration · {{{err}}}' },
