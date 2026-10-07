@@ -490,7 +490,9 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
     目录之外的模型列为可勾选项（已启用的预勾选，并用 [models.dev](https://models.dev) 元数据
 "
        "    标注名称/上下文/输出/输入类型/思考档），勾选结果写入派生路由 `<路由名>-live`；
-    **没有模型会被自动启用**，全部取消即移除该派生路由。启动时默认只做只读检查（记入 debug
+    **没有模型会被自动启用**，全部取消即移除该派生路由；派生路由自带厂商要求的
+"
+       "    `x-opencode-session` 头（缺它 OpenCode 端点会 400，启动检查会自动补上）。启动时默认只做只读检查（记入 debug
     日志），不修改配置；catalog 路由自身配置与已启用模型子集一律不改写。详见[配置参考](configuration.md#provider运行时管理模型提供方)。
 - 非环境变量 API key 写入 `~/.dsh/.credentials.yaml`（0600），界面只显示 `••••••`；pi-ai 订阅 OAuth 凭据另存于 `$DSH_HOME/dsh-auth/credentials.json`（未设置 DSH_HOME 时为 `~/.dsh/dsh-auth/credentials.json`）。DeepSeek 账号授权记录由宿主凭据服务持有，不写入此 OAuth 文件。
   - 自定义端点需填路由名、API key、baseURL 与协议（`openai-completions` / `openai-responses` /

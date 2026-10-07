@@ -257,8 +257,10 @@ export interface Config {
    *  `catalogSync.ts`) is read once per start, and the models the installed
    *  pi-ai snapshot does not describe — which cannot live on the catalog route
    *  itself, since a profile only carries route-level protocol/endpoint — are
-   *  logged as not enabled. Nothing is written: which of them a session can
-   *  pick is the user's call, made in `/provider` → manage official models
+   *  logged as not enabled. No model is enabled or disabled by it —
+   *  the single write is repairing a derived route's missing vendor routing
+   *  header — because which of them a session can pick is the user's call,
+   *  made in `/provider` → manage official models
    *  (they are served from the derived route `<route>-live`). Best effort:
    *  offline, missing key or an unreadable listing is silent. `false` skips
    *  the boot pass; the `/provider` branch still works on demand. */

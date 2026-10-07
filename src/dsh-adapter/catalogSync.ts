@@ -20,6 +20,10 @@
  *     the only writer is {@link writeCatalogSyncSelection}, called with
  *     exactly the ids the user picked.
  *
+ * The derived route also carries the vendor's routing header
+ * ({@link OPENCODE_SESSION_HEADER}): declared routes bypass pi-ai's own
+ * per-request OpenCode wrapper, and the vendor refuses a request without it.
+ *
  * Only routes with a known live target ({@link CATALOG_LIVE_TARGETS}) are
  * eligible: which endpoint publishes a route's roster, and over which
  * protocol, is a vendor fact that no profile states. The catalog route itself
@@ -29,6 +33,7 @@
  * never overwritten — that shape means a human repurposed the route.
  */
 
+import { randomUUID } from 'node:crypto'
 import type { LlmDiscoveredModel } from '../adapter/ports/channel-view.js'
 import type { ConfiguredProvider, ProviderSetupHost } from '../adapter/ports/channel-settings.js'
 
@@ -80,6 +85,18 @@ export function catalogLiveTarget(route: string): CatalogLiveTarget | undefined 
   return Object.hasOwn(CATALOG_LIVE_TARGETS, route) ? CATALOG_LIVE_TARGETS[route] : undefined
 }
 
+/**
+ * The routing header the OpenCode endpoints require on every request
+ * (`400 MissingSessionID` without it). pi-ai's own catalog providers add it
+ * per request from the harness session id — but only their own api
+ * implementations do, and a DECLARED route (which is what the derived route
+ * is, since its models are not in the installed catalog) is served by the
+ * plain protocol implementation, whose per-request session id has nowhere to
+ * go. A route-level header is the seam that survives that: one stable value
+ * per derived route, generated on first write and kept afterwards.
+ */
+export const OPENCODE_SESSION_HEADER = 'x-opencode-session'
+
 /** The derived route one catalog route's vendor extras are managed on. */
 export function derivedCatalogRoute(route: string): string {
   return `${route}-live`
@@ -122,6 +139,8 @@ export interface CatalogSyncStatus {
   readonly vendorOnly?: readonly LlmDiscoveredModel[]
   /** Ids currently enabled on the derived route, in stored order. */
   readonly enabled: readonly string[]
+  /** Resolved request headers of the derived route, when it is stored. */
+  readonly headers?: Readonly<Record<string, string>>
   /** Vendor-advertised ids that are NOT enabled (the "new on endpoint" set). */
   readonly unenabled?: readonly string[]
   /** Enabled ids the vendor no longer advertises. */
@@ -184,7 +203,7 @@ export async function inspectCatalogRoute(
   const stored = host.listConfiguredProviders().find(row => row.route === derived)
   const enabled = stored?.models ?? []
   const refused = (reason: CatalogSyncReason, failed = false): CatalogSyncStatus =>
-    ({ route: provider.route, derived, displayName, enabled, reason, failed })
+    ({ route: provider.route, derived, displayName, enabled, headers: stored?.headers, reason, failed })
   if (!provider.isCatalog) return refused('not-catalog')
   const ref = await syncRefOf(host, provider, target)
   if (ref === undefined) return refused('no-credential')
@@ -228,6 +247,7 @@ export async function inspectCatalogRoute(
     derived,
     displayName,
     ref,
+    headers: stored?.headers,
     vendorOnly,
     enabled,
     unenabled: vendorOnly.filter(row => !enabled.includes(row.id)).map(row => row.id),
@@ -306,10 +326,20 @@ export async function writeCatalogModels(
     ...(metadata?.get(id) ?? {}),
     ...(storedById.get(id) ?? { id }),
   }))
-  // Unchanged means the entries themselves match: an enrichment pass that
-  // adds a name or a capacity really does change the profile, while a
-  // re-submitted identical set must not rewrite settings.
-  if (stored !== undefined && stored.ref === spec.ref && sameEntries(entries, storedEntries)) {
+  // The vendor's routing header: one stable value per derived route, reused
+  // across passes (regenerating it every write would make every pass look
+  // like a change — and look like a new session to the vendor).
+  const headers = { ...(stored?.headers ?? {}) }
+  const sessionId = headers[OPENCODE_SESSION_HEADER]
+  if (typeof sessionId !== 'string' || sessionId === '') {
+    headers[OPENCODE_SESSION_HEADER] = randomUUID()
+  }
+  // Unchanged means the entries AND the routing header already match: an
+  // enrichment pass that adds a name or a capacity really does change the
+  // profile, while a re-submitted identical set must not rewrite settings.
+  if (stored !== undefined && stored.ref === spec.ref
+    && sameEntries(entries, storedEntries)
+    && sameHeaders(headers, stored.headers)) {
     return { status: 'unchanged', added: [], removed: [], models: [...selectedIds] }
   }
   await host.mutateProfile(derived, [
@@ -318,6 +348,7 @@ export async function writeCatalogModels(
     { op: 'set', path: ['baseURL'], value: target.baseURL },
     { op: 'set', path: ['apiKeyEnv'], value: spec.ref },
     { op: 'set', path: ['displayName'], value: `${displayName} (live)` },
+    { op: 'set', path: ['headers'], value: headers },
   ])
   return { status: 'written', added, removed, models: [...selectedIds] }
 }
@@ -509,10 +540,13 @@ function reasoningEffortsFrom(entry: Record<string, unknown>): Readonly<Record<s
 }
 
 /**
- * Best-effort boot pass: inspect every eligible route and log what the user has
- * not enabled (and what the vendor retired). It writes nothing — a boot must
- * never change which models the user can pick — so repeated starts stay silent
- * apart from these lines.
+ * Best-effort boot pass: inspect every eligible route, log what the user has
+ * not enabled (and what the vendor retired), and repair the one thing that is
+ * not a user choice — a derived route that carries enabled models but not the
+ * vendor's routing header ({@link OPENCODE_SESSION_HEADER}), which the vendor
+ * answers with `400 MissingSessionID`. Enablement is never touched: no model is
+ * turned on or off here, so an unchanged start stays silent apart from its
+ * lines.
  * @param host - the provider-setup seam.
  * @param log - one line per real event; the caller picks level and prefix.
  */
@@ -534,6 +568,15 @@ export async function reportCatalogRoutesQuietly(
     if (retired.length > 0) {
       log(`${status.route}: ${retired.length} enabled model(s) the endpoint no longer advertises (${retired.join(', ')})`, 'debug')
     }
+    const sessionId = status.headers?.[OPENCODE_SESSION_HEADER]
+    if (status.enabled.length > 0 && status.ref !== undefined
+      && (typeof sessionId !== 'string' || sessionId === '')) {
+      // A route enabled before the header requirement — or written by an older
+      // build — cannot serve a single request without it. Repairing it adds no
+      // model and removes none, so it is not an enablement decision.
+      await writeCatalogModels(host, { route: status.route, ref: status.ref }, status.enabled)
+      log(`${status.route}: added the ${OPENCODE_SESSION_HEADER} routing header to ${status.derived}`, 'debug')
+    }
   }
 }
 
@@ -545,6 +588,18 @@ export async function reportCatalogRoutesQuietly(
 function sameEntries(a: readonly unknown[], b: readonly unknown[]): boolean {
   if (a.length !== b.length) return false
   return a.every((entry, index) => canonicalJson(entry) === canonicalJson(b[index]))
+}
+
+/** Same header pairs, key case and order ignored (HTTP headers are case-insensitive). */
+function sameHeaders(
+  a: Readonly<Record<string, string>>,
+  b: Readonly<Record<string, string>> | undefined,
+): boolean {
+  const normalize = (headers: Readonly<Record<string, string>>): string =>
+    canonicalJson(Object.fromEntries(
+      Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]),
+    ))
+  return normalize(a) === normalize(b ?? {})
 }
 
 /** JSON with object keys sorted at every depth, for stable comparison. */
