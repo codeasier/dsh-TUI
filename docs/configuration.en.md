@@ -325,10 +325,13 @@ providers without a restart.
   their native protocols. A model the vendor added shows up in that panel (and in
   the add flow's question detail) until you decide; an enabled id the vendor
   retired is marked as such so you can drop it.
-- The boot-time `catalogModelSync` (on by default) only inspects: models the
-  vendor publishes but you have not enabled, and enabled ids the vendor retired,
-  go to the debug log. No configuration is touched, and an offline host, a
-  missing key or an unreadable listing is silent.
+- The boot-time `catalogModelSync` (on by default) inspects and logs: models the
+  vendor publishes but you have not enabled, and enabled ids the vendor retired.
+  An offline host, a missing key or an unreadable listing is silent. Its only
+  write is a repair: a stored derived route missing the vendor's
+  `x-opencode-session` header (the OpenCode endpoints answer `400
+  MissingSessionID` without it) gets one stable value — no model is enabled or
+  disabled by it.
 - While adding a catalog route, the model question names the vendor's extra
   models and the route they are managed on. Those ids are never selectable rows
   on that route (it cannot serve them) and are not enabled by connecting;

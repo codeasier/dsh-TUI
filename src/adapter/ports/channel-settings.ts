@@ -107,6 +107,13 @@ export interface ConfiguredProvider {
   /** Effective profile needs custom request headers that the anonymous
    *  discovery request cannot inherit from the named route. */
   readonly hasCustomHeaders?: boolean
+  /**
+   * Resolved request headers of the route (`profile.headers`, every layer
+   * merged), string values only. A rewrite that must keep them — the derived
+   * route's sync-owned headers — reads them here instead of assuming it owns
+   * the whole object.
+   */
+  readonly headers?: Readonly<Record<string, string>>
   /** Enabled model ids; undefined means the whole catalog stays served. */
   readonly models?: readonly string[]
   /**

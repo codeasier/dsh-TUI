@@ -289,6 +289,9 @@ const KEEP_MODEL = { selected: [t('provider-opt-switch-keep')] }
 const ACTION_ADD = { selected: [t('provider-opt-action-add')] }
 const ACTION_EDIT = { selected: [t('provider-opt-action-edit')] }
 const ACTION_SYNC = { selected: [t('provider-opt-action-sync')] }
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+/** The vendor routing header op one derived-route write carries. */
+const sessionHeaderOp = ops => ops.find(op => eq(op.path, ['headers']))
 // models.dev-shaped fixture: the fields the wizard maps onto a model entry.
 const VENDOR_CATALOG = {
   'opencode-go': {
@@ -1714,12 +1717,15 @@ function oauthStub(behavior = {}) {
       && eq(written[0].reasoningEfforts, { off: 'none', high: 'high' }),
     JSON.stringify(calls.mutations))
   check('43 manage: the route identity rides the same write',
-    eq(calls.mutations[0]?.[1]?.slice(1), [
+    eq(calls.mutations[0]?.[1]?.slice(1, 5), [
       { op: 'set', path: ['api'], value: 'openai-completions' },
       { op: 'set', path: ['baseURL'], value: 'https://opencode.ai/zen/go/v1' },
       { op: 'set', path: ['apiKeyEnv'], value: 'OPENCODE_GO_API_KEY' },
       { op: 'set', path: ['displayName'], value: 'OpenCode Go (live)' },
     ]), JSON.stringify(calls.mutations[0]?.[1]))
+  check('43 manage: the vendor routing header is generated for the declared route',
+    UUID.test(sessionHeaderOp(calls.mutations[0]?.[1])?.value?.['x-opencode-session'] ?? ''),
+    JSON.stringify(sessionHeaderOp(calls.mutations[0]?.[1])))
   check('43 manage: the catalog route profile is untouched',
     calls.profiles.length === 0 && calls.credentials.length === 0,
     JSON.stringify({ profiles: calls.profiles, credentials: calls.credentials }))
@@ -1760,6 +1766,9 @@ function oauthStub(behavior = {}) {
   check('43b manage without metadata: outcome synced with a bare entry',
     outcome === 'synced' && eq(written, [{ id: 'longcat-2.5-preview-free' }]),
     JSON.stringify({ outcome, mutations: calls.mutations }))
+  check('43b manage without metadata: the routing header still lands',
+    UUID.test(sessionHeaderOp(calls.mutations[0]?.[1])?.value?.['x-opencode-session'] ?? ''),
+    JSON.stringify(sessionHeaderOp(calls.mutations[0]?.[1])))
   check('43b manage without metadata: the row and the toast say so',
     calls.optionDescriptions['sync-models']?.['longcat-2.5-preview-free'] === t('provider-sync-row-no-meta')
       && calls.notifications.some(n => n.color === 'warning' && n.text === t('provider-sync-meta-unavailable')),
@@ -1836,7 +1845,7 @@ function oauthStub(behavior = {}) {
     catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
     configured: [
       { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
-      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], modelEntries: [ENRICHED_GROK] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], modelEntries: [ENRICHED_GROK], headers: { 'x-opencode-session': 'session-abc' } },
     ],
     storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
     discover: request => request.provider !== undefined
@@ -1872,6 +1881,48 @@ function oauthStub(behavior = {}) {
       && enriched[0].name === 'Grok 4.5' && enriched[0].contextWindow === 500000
       && eq(enriched[0].reasoningEfforts, { low: 'low', medium: 'medium', high: 'high' }),
     JSON.stringify({ outcome: bareOutcome, mutations: bare.calls.mutations }))
+
+  // A route written before the header existed is repaired by the next submit,
+  // and an existing routing id is never replaced.
+  const legacy = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['grok-4.5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], modelEntries: [ENRICHED_GROK] },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const legacyOutcome = await runProviderWizard(legacy.deps)
+  check('45 header repair: a missing routing header is added without touching the models',
+    legacyOutcome === 'synced'
+      && eq(legacy.calls.mutations[0]?.[1]?.[0]?.value, [ENRICHED_GROK])
+      && UUID.test(sessionHeaderOp(legacy.calls.mutations[0]?.[1])?.value?.['x-opencode-session'] ?? ''),
+    JSON.stringify({ outcome: legacyOutcome, mutations: legacy.calls.mutations }))
+
+  const kept = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['grok-4.5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], modelEntries: [ENRICHED_GROK], headers: { 'x-opencode-session': 'session-abc' } },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const keptOutcome = await runProviderWizard(kept.deps)
+  check('45 header repair: an existing routing id is reused, not regenerated',
+    keptOutcome === 'cancelled' && eq(kept.calls.mutations, []),
+    JSON.stringify({ outcome: keptOutcome, mutations: kept.calls.mutations }))
 }
 
 // 46. No resolvable key: refused by name, and no probe is attempted.
@@ -2007,7 +2058,7 @@ function oauthStub(behavior = {}) {
   const retired = BOOT({
     configured: [
       { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
-      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5', 'longcat-2.5-preview-free'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5', 'longcat-2.5-preview-free'], headers: { 'x-opencode-session': 'session-abc' } },
     ],
     discover: request => request.provider !== undefined
       ? [{ id: 'glm-5.3' }]
@@ -2022,7 +2073,7 @@ function oauthStub(behavior = {}) {
   const clean = BOOT({
     configured: [
       { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
-      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], headers: { 'x-opencode-session': 'session-abc' } },
     ],
     discover: request => request.provider !== undefined
       ? [{ id: 'glm-5.3' }]
@@ -2053,6 +2104,41 @@ function oauthStub(behavior = {}) {
       && eq(offlineLines, [['debug', 'opencode-go: listing-failed']])
       && offline.calls.discoverSignals.every(signal => signal instanceof AbortSignal),
     JSON.stringify({ threw, lines: offlineLines, mutations: offline.calls.mutations }))
+
+  // The one write the boot pass owns: a route enabled before the vendor's
+  // routing-header requirement cannot serve a request, so the header is added
+  // — without enabling or disabling a single model.
+  const legacy = BOOT({
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], modelEntries: [{ id: 'grok-4.5' }] },
+    ],
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const legacyLines = []
+  await reportCatalogRoutesQuietly(legacy.deps.host, (message, level) => legacyLines.push([level, message]))
+  check('50 boot repair: a missing routing header is added and reported',
+    legacyLines.some(([, message]) => message === 'opencode-go: added the x-opencode-session routing header to opencode-go-live')
+      && UUID.test(sessionHeaderOp(legacy.calls.mutations[0]?.[1])?.value?.['x-opencode-session'] ?? '')
+      && eq(legacy.calls.mutations[0]?.[1]?.[0]?.value, [{ id: 'grok-4.5' }]),
+    JSON.stringify({ lines: legacyLines, mutations: legacy.calls.mutations }))
+
+  const healthy = BOOT({
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], headers: { 'x-opencode-session': 'session-abc' } },
+    ],
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const healthyLines = []
+  await reportCatalogRoutesQuietly(healthy.deps.host, (message, level) => healthyLines.push([level, message]))
+  check('50 boot repair: a route that already has the header is left alone',
+    eq(healthyLines, []) && eq(healthy.calls.mutations, []),
+    JSON.stringify({ lines: healthyLines, mutations: healthy.calls.mutations }))
 }
 
 // 51. Without a configured catalog route that has a vendor listing, the

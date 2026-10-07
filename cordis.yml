@@ -74,7 +74,8 @@
     # 启动时读取 catalog 路由（当前为 opencode-go）厂商端点公布的模型，把内置
     # pi-ai 快照没有、你还没启用的那些记入调试日志（默认开启，不写任何配置）：
     # 这些模型只能存在于派生路由 <路由名>-live，启用与否由你在 /provider 的
-    # 「管理官方新增模型」里勾选。离线、无密钥或清单读不到时静默。
+    # 「管理官方新增模型」里勾选。离线、无密钥或清单读不到时静默；唯一会写的
+    # 是给已有的派生路由补上厂商要求的 x-opencode-session 头（不改变启用集合）。
     # catalogModelSync: false
     # toolBackground: subtle # none / subtle（默认）/ strong
     # mermaidDiagrams: true
