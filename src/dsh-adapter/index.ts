@@ -252,15 +252,16 @@ export interface Config {
    *  `plan`/`sandbox`/`approval` atoms; absent → the built-in
    *  default/plan/full cycle (see sessionModes.ts). */
   modes?: SessionModeSpec[]
-  /** Mirror a catalog route's vendor-published models at boot (default on).
+  /** Report a catalog route's vendor-published models at boot (default on).
    *  A configured catalog route whose vendor publishes a live listing (see
    *  `catalogSync.ts`) is read once per start, and the models the installed
-   *  pi-ai snapshot does not describe are written into the derived route
-   *  `<route>-live` — the only way a model the snapshot predates reaches the
-   *  picker, since a profile can only carry route-level protocol/endpoint.
-   *  Best effort: offline, missing key or an unchanged listing writes
-   *  nothing. `false` disables the boot pass; `/provider` → sync official
-   *  models still runs on demand. */
+   *  pi-ai snapshot does not describe — which cannot live on the catalog route
+   *  itself, since a profile only carries route-level protocol/endpoint — are
+   *  logged as not enabled. Nothing is written: which of them a session can
+   *  pick is the user's call, made in `/provider` → manage official models
+   *  (they are served from the derived route `<route>-live`). Best effort:
+   *  offline, missing key or an unreadable listing is silent. `false` skips
+   *  the boot pass; the `/provider` branch still works on demand. */
   catalogModelSync?: boolean
 }
 
