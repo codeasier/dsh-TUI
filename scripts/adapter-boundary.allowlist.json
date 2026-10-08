@@ -83,6 +83,10 @@
       "to": "dsh-adapter/sharp.js"
     },
     {
+      "from": "ink/sixel-graphics.ts",
+      "to": "dsh-adapter/sharp.js"
+    },
+    {
       "from": "screens/Chat.tsx",
       "to": "dsh-adapter/activity-store.js"
     },

@@ -47,11 +47,11 @@ function check(name: string, ok: boolean, extra = ''): void {
   if (!ok) failures++
 }
 
-/** light 的 accent（`#3F6CC4`）：真彩 SGR → xterm 报 0x3f6cc4。 */
-const LIGHT_ACCENT = 0x3f6cc4
-const LIGHT_SGR = '\u001b[38;2;63;108;196m'
-/** dark-ansi 的 accent 是 `ansi:blueBright`（SGR 94）→ xterm 报 16 色索引 12。 */
-const DARK_ANSI_ACCENT = 12
+/** light 的 markdownLink（`#087C8A`，fork 语义色）：真彩 SGR → xterm 报 0x087c8a。 */
+const LIGHT_LINK = 0x087c8a
+const LIGHT_SGR = '\u001b[38;2;8;124;138m'
+/** dark-ansi 的 markdownLink 是 `ansi:cyanBright`（SGR 96）→ xterm 报 16 色索引 14。 */
+const DARK_ANSI_LINK = 14
 /** 只有 OSC 8 可用的终端才显示标签文本，链接就在这一格里测颜色。 */
 const LINK = '[label](https://example.com/x)'
 /** 运行时注册的主题名（phase 2）：不带静态文件主题前缀，避免与用户目录撞名。 */
@@ -144,22 +144,22 @@ const app = await render(<ThemeProvider theme="light"><Fixture /></ThemeProvider
 })
 
 try {
-  const painted = await settled(() => fgAt('label') === LIGHT_ACCENT)
-  check('首帧链接色 = 当前主题 accent（不是上一主题）',
+  const painted = await settled(() => fgAt('label') === LIGHT_LINK)
+  check('首帧链接色 = 当前主题 markdownLink（不是上一主题）',
     painted && firstLinkSgr() === `${LIGHT_SGR}label`,
     `first=${JSON.stringify(firstLinkSgr())} ${themeLine()}`)
 
   const beforeSwitch = frames.length
   setThemeRef.current?.('dark-ansi')
-  const switched = await settled(() => fgAt('label') === DARK_ANSI_ACCENT)
+  const switched = await settled(() => fgAt('label') === DARK_ANSI_LINK)
   // 只扫切换后追加的帧：整轮里含 phase-1 的 light 帧，`includes` 扫全量会被
   // 无关帧满足。这条承重的是 `switched`，SGR 断言必须同源。
-  check('切到 dark-ansi 后链接重绘为 16 色亮蓝（94m）',
-    switched && frames.slice(beforeSwitch).join('').includes('\u001b[94m'),
+  check('切到 dark-ansi 后链接重绘为 16 色亮青（96m）',
+    switched && frames.slice(beforeSwitch).join('').includes('\u001b[96m'),
     `fg=${fgAt('label')} ${themeLine()}`)
 
   setThemeRef.current?.('light')
-  const back = await settled(() => fgAt('label') === LIGHT_ACCENT)
+  const back = await settled(() => fgAt('label') === LIGHT_LINK)
   check('再切回 light 仍重绘（不是一次性）', back, `fg=${fgAt('label')} ${themeLine()}`)
 
   // ── 运行时同名重注册 ──────────────────────────────────────────────────
@@ -181,9 +181,9 @@ try {
     inject: ['tuiThemes'],
     apply: (context: Context) => { pluginContext = context },
   })
-  const registerAccent = (accent: string): (() => void) =>
-    pluginContext!.tuiThemes.register({ name: RUNTIME_THEME, base: 'dark', colors: { accent } }, pluginContext)
-  const disposeRed = registerAccent('#CC0000')
+  const registerLink = (markdownLink: string): (() => void) =>
+    pluginContext!.tuiThemes.register({ name: RUNTIME_THEME, base: 'dark', colors: { markdownLink } }, pluginContext)
+  const disposeRed = registerLink('#CC0000')
   // 清屏后另起一个带 host 的 app：phase 1 留在屏幕上的 'label' 不能被 findText 找到。
   term.reset()
   const app2 = await render(
@@ -200,7 +200,7 @@ try {
     check('运行时主题：链接按注册色板上屏',
       await settled(() => fgAt('label') === 0xcc0000), `fg=${fgAt('label')}`)
     disposeRed()
-    registerAccent('#00CC00')
+    registerLink('#00CC00')
     check('同名重注册（同批释放+注册）后正文重绘为新色板',
       await settled(() => fgAt('label') === 0x00cc00), `fg=${fgAt('label')}`)
   } finally {

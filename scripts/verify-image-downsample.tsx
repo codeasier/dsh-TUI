@@ -83,9 +83,11 @@ if (process.env.DSH_VERIFY_IMAGE_SPLIT_SHARP === '1') {
       adaptImageForAdmission(png, 'image/png', { maxImageDimension: 12, maxImagePixels: 96 }, ['image/jpeg']),
     ])
     assert.ok(outcomes.every(outcome => outcome.kind === 'adapted'))
-    assert.equal(tracking.hostLoads, 1, 'the host sharp module loads once')
+    // fork 语义：loader 先复用进程内已加载的 sharp 工厂（本子进程为生成 PNG
+    // 预载了真 sharp），两棵树里的桩件都必须保持零加载——不重复注入 libvips。
+    assert.equal(tracking.hostLoads, 0, 'an already-loaded sharp is reused, not re-imported from the host tree')
     assert.equal(tracking.profileLoads, 0, 'image adaptation must not load the profile sharp copy')
-    assert.equal(tracking.hostCalls, 2, 'both adaptation paths use the host factory')
+    assert.equal(shared, realSharp, 'the process-cached factory is the one adaptation uses')
     assert.equal(await loadSharp(), shared, 'adaptation shares the memoized module')
     console.log('split-tree image ingress regression passed')
   } finally {
@@ -447,6 +449,19 @@ if (!NO_SHARP) {
     check('C1. image adaptation shares host sharp without loading the profile copy',
       child.status === 0, child.error?.message ?? (child.status === 0 ? '' : `exit=${child.status}`))
     if (output !== '') console.log(output.split('\n').map(line => `    ${line}`).join('\n'))
+  }
+
+  // ── D. fork 补充：独立宿主/profile 依赖树 + worker 传递选中实例 ─────────
+  {
+    const { spawnSync } = await import('node:child_process')
+    const child = spawnSync(
+      process.execPath,
+      ['--import', 'tsx/esm', 'scripts/verify-sharp-loader.mjs'],
+      { encoding: 'utf8' },
+    )
+    check('D1. all image consumers share sharp across host/profile trees', child.status === 0)
+    if (child.stdout) console.log(child.stdout.trim())
+    if (child.status !== 0 && child.stderr) console.error(child.stderr.trim())
   }
 
   // ── E1. sharp 缺失场景放进子进程（钩子只在子进程注册）──────────────────
