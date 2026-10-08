@@ -2089,9 +2089,15 @@ function TranscriptRow({
           {groupHead && jobGroup.folded ? null : (
             <JobCard
               job={job}
+              marginTopOnTurn={groupHead ? false : marginTopOnTurn}
+              // The bracket hugs the CARDS: the summary line above stays
+              // outside it, and the head/last member round the two ends in
+              // place (no extra cap row) — see JobCard's `rail` prop.
+              rail={jobGroup === undefined ? undefined : { open: jobGroup.head, close: jobGroup.last }}
+              // Upstream-0.14 command-folding seam: the compact fork card
+              // keeps no command section, so the toggle props ride unused.
               expanded={isExpanded !== expanded}
               onToggle={toggleJobGroup}
-              marginTopOnTurn={groupHead ? false : marginTopOnTurn}
               // Clicking a card opens the panel focused on THAT job, not the roster head.
               onClick={onOpenJobs === undefined ? undefined : () => onOpenJobs(job.id)}
               onWatchOutput={onWatchJobOutput}

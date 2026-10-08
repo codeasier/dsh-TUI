@@ -331,10 +331,15 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
     if (card === undefined || isError) return [result]
     const events: AgentEvent[] = [result]
     // A job_output read doubles as the job card's output feed (the
-    // registry's read is consuming and reserved for the owning agent).
+    // registry's read is consuming and reserved for the owning agent) and as
+    // a durable hand-off proof: reading it revives an independent card even
+    // when the original start ack was compacted away.
     if (card.name === 'job_output' && text !== '') {
       const id = parseJobOutputId(card.args)
-      if (id !== undefined) events.push({ type: 'task.output', taskId: id, text, time: event.time, callId })
+      if (id !== undefined) {
+        events.push({ type: 'task.start', taskId: id, kind: 'shell', description: '', handoff: true, background: true, callId, time: event.time })
+        events.push({ type: 'task.output', taskId: id, text, time: event.time, callId })
+      }
     }
     // A `started background job <id>` ack pairs the job with its tool call.
     // Take the full command from the args; the registry label is only the
@@ -363,6 +368,38 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
   }
 
   /** Translate one durable session event (live or as part of a replay). */
+  /** DSH job semantics shared by the tool/result ack path and nested PTC
+   *  dispatches: a `job_output` read proves a durable hand-off and feeds the
+   *  card's output; an explicit start or timeout-promotion ack registers the
+   *  job with its full command and one-line overview. */
+  const translateJobSemantics = (name: string, argsFull: string | undefined, text: string, at: number): AgentEvent[] => {
+    const events: AgentEvent[] = []
+    if (name === 'job_output' && text !== '') {
+      const id = parseJobOutputId(argsFull)
+      if (id !== undefined) {
+        events.push({ type: 'task.start', taskId: id, kind: 'shell', description: '', handoff: true, background: true, time: at })
+        events.push({ type: 'task.output', taskId: id, text, time: at })
+      }
+    }
+    const startAck = BACKGROUND_START_ACK.exec(text)
+      ?? (name === 'bash' || name === 'pwsh' ? BACKGROUND_PROMOTED_ACK.exec(text) : null)
+    if (startAck !== null) {
+      const command = toolCommandOf(argsFull)
+      if (command !== undefined) {
+        events.push({
+          type: 'task.start',
+          taskId: startAck[1],
+          kind: 'shell',
+          description: (name === 'bash' || name === 'pwsh' ? toolDescriptionOf(argsFull) : undefined) ?? '',
+          command,
+          background: true,
+          time: at,
+        })
+      }
+    }
+    return events
+  }
+
   const translateEvent = (event: SessionEvent): readonly AgentEvent[] => {
     const type = (event as { type: string }).type
     // Top-level `goal/change` events are how the goal service records durable
@@ -370,6 +407,21 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
     // confirmed in production logs. The pinned peer's SessionEvent union
     // predates the type, so admit it structurally.
     if (type === 'goal/change') return [goalChange((event as unknown as { data: GoalChangePayload }).data)]
+    // Nested PTC calls have no ordinary tool card. Consume their plugin-owned
+    // outcome structurally, keeping dsh-tools out of the runtime peer surface:
+    // only the job-registry facts ride on (hand-off proofs and output feeds).
+    if (type === 'tool/ptc-dispatch') {
+      const data = (event as unknown as { data: {
+        name: string
+        arguments: unknown
+        content: readonly { type: string; text?: string }[]
+        isError: boolean
+        error?: unknown
+      } }).data
+      if (data.isError || data.error !== undefined) return NO_EVENTS
+      const text = (data.content ?? []).map(block => (block.type === 'text' ? block.text : '')).join('').trim()
+      return translateJobSemantics(data.name, JSON.stringify(data.arguments), text, event.time ?? Date.now())
+    }
     switch (event.type) {
       case 'user/message':
         return translateUserMessage(event)

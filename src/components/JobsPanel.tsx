@@ -149,7 +149,9 @@ function JobRowLine({ job, focused, armed, columns, onFocus, expanded, onToggle,
   const progress = live && job.progress !== undefined && job.progress !== '' ? job.progress : undefined
   const labelRows = jobCommandRows(job.label, width - 2, expanded)
   const command = job.command !== undefined && job.command !== '' ? job.command : job.label
-  const commandRows = focused ? jobCommandRows(command, width - 2, expanded) : []
+  // The panel is the deep view: the focused row's command always wraps in
+  // full (a clipped one-liner was the "a long line shows nothing" report).
+  const commandRows = focused ? jobCommandRows(command, width - 2, true) : []
   return (
     <Box flexDirection="column" onClick={onFocus}>
       {/* Fixed columns leave the label the remaining header width. */}
@@ -163,9 +165,11 @@ function JobRowLine({ job, focused, armed, columns, onFocus, expanded, onToggle,
         <Box width={columns.idWidth} flexShrink={0}>
           <Text bold={focused} color={focused ? 'accent' : undefined} wrap="truncate-end">{job.id}</Text>
         </Box>
-        {/* Full-screen keeps the command in its flexible header column. */}
+        {/* Full-screen keeps the command in its flexible header column. The
+         *  wrapping roster is the fork contract: a long label wraps in full
+         *  (no `expanded` gate — the deep text is the detail block's job). */}
         <Box flexGrow={1} flexShrink={1}>
-          <Text bold={focused} wrap={columns.labelWrap && expanded ? 'wrap' : 'truncate-end'}>{title}</Text>
+          <Text bold={focused} wrap={columns.labelWrap ? undefined : 'truncate-end'}>{title}</Text>
         </Box>
         {columns.showProgress && (
           <Box width={11} flexShrink={0} justifyContent="flex-end">

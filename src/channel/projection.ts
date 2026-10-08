@@ -1256,8 +1256,14 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       case 'task.start':
         // A background-start ack pairs the job with its tool call and gives
         // the full command (the registry label is the friendly description);
-        // the delegating call's one-line overview rides along as well.
-        if (event.command !== undefined && taskFeedAdmitted(event.callId)) deps.jobs.onStarted(event.taskId, event.command, event.description)
+        // the delegating call's one-line overview rides along as well. A
+        // `handoff` start carries no command — it only marks that the work
+        // already left the foreground (a `job_output` read). An empty
+        // description means "none reported": keep the registry's previous
+        // value instead of overwriting it with a blank.
+        if ((event.command !== undefined || event.handoff === true) && taskFeedAdmitted(event.callId)) {
+          deps.jobs.onStarted(event.taskId, event.command, event.description === '' ? undefined : event.description)
+        }
         deps.activity?.apply(event, replaying)
         return
       case 'subagent.start':

@@ -185,12 +185,15 @@ check('palette: every built-in covers the full Theme contract', () => {
     const palette = getTheme(name)
     assert.deepEqual(Object.keys(palette).sort(), reference, `${name} key set`)
     for (const [key, value] of Object.entries(palette)) {
-      // The three slots upstream deliberately keeps empty: the user turn gets no
-      // fill, only its label color; an empty caret means the inverse-video block
-      // (a theme only declares `cursor` to split the caret off it); an empty
+      // The slots deliberately kept empty: the user turn gets no fill, only
+      // its label color; an empty caret means the inverse-video block (a
+      // theme only declares `cursor` to split the caret off it); an empty
       // input background is the claude brand pair's transparent prompt box —
-      // the terminal background shows through there by design.
-      if (key === 'userMessageBackground' || key === 'cursor' || key === 'inputBackground') continue
+      // the terminal background shows through there by design; and the
+      // 16-color `dark-ansi` leaves the composer surface unfilled (its `▌`
+      // bar and gold label carry the turn, no subtle band exists in 16 colors).
+      if (key === 'userMessageBackground' || key === 'cursor' || key === 'inputBackground'
+        || (key === 'userPromptBackground' && name === 'dark-ansi')) continue
       assert.ok(typeof value === 'string' && value !== '', `${name}.${key} is empty`)
     }
   }

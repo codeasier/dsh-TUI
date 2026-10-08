@@ -12,7 +12,6 @@ import { createChannelProjection as createSharedProjection, type ProjectionState
 import type { BackgroundJobStore } from '../jobs.js'
 import type { TuiRendererHost } from '../renderers.js'
 import { createDshTranslator, dshPricingWindow } from '../backend/translate.js'
-import { parseJobOutputId, toolCommandOf, toolDescriptionOf, BACKGROUND_START_ACK, BACKGROUND_PROMOTED_ACK } from './projection-helpers.js'
 import type { InputConvergence } from './input-actions.js'
 import type { ChannelState, ToolsRegistryLike } from './types.js'
 
@@ -45,44 +44,6 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     attachments: () => deps.attachments(),
   })
 
-  /** Native and nested PTC calls share durable job hand-off/output semantics. */
-  const projectJobResult = (name: string, argsFull: string | undefined, result: string, at: number): void => {
-    if (name === 'job_output') {
-      const id = parseJobOutputId(argsFull)
-      if (id !== undefined) {
-        deps.jobs.onStarted(id)
-        deps.jobs.onOutputSeen(id, result, at)
-      }
-    }
-    // Membership in the runtime registry includes foreground shell work;
-    // only an explicit start or timeout hand-off exposes an independent job.
-    const startAck = BACKGROUND_START_ACK.exec(result)
-      ?? (name === 'bash' || name === 'pwsh' ? BACKGROUND_PROMOTED_ACK.exec(result) : null)
-    if (startAck !== null) deps.jobs.onStarted(
-      startAck[1],
-      toolCommandOf(argsFull),
-      name === 'bash' || name === 'pwsh' ? toolDescriptionOf(argsFull) : undefined,
-    )
-  }
-
-  /** Nested PTC calls have no ordinary tool card. Consume their plugin-owned
-   *  outcome structurally, keeping dsh-tools out of the runtime peer surface:
-   *  the translator has no vocabulary for them, so the job-registry side
-   *  effects are applied here, in stream order, beside the shared projector. */
-  const applyPtcDispatch = (event: SessionEvent): void => {
-    if ((event as { type: string }).type !== 'tool/ptc-dispatch') return
-    const data = (event as unknown as { data: {
-      name: string
-      arguments: unknown
-      content: readonly { type: string; text?: string }[]
-      isError: boolean
-      error?: unknown
-    } }).data
-    if (data.isError || data.error !== undefined) return
-    const text = (data.content ?? []).map(block => (block.type === 'text' ? block.text : '')).join('').trim()
-    projectJobResult(data.name, JSON.stringify(data.arguments), text, event.time ?? Date.now())
-  }
-
   const projector = createSharedProjection(state, {
     rowIds: deps.rowIds,
     resetContextWarning: () => deps.resetContextWarning(),
@@ -101,11 +62,9 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
       projector.reset()
     },
     replayEvents(events: readonly SessionEvent[]): void {
-      for (const event of events) applyPtcDispatch(event)
       projector.apply(translator.translateReplay(events), REPLAY)
     },
     renderEvent(event: SessionEvent): void {
-      applyPtcDispatch(event)
       projector.apply(translator.translateEvent(event), LIVE)
     },
     renderStreamFrame(frame: AssistantStreamFrame): void {

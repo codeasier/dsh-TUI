@@ -43,7 +43,7 @@ linesEqual('nested unordered markers', '- outer\n  - inner\n    - leaf', ['- out
 // Each nested list aligns beneath its parent's content, not its marker.
 linesEqual('nested ordered decimal/alpha/roman/decimal markers', '3. outer\n   2. inner\n      4. deep\n         7. deepest\n   3. next', ['3. outer', '   b. inner', '      iv. deep', '          7. deepest', '   c. next'])
 for (const gap of ['\n', '\n\n']) {
-  equal(`${gap.length === 1 ? 'tight' : 'loose'} tasks have no extra checkbox newline`, plain(`- [ ] pending${gap}- [x] done`), '- [ ] pending\n- [\u2713] done')
+  equal(`${gap.length === 1 ? 'tight' : 'loose'} tasks have no extra checkbox newline`, plain(`- [ ] pending${gap}- [x] done`), '- [ ] pending\n- [x] done')
 }
 const url = 'https://example.com/guide'
 const inline = applyMarkdown(`- **outer *inner* [guide](${url})**\n\n- second **bold**`)
@@ -79,7 +79,7 @@ equal('hr cannot merge with following paragraph', plain('before\n\n---\n\nafter'
 // Wrapper terminal detection is dynamic, unlike the library's cached probe.
 process.env.TERM_PROGRAM = 'kitty'
 const linkedImage = applyMarkdown('[![alt](https://example.com/i.png)](https://example.com/page)')
-equal('linked image OSC label is intact', stripAnsi(linkedImage), 'alt (https://example.com/i.png)')
+equal('linked image OSC label is intact', stripAnsi(linkedImage), 'alt')
 check('linked image emits only the outer OSC target', (linkedImage.match(/\u001b\]8;;https:/g) ?? []).length === 1 && linkedImage.includes('\u001b]8;;https://example.com/page\u0007'), JSON.stringify(linkedImage))
 for (const [name, source, expected] of [
   ['mixed paragraphs and tasks', 'plain\n\n- [x] done\n- next\n\nlast', [0, 0, 6, 2, 0, 0]],

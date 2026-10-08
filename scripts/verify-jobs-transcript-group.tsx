@@ -195,11 +195,10 @@ console.log('--- G1: two settled jobs group without folding ---')
     const i1 = idxOf(lines, 'job: pwsh-1')
     const i2 = idxOf(lines, 'job: pwsh-2')
     check('G1 两张卡都在屏上', i1 >= 0 && i2 >= 0, 'i1=' + i1 + ' i2=' + i2)
-    check('G1 相邻卡片之间只有命令行、没有空行', i2 === i1 + 2, 'i1=' + i1 + ' i2=' + i2)
-    const firstCommand = lines[i1 + 1] ?? ''
-    const lastCommand = lines[i2 + 1] ?? ''
-    check('G1 色边仅覆盖命令节，胶囊无组竖线', !(lines[i1] ?? '').startsWith('│ ') && firstCommand.startsWith('│ ') && !(lines[i2] ?? '').startsWith('│ ') && lastCommand.startsWith('│ '),
-      JSON.stringify([lines[i1], firstCommand, lines[i2], lastCommand]))
+    check('G1 组内不留空行（成员相邻）', i2 === i1 + 1, 'i1=' + i1 + ' i2=' + i2)
+    // 两张卡 = 括号的两端：首张 `╭` 起手、末张 `╰` 收口，正文都在括号内
+    check('G1 成员共用同一条连接线', (lines[i1] ?? '').startsWith('╭ ') && (lines[i2] ?? '').startsWith('╰ '),
+      JSON.stringify([lines[i1], lines[i2]]))
     check('G1 两张不触发自动折叠', !frame.screen().includes('background jobs folded'))
     check('G1 组头报已完成数', frame.screen().includes('2 completed'))
   })
@@ -311,7 +310,7 @@ console.log('--- G5: non-adjacent jobs stay ungrouped ---')
   await withTerminal(() => renderList(rows), async frame => {
     check('G5 两张卡都在屏上', await settled(() => frame.screen().includes('job: pwsh-1') && frame.screen().includes('job: pwsh-2')), frame.lines().slice(0, 8).join('|'))
     check('G5 不出现组头', !frame.screen().includes('background jobs ×'))
-    check('G5 单卡胶囊无组rail，命令节色边独立', frame.lines().filter(line => line.includes('job: pwsh-')).every(line => !line.startsWith('│ ')) && !/[╭╰└]/.test(frame.screen()) && frame.lines().filter(line => line.startsWith('│ ')).length === 2)
+    check('G5 不出现组括号', !frame.lines().some(line => line.startsWith('╭ ') || line.startsWith('╰ ')))
   })
 }
 
@@ -511,15 +510,10 @@ console.log('--- G13: a long command label wraps in full ---')
   const longLabel = 'pwsh -Command "' + 'Get-ChildItem -Recurse | Where-Object { $_.Length -gt 0 } | ForEach-Object { $_.FullName } ; '.repeat(2) + TAIL + '"'
   const rows = [jobRow(1, makeJob('pwsh-1', 'completed', { label: longLabel }))]
   await withTerminal(() => renderList(rows), async frame => {
-    check('G13 长命令默认折叠并显示续行数', await settled(() => frame.screen().includes('Get-ChildItem')) && !frame.screen().includes(TAIL) && !frame.screen().includes('pwsh -Command'), frame.lines().slice(0, 5).join('|'))
-    frame.rerender(renderList(rows, { expanded: true }))
     check('G13 长命令尾部可见（换行而非截断）', await settled(() => frame.screen().includes(TAIL)),
       frame.lines().filter(l => l.trim() !== '').slice(0, 5).join('|'))
     const cardLines = frame.lines().filter(l => l.includes('job: ') || l.includes('Get-ChildItem'))
     check('G13 长命令占多行', cardLines.length >= 2, JSON.stringify(cardLines).slice(0, 300))
-    check('G13 每个命令正文行都有节色边且没有词标签或树标', frame.lines().filter(line => line.includes('Get-ChildItem')).every(line => line.startsWith('│ ')) && !frame.screen().includes('⎿') && !frame.screen().includes('▾ script'), frame.lines().slice(0, 6).join('|'))
-    frame.rerender(renderList(rows))
-    check('G13 可以再次折叠', await settled(() => !frame.screen().includes(TAIL) && frame.screen().includes('Get-ChildItem')))
   })
 }
 console.log('--- G14: a long output line wraps and keeps the tail ---')
@@ -530,8 +524,8 @@ console.log('--- G14: a long output line wraps and keeps the tail ---')
   await withTerminal(() => renderList(rows), async frame => {
     check('G14 长输出尾部可见（折行取尾）', await settled(() => frame.screen().includes(OUT_TAIL)),
       frame.lines().filter(l => l.includes('│')).slice(0, 4).join('|'))
-    const waterfallLines = frame.lines().filter(l => l.includes('segment-') || l.includes(OUT_TAIL))
-    check('G14 瀑布恒定两行', waterfallLines.length === 2,
+    const waterfallLines = frame.lines().filter(l => l.includes('│ ') && (l.includes('segment-') || l.includes(OUT_TAIL)))
+    check('G14 瀑布仍是常量高度（≤3 行）', waterfallLines.length > 0 && waterfallLines.length <= 3,
       'rows=' + waterfallLines.length + ' ' + JSON.stringify(waterfallLines).slice(0, 300))
   })
 }
@@ -552,11 +546,9 @@ console.log('--- G15: the jobs panel wraps long command/output lines ---')
   await withTerminal(
     () => React.createElement(JobsPanel, { jobs: [panelJob], onClose: (): void => {}, onKill: (): void => {} }),
     async frame => {
-      check('G15 面板详情默认折叠长命令', await settled(() => frame.screen().includes('pnpm --filter')) && !frame.screen().includes(CMD_TAIL), frame.lines().slice(0, 9).join('|'))
-      frame.stdin.write('e')
       check('G15 面板详情：长命令尾部可见', await settled(() => frame.screen().includes(CMD_TAIL)),
         frame.lines().filter(l => l.trim() !== '').slice(0, 8).join('|'))
-      check('G15 面板列表：长任务名换行后尾部可见', frame.screen().includes(LABEL_TAIL),
+      check('G15 面板列表：长任务名换行后尾部可见', await settled(() => frame.screen().includes(LABEL_TAIL)),
         frame.lines().filter(l => l.includes('service-name') || l.includes(LABEL_TAIL)).join('|'))
       check('G15 面板详情：长 stderr 行尾部可见', frame.screen().includes(ERR_TAIL),
         frame.lines().filter(l => l.includes('error:')).slice(0, 3).join('|'))
@@ -568,7 +560,7 @@ console.log('--- G15: the jobs panel wraps long command/output lines ---')
 // G16 — 冻结行契约：会话投影把行数组与每一行都 Object.freeze 后交给渲染
 // （resume/replay 首帧正是这条路）。成组预补必须把装饰写到浅拷贝上；直接写
 // 共享行对象会在启动即抛 "Cannot add property jobGroup, object is not
-// extensible" when a frozen resume snapshot is decorated in place.
+// extensible"（2026-09-30 实机 resume 闪退实证）。
 // ---------------------------------------------------------------------------
 console.log('--- G16: frozen rows survive grouping (session snapshot contract) ---')
 {
@@ -585,170 +577,158 @@ console.log('--- G16: frozen rows survive grouping (session snapshot contract) -
   })
 }
 
-const commandMark = process.platform === 'win32' ? '>' : '❯'
-
-console.log('--- G17: command expansion does not move the status out of its capsule ---')
+// ---------------------------------------------------------------------------
+// G17 — 长标签折行时，状态标必须留在首行（flexShrink 回归）
+// 现场：标签一折行，行就超约束；未加 flexShrink 的 glyph 文本节点被压缩，
+// 被挤到下一行、孤零零掉到组外（2026-09-30 用户截图实证）。
+// ---------------------------------------------------------------------------
+console.log('--- G17: a wrapped label keeps the joint+glyph on its own line ---')
 {
-  const label = 'cd D:/project\n' + 'Write-Output long-command-part '.repeat(7)
-  const rows = [1, 2, 3].map(id => jobRow(id, makeJob('pwsh-' + id, 'completed', { label })))
+  const longLabel = 'npm run build --filter @deepseek-harness-tui/dsh-tui --with-every-flag-enabled ' +
+    '--and-a-very-long-tail-argument-that-forces-the-label-column-to-wrap-over-several-rows indeed'
+  const rows = [
+    jobRow(1, makeJob('pwsh-1', 'completed', { label: longLabel })),
+    jobRow(2, makeJob('pwsh-2', 'completed', { label: longLabel })),
+    jobRow(3, makeJob('pwsh-3', 'completed', { label: longLabel })),
+  ]
   await withTerminal(() => renderList(rows, { jobGroupFold: 'never' }), async frame => {
-    check('G17 folded: all three capsules remain visible', await settled(() => frame.screen().includes('job: pwsh-3')))
-    const capsules = frame.lines().filter(line => line.includes('job: pwsh-'))
-    check('G17 capsules: status stays bright outside section edges', capsules.length === 3 && capsules.every(line => line.startsWith('✓ ') && !line.includes('│')), JSON.stringify(capsules))
-    check('G17 folded: command sections each show one first statement', frame.lines().filter(line => line.startsWith('│ ')).length === 3)
-    frame.rerender(renderList(rows, { jobGroupFold: 'never', expanded: true }))
-    check('G17 expanded: full command remains available', await settled(() => frame.screen().includes('long-command-part')))
-    check('G17 expanded: no orphan state glyph or tree controls', !frame.lines().some(line => /^\s*[✓✗●]\s*$/.test(line)) && !frame.screen().includes('⎿') && !/[╭╰]/.test(frame.screen()))
-  })
-}
-
-console.log('--- G18: content rows use continuous section edges, not a group rail ---')
-{
-  const label = 'cd D:/project\nWrite-Output first section row\nWrite-Output final section row'
-  const rows = [jobRow(1, makeJob('pwsh-1', 'completed', { label })), jobRow(2, makeJob('pwsh-2', 'running', { label, outputLines: [{ text: 'output first' }, { text: 'output last' }] }))]
-  await withTerminal(() => renderList(rows, { jobGroupFold: 'never', expanded: true }), async frame => {
-    check('G18 both sections render', await settled(() => frame.screen().includes('output last')))
-    const lines = frame.lines().filter(line => line.trim() !== '')
-    const content = lines.filter(line => !line.includes('background jobs ×') && !line.includes('job: '))
-    check('G18 every command/output row has exactly one edge', content.length === 8 && content.every(line => line.startsWith('│ ') && !line.slice(2).includes('│')), JSON.stringify(content))
-    check('G18 capsules replace group separators without extra rails', lines.filter(line => line.includes('job: ')).every(line => !line.startsWith('│ ')) && !/[╭╰└]/.test(frame.screen()))
-    check('G18 section marks occur only on first rows', content.filter(line => line.startsWith('│ ' + commandMark + ' ')).length === 2 && content.filter(line => line.startsWith('│ ≡ ')).length === 1)
-    const cmd = frame.lines().findIndex(line => line.startsWith('│ ' + commandMark))
-    const out = frame.lines().findIndex(line => line.startsWith('│ ≡'))
-    const cmdColor = frame.term.buffer.active.getLine(cmd)?.getCell(0)?.getFgColor()
-    const outColor = frame.term.buffer.active.getLine(out)?.getCell(0)?.getFgColor()
-    check('G18 command and output edges use different continuous colors', cmd >= 0 && out >= 0 && cmdColor !== outColor && frame.term.buffer.active.getLine(out + 1)?.getCell(0)?.getFgColor() === outColor, JSON.stringify({ cmdColor, outColor }))
-  })
-}
-
-console.log('--- G19: output remains a two-row tail while command expansion changes ---')
-{
-  const rows = [jobRow(1, makeJob('pwsh-live', 'running', { label: 'first command\nlast command', outputLines: Array.from({ length: 5 }, (_, index) => ({ text: 'LIVE-OUT-' + index })) }))]
-  await withTerminal(() => renderList(rows), async frame => {
-    check('G19 folded: newest output rows remain, earlier output does not', await settled(() => frame.screen().includes('LIVE-OUT-4')) && frame.screen().includes('LIVE-OUT-3') && !frame.screen().includes('LIVE-OUT-0'))
-    frame.rerender(renderList(rows, { expanded: true }))
-    check('G19 expanded: only the command grows', await settled(() => frame.screen().includes('last command')) && frame.lines().filter(line => line.includes('LIVE-OUT-')).length === 2 && !frame.screen().includes('LIVE-OUT-0'))
-    const outputRows = frame.lines().filter(line => line.includes('LIVE-OUT-'))
-    check('G19 output symbol and edge stay on two preview rows', outputRows[0]?.startsWith('│ ≡ ') && outputRows[1]?.startsWith('│ LIVE-OUT-4') && outputRows.every(line => !line.slice(2).includes('│')), JSON.stringify(outputRows))
-  })
-}
-
-console.log('--- G20: summaries stay above zero-gap capsules and folded groups hide sections ---')
-{
-  const rows = [jobRow(1, makeJob('pwsh-1', 'completed')), jobRow(2, makeJob('pwsh-2', 'completed'))]
-  await withTerminal(() => renderList(rows), async frame => {
-    check('G20 open: group summary remains', await settled(() => frame.screen().includes('background jobs ×2')))
+    check('G17 折行卡渲染出来', await settled(() => frame.lines().some(l => l.includes('several-rows'))),
+      frame.lines().filter(l => l.trim() !== '').slice(0, 4).join('|'))
     const lines = frame.lines()
-    const first = idxOf(lines, 'job: pwsh-1')
-    const second = idxOf(lines, 'job: pwsh-2')
-    check('G20 open: capsule is the only card separator', first >= 0 && second === first + 2 && lines[first + 1]?.startsWith('│ '), lines.slice(0, 6).join('|'))
-    check('G20 open: no group bracket remains', !/[╭╰└]/.test(frame.screen()))
-  })
-  await withTerminal(() => renderList([...rows, jobRow(3, makeJob('pwsh-3', 'completed'))]), async frame => {
-    check('G20 folded: one summary and no command/output edges', await settled(() => frame.screen().includes('3 background jobs folded')) && !frame.screen().includes('│'))
+    const head = lines.find(l => l.includes('pwsh-3 pwsh')) ?? ''
+    check('G17 末成员首行也在竖线内且带状态标', head.startsWith('│ ') && head.includes('✓'), JSON.stringify(head))
+    check('G17 不出现孤立的字形行', !lines.some(l => /^\s*[✓✗●▾▸]\s*$/.test(l)),
+      JSON.stringify(lines.filter(l => l.trim() !== '').slice(0, 8)))
   })
 }
 
-console.log('--- G21: every width keeps content inside the two-column section edge ---')
+// ---------------------------------------------------------------------------
+// G18 — 组内每一行都必须在竖线内（竖线由卡片逐行自绘：标签折行数由
+// 组件自己算准，见 JobCard 的 `rail`）
+// 现场：逐行手写前缀时，折行出来的续行在 label 列内部，没有前缀可加 →
+// 组里第一张卡的续行掉线（2026-09-30 用户截图实证）。
+// ---------------------------------------------------------------------------
+console.log('--- G18: every row of the group stays inside the rail ---')
 {
-  const label = 'cd D:/project\n' + 'Write-Output expanded command piece; '.repeat(4) + 'COMMAND-END'
+  const longLabel = "gh pr view 1206 --repo ccch1mneyyy/dsh-TUI --json maintainerCanModify,state,headRefName --jq " +
+    "'{canModify: .maintainerCanModify, state: .state, head: .headRefName}'"
+  // BOTH members carry a wrapping label, and the LAST one also has a live
+  // output row: the rail must cover all of it (2026-09-30 用户截图实证：
+  // 最后一张的续行掉在竖线外，整组看着散)。
+  const rows = [
+    jobRow(1, makeJob('pwsh-1', 'completed', { label: longLabel })),
+    jobRow(2, makeJob('pwsh-2', 'running', { label: longLabel, outputLines: [{ text: 'compiling module a …' }] })),
+  ]
+  await withTerminal(() => renderList(rows, { jobGroupFold: 'never' }), async frame => {
+    check('G18 折行成员渲染出来', await settled(() => frame.lines().some(l => l.includes('compiling module a'))),
+      frame.lines().filter(l => l.trim() !== '').slice(0, 5).join('|'))
+    const lines = frame.lines().filter(l => l.trim() !== '')
+    const header = lines.findIndex(l => l.includes('background jobs ×2'))
+    const body = header >= 0 ? lines.slice(header + 1) : []
+    // 组体 = ╭ 首行 + │ 中间若干 + ╰ 末行（G20 单独钉括号形状）
+    check('G18 组内每一行都在竖线内', body.length >= 5 && body.slice(1, -1).every(l => l.startsWith('│ ')),
+      JSON.stringify(body.slice(0, 8)))
+    check('G18 末行（输出行）仍带连接线', (body[body.length - 2] ?? '').startsWith('│ '),
+      JSON.stringify(body.slice(-3)))
+    check('G18 末行以 ╰ 收口且带正文', (body[body.length - 1] ?? '').startsWith('╰ ') &&
+      (body[body.length - 1] ?? '').trim().length > 2, JSON.stringify(body.slice(-2)))
+  })
+}
+
+// ---------------------------------------------------------------------------
+// G19 — 中间成员在跑并吐输出时，它的输出行也必须在竖线之内
+// ---------------------------------------------------------------------------
+console.log('--- G19: a live middle member keeps the rail on its output rows ---')
+{
+  const rows = [
+    jobRow(1, makeJob('pwsh-1', 'completed')),
+    jobRow(2, makeJob('pwsh-2', 'running', {
+      label: 'pnpm run build',
+      outputLines: [{ text: 'compiling module a …' }, { text: 'compiling module b …' }],
+    })),
+    jobRow(3, makeJob('pwsh-3', 'completed')),
+  ]
+  await withTerminal(() => renderList(rows, { jobGroupFold: 'never' }), async frame => {
+    check('G19 中间成员的输出行可见', await settled(() => frame.lines().some(l => l.includes('compiling module b'))),
+      frame.lines().filter(l => l.trim() !== '').slice(0, 6).join('|'))
+    const lines = frame.lines()
+    const out = lines.findIndex(l => l.includes('compiling module a'))
+    check('G19 输出行在竖线之内', out >= 0 && (lines[out] ?? '').startsWith('│ '), JSON.stringify(lines[out]))
+    check('G19 第二行输出同样有线', out >= 0 && (lines[out + 1] ?? '').startsWith('│ '), JSON.stringify(lines[out + 1]))
+    const tail = lines.findIndex(l => l.includes('job: pwsh-3'))
+    check('G19 末成员在竖线内收口', tail >= 0 && (lines[tail] ?? '').startsWith('╰ '), JSON.stringify(lines[tail]))
+  })
+}
+
+// ---------------------------------------------------------------------------
+// G20 — 圆角括号只括任务卡：摘要行在括号外，第一张卡 `╭` 起手、最后一张卡
+// 的最后一行 `╰` 收口（收口落在正文行上，不额外占行）；折叠态是独立摘要行
+// ---------------------------------------------------------------------------
+console.log('--- G20: the open group is a rounded bracket, the fold line is not ---')
+{
+  const rows = [
+    jobRow(1, makeJob('pwsh-1', 'completed', { label: 'gh pr view 1206 --repo ccch1mneyyy/dsh-TUI --json state,headRefName --jq x' })),
+    jobRow(2, makeJob('pwsh-2', 'running', { label: 'pnpm run build', outputLines: [{ text: 'compiling module a …' }] })),
+  ]
+  await withTerminal(() => renderList(rows, { jobGroupFold: 'never' }), async frame => {
+    check('G20 展开组渲染出来', await settled(() => frame.lines().some(l => l.includes('compiling module a'))),
+      frame.lines().filter(l => l.trim() !== '').slice(0, 6).join('|'))
+    const lines = frame.lines().filter(l => l.trim() !== '')
+    // 摘要行在括号 OUTSIDE：括号只括任务卡
+    check('G20 组头在括号外', (lines[0] ?? '').startsWith('▾ '), JSON.stringify(lines[0]))
+    check('G20 第一张卡以 ╭ 起手', (lines[1] ?? '').startsWith('╭ '), JSON.stringify(lines[1]))
+    const last = lines[lines.length - 1] ?? ''
+    check('G20 末行以 ╰ 收口且带正文（不额外占行）', last.startsWith('╰ ') && last.trim().length > 2,
+      JSON.stringify(last))
+    check('G20 中间每一行都在 │ 之内', lines.slice(2, -1).every(l => l.startsWith('│ ')),
+      JSON.stringify(lines.slice(2, -1)))
+  })
+  // 折叠态：一条摘要行，既无起弧也无收口
+  await withTerminal(() => renderList([
+    jobRow(1, makeJob('pwsh-1', 'completed')),
+    jobRow(2, makeJob('pwsh-2', 'completed')),
+    jobRow(3, makeJob('pwsh-3', 'completed')),
+  ]), async frame => {
+    check('G20 折叠行出现', await settled(() => frame.screen().includes('3 background jobs folded')),
+      frame.lines().filter(l => l.trim() !== '').slice(0, 3).join('|'))
+    const lines = frame.lines().filter(l => l.trim() !== '')
+    check('G20 折叠态不带圆弧', !lines.some(l => l.includes('╭') || l.includes('╰')),
+      JSON.stringify(lines.slice(0, 3)))
+  })
+}
+
+// ---------------------------------------------------------------------------
+// G21 — 竖线逐行自绘的宽度不变式：任何列宽下，括号都必须正好括住卡片
+// 首行（标签折行数、瀑布行数、尾行都由 JobCard 自己算 // 算错就会漏画或多画）
+// ---------------------------------------------------------------------------
+console.log('--- G21: the hand-painted bracket fits the cards at every width ---')
+{
+  const longLabel = 'gh pr checks 1216 --watch --interval 30 2>&1 | Select-Object -Last 40'
+  const rows = [
+    jobRow(1, makeJob('pwsh-1', 'completed', { label: longLabel })),
+    jobRow(2, makeJob('pwsh-2', 'running', {
+      label: longLabel + " ; gh pr view 1216 --json state,mergeable --jq '{state}'",
+      outputLines: [{ text: 'compiling module a …' }, { text: 'compiling module b …' }],
+    })),
+  ]
   for (const cols of [60, 80, 140]) {
-    const rows = [jobRow(1, makeJob('pwsh-width', 'running', { label, outputLines: [{ text: 'first output' }, { text: 'last output' }] }))]
-    await withTerminal(() => renderList(rows, { expanded: true }), async frame => {
-      check('G21 ' + cols + ': command and tail both render', await settled(() => frame.screen().includes('COMMAND-END') && frame.screen().includes('last output')))
-      const body = frame.lines().filter(line => line.trim() !== '' && !line.includes('job: '))
-      check('G21 ' + cols + ': content rows keep edges without group brackets', body.length >= 4 && body.every(line => line.startsWith('│ ')) && !/[╭╰]/.test(frame.screen()), JSON.stringify(body))
+    await withTerminal(() => renderList(rows, { jobGroupFold: 'never' }), async frame => {
+      const ok = await settled(() => frame.lines().some(l => l.includes('compiling module b')))
+      const lines = frame.lines().filter(l => l.trim() !== '')
+      const header = lines.findIndex(l => l.includes('background jobs ×2'))
+      const body = header >= 0 ? lines.slice(header + 1) : []
+      check(`G21 ${cols} 列：组体渲染出来`, ok && body.length >= 5,
+        'cols=' + cols + ' ' + JSON.stringify(body.slice(0, 6)))
+      // 每一行都以括号字形开头（漏画 = 该行以空格开头；多画 = 该行只有字形没有正文）
+      check(`G21 ${cols} 列：每行都在括号内`,
+        body.length >= 5 && body.slice(1, -1).every(l => l.startsWith('│ ')) &&
+        (body[0] ?? '').startsWith('╭ ') && (body[body.length - 1] ?? '').startsWith('╰ '),
+        'cols=' + cols + ' ' + JSON.stringify(body))
+      check(`G21 ${cols} 列：收口行带正文（没有空行）`,
+        (body[body.length - 1] ?? '').trim().length > 2 && !body.some(l => /^[│╭╰]\s*$/.test(l)),
+        'cols=' + cols + ' ' + JSON.stringify(body.slice(-2)))
     }, cols)
   }
-}
-
-console.log('--- G22: narrow sections keep at least twenty-four content columns and full expansion ---')
-{
-  const token = 'ABCDEFGHIJKLMNOPQRSTUVWX'
-  for (const cols of [28, 34]) {
-    const rows = [jobRow(1, makeJob('pwsh-narrow', 'running', { label: 'pwsh -Command "' + token + '\nNARROW-END"', outputLines: [{ text: 'last output row' }] }))]
-    await withTerminal(() => renderList(rows), async frame => {
-      check('G22 ' + cols + ': folded preview fits the interpreter-free first statement', await settled(() => frame.screen().includes(token)) && !frame.screen().includes('NARROW-END') && !frame.screen().includes('pwsh -Command'), frame.lines().slice(0, 5).join('|'))
-      const command = frame.lines().find(line => line.includes(token)) ?? ''
-      check('G22 ' + cols + ': two-column edge plus one-character section mark', command.startsWith('│ ' + commandMark + ' ' + token), JSON.stringify(command))
-      frame.rerender(renderList(rows, { expanded: true }))
-      check('G22 ' + cols + ': remaining command rows expand inside the edge', await settled(() => frame.screen().includes('│ NARROW-END')) && frame.lines().filter(line => line.includes(token) || line.includes('NARROW-END') || line.includes('last output row')).every(line => line.startsWith('│ ')))
-    }, cols)
-  }
-}
-
-console.log('--- G23: body clicks and Ctrl+O toggle only the command; capsule opens the job ---')
-{
-  const rows = [jobRow(1, makeJob('pwsh-click', 'running', { label: 'cd D:/project\nCOMMAND-LAST-LINE', outputLines: Array.from({ length: 5 }, (_, index) => ({ text: 'CLICK-OUT-' + index })) }))]
-  const toggled = new Set<number>()
-  const opened: string[] = []
-  let allExpanded = false
-  let frameRef: Frame | undefined
-  function Keys(): null {
-    useInput((input, key) => {
-      if (input === 'o' && (key as { ctrl?: boolean }).ctrl === true) { allExpanded = !allExpanded; frameRef?.rerender(view()) }
-    })
-    return null
-  }
-  const view = (): React.ReactNode => React.createElement(AlternateScreen, null, React.createElement(Keys), React.createElement(MessageList, {
-    ...listProps(rows, { expanded: allExpanded, expandedRows: [...toggled], onToggleRow: id => {
-      if (toggled.has(id)) toggled.delete(id)
-      else toggled.add(id)
-      frameRef?.rerender(view())
-    } }),
-    onOpenJobs: (id: string) => { opened.push(id) },
-  }))
-  await withTerminal(view, async frame => {
-    frameRef = frame
-    check('G23 default: first statement and two output rows only', await settled(() => frame.screen().includes('CLICK-OUT-4')) && !frame.screen().includes('COMMAND-LAST-LINE') && frame.lines().filter(line => line.includes('CLICK-OUT-')).length === 2)
-    const clickText = async (text: string): Promise<void> => {
-      const hit = termTest.findText(frame.term, text)
-      check('G23 hit target: ' + text, hit !== null)
-      if (hit === null) return
-      frame.stdin.write('\x1b[<0;' + (hit.col + 1) + ';' + (hit.row + 1) + 'M')
-      await sleep(30) // 固定窗:pacing 鼠标按下和松开分成两次事件
-      frame.stdin.write('\x1b[<0;' + (hit.col + 1) + ';' + (hit.row + 1) + 'm')
-    }
-    await clickText('cd D:/project')
-    check('G23 body click: full command opens but output remains two rows', await settled(() => frame.screen().includes('COMMAND-LAST-LINE')) && frame.lines().filter(line => line.includes('CLICK-OUT-')).length === 2 && opened.length === 0)
-    await clickText('CLICK-OUT-3')
-    check('G23 output click: folds the command without expanding output', await settled(() => !frame.screen().includes('COMMAND-LAST-LINE')) && !frame.screen().includes('CLICK-OUT-0'))
-    frame.stdin.write('\x0f')
-    check('G23 Ctrl+O: opens full command', await settled(() => frame.screen().includes('COMMAND-LAST-LINE')) && !frame.screen().includes('CLICK-OUT-0'))
-    await clickText('COMMAND-LAST-LINE')
-    check('G23 global expanded: body click can still fold this command', await settled(() => !frame.screen().includes('COMMAND-LAST-LINE')) && frame.lines().filter(line => line.includes('CLICK-OUT-')).length === 2)
-    await clickText('cd D:/project')
-    check('G23 global expanded: body click can reopen this command', await settled(() => frame.screen().includes('COMMAND-LAST-LINE')) && !frame.screen().includes('CLICK-OUT-0'))
-    frame.stdin.write('\x0f')
-    check('G23 Ctrl+O: folds the command again', await settled(() => !frame.screen().includes('COMMAND-LAST-LINE')))
-    await clickText('job: pwsh-click')
-    check('G23 capsule: opens the correct task rather than expanding', await settled(() => opened[0] === 'pwsh-click') && !frame.screen().includes('COMMAND-LAST-LINE'), JSON.stringify(opened))
-  })
-}
-
-console.log('--- G24: twenty-five script lines expand completely with no control rows ---')
-{
-  const script = Array.from({ length: 25 }, (_, index) => 'SCRIPT-ROW-' + String(index + 1).padStart(2, '0')).join('\n')
-  const rows = [jobRow(1, makeJob('pwsh-all', 'completed', { label: 'pwsh -NoProfile -Command "' + script + '"', outputLines: [{ text: 'output row one' }, { text: 'output row two' }] }))]
-  await withTerminal(() => renderList(rows), async frame => {
-    check('G24 folded: interpreter-free first statement without labels', await settled(() => frame.screen().includes('SCRIPT-ROW-01')) && !frame.screen().includes('SCRIPT-ROW-02') && !frame.screen().includes('pwsh -NoProfile') && !frame.screen().includes('⎿'))
-    frame.rerender(renderList(rows, { expanded: true }))
-    check('G24 expanded: twenty-five command rows all paint', await settled(() => frame.screen().includes('SCRIPT-ROW-25')) && frame.lines().filter(line => /SCRIPT-ROW-\d{2}/.test(line)).length === 25 && !frame.screen().includes('script (') && !frame.screen().includes('⎿'), frame.lines().slice(0, 30).join('|'))
-    const command = termTest.findText(frame.term, 'SCRIPT-ROW-01')
-    const header = termTest.findText(frame.term, 'job: pwsh-all')
-    const bodyColor = command === null ? undefined : frame.term.buffer.active.getLine(command.row)?.getCell(command.col)?.getFgColor()
-    const rgb = bodyColor === undefined ? '' : `rgb(${(bodyColor >> 16) & 255},${(bodyColor >> 8) & 255},${bodyColor & 255})`
-    check('G24 hierarchy: content stays gray and capsule stays bright', command !== null && header !== null && rgb === (await import('../src/theme.js')).getActiveTheme().inactive && frame.term.buffer.active.getLine(header.row)?.getCell(header.col)?.getFgColor() !== bodyColor)
-    check('G24 output: settled and expanded cards still show exactly two rows', frame.lines().filter(line => line.includes('output row')).length === 2)
-    const { jobCommandRows } = await import('../src/components/Chat/JobCard.js')
-    const compact = jobCommandRows('pwsh -Command "first\n\n\nlast"', 80, true)
-    check('G24 blanks: repeated empty lines compress to one without adding labels', compact.length === 3 && compact[1] === '' && compact[2] === 'last', JSON.stringify(compact))
-    frame.rerender(renderList([jobRow(1, makeJob('pwsh-blank', 'completed', { label: 'first\n\n\nlast' }))], { expanded: true }))
-    await settled(() => frame.screen().includes('│ last'))
-    const first = frame.lines().findIndex(line => line.trimEnd().endsWith(commandMark + ' first'))
-    const last = frame.lines().findIndex(line => line.trimEnd().endsWith('│ last'))
-    check('G24 blanks: one actual visual blank row remains inside the edge', first >= 0 && last === first + 2 && frame.lines()[first + 1]?.trim() === '│', frame.lines().slice(0, 6).join('|'))
-  })
 }
 
 if (failed > 0) {

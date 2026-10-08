@@ -313,10 +313,14 @@ const promptText = (view = screen()) => {
   if (start === -1) return ''
   const rows = []
   for (let i = start; i < lines.length; i++) {
-    if (i > start && /^\s*[╰└]/.test(lines[i])) break
+    // The fork composer is a filled surface with a heavy LEFT rail: every row
+    // it owns (top padding, draft rows, bottom padding) starts with the rail
+    // glyph, and there is no bottom border row. The first row without the
+    // rail is the status line below the box — stop there.
+    if (i > start && !/^\s*[┃╎]/.test(lines[i])) break
     rows.push(lines[i])
   }
-  return rows.join(' ').replace(/[❯⌸⛶╭╮╰╯─│═║┃]+/g, ' ').replace(/\s+/g, ' ').trim()
+  return rows.join(' ').replace(/[❯⌸⛶╭╮╰╯─│═║┃╎]+/g, ' ').replace(/\s+/g, ' ').trim()
 }
 // Baseline: a plain 'v' types normally.
 stdin.write('v')

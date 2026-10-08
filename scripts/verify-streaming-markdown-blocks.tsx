@@ -11,7 +11,7 @@ import type { DOMNode, TextNode, DOMElement } from '../src/ink/dom.js'
 import type { Frame } from '../src/ink/frame.js'
 import type { Screen } from '../src/ink/screen.js'
 
-const [React, { marked }, { Box, Text }, { Markdown }, { StreamingMarkdown }, { MarkdownTable }, { configureMarked, formatMarkdownBlockWithLayout, markdownBlocks, joinFormattedMarkdown, trimFormattedMarkdown }, { renderToScreen }, { cellAtIndex }] = await Promise.all([
+const [React, { marked }, { Box, Text }, { Markdown }, { StreamingMarkdown }, { MarkdownTable }, { CodeBlockFrame }, { configureMarked, formatMarkdownBlockWithLayout, markdownBlocks, joinFormattedMarkdown, trimFormattedMarkdown }, { renderToScreen }, { cellAtIndex }, { TerminalSizeContext }] = await Promise.all([
   import('react'), import('marked'), import('../src/ui.js'),
   import('../src/components/Markdown.js'), import('../src/components/StreamingMarkdown.js'),
   import('../src/components/MarkdownTable.js'), import('../src/components/CodeBlockFrame.js'),
@@ -34,6 +34,11 @@ function unsplit(source: string): React.ReactElement {
     if (token.type === 'table') {
       flush()
       nodes.push(<Box key={nodes.length} marginTop={gap}><MarkdownTable token={token as Tokens.Table} highlight={null} /></Box>)
+    } else if (token.type === 'code') {
+      // Fences render through the same CodeBlockFrame the component path
+      // uses, so the unsplit reference matches Markdown's node decisions.
+      flush()
+      nodes.push(<Box key={nodes.length} marginTop={gap} flexDirection="column"><CodeBlockFrame token={token as Tokens.Code} highlight={null} /></Box>)
     } else {
       if (!part.text) margin = gap
       const separator = { text: '\n'.repeat(gap), continuationIndent: Array(gap + 1).fill(0) }

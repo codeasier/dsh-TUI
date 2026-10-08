@@ -950,7 +950,7 @@ await withTerminal(
     check('C3 面板标题与两行任务', text.includes('Background Jobs') && text.includes('pwsh-1') && text.includes('bash-2'))
     check('C3 面板含操作提示', text.includes('press k twice'), text.split('\n').at(-3) ?? '')
     // 聚焦第一行（默认）→ 详情块展开：完整任务名 + 开始时间 + 输出尾巴。
-    check('C3 聚焦行详情含完整任务名与开始时间', text.includes('gh run watch 42') && text.includes('started'), text.split('\n').slice(0, 8).join('|'))
+    check('C3 聚焦行详情含完整概述与开始时间', text.includes('Watch CI results') && text.includes('started'), text.split('\n').slice(0, 8).join('|'))
     check('C3 聚焦行详情含完整命令', text.split('\n').some(line => line.includes('│ ') && line.includes('gh pr checks --watch 42')), text.split('\n').slice(0, 8).join('|'))
     check('C3 聚焦行详情含镜像输出尾巴', text.includes('build step 1 ok') && text.includes('build step 2 ok'))
     // 非聚焦行不展开详情（bash-2 无输出 → 其无输出提示也不应出现）。
@@ -1047,9 +1047,8 @@ console.log('--- G16: panel commands wrap below the job header ---')
       }),
       async (screen, _rerender, stdin) => {
         await sleep(150) // 固定窗:探针 G16 面板行布局落定
-        check('G16 ' + cols + ' columns: command folds by default', !screen().includes(tail) && screen().includes('Write-Output'), screen().split('\n').slice(0, 7).join('|'))
-        stdin.write('e')
-        await settled(() => screen().includes(tail))
+        // fork 契约：面板是深视图，焦点行命令默认全文换行（无折叠首语句）。
+        check('G16 ' + cols + ' columns: focused command wraps in full by default', await settled(() => screen().includes(tail)) && screen().includes('Write-Output'), screen().split('\n').slice(0, 7).join('|'))
         const lines = screen().split('\n')
         const header = lines.findIndex(line => line.includes('pwsh-1'))
         const command = lines.findIndex(line => line.includes('Write-Output'))
@@ -1067,9 +1066,8 @@ console.log('--- G17: the job panel keeps all twenty-five script rows ---')
   await withTerminal(
     () => React.createElement(JobsPanel, { jobs: [{ ...runningJob, label: 'long script', command, outputLines: [] }], variant: 'panel', onKill: () => {} }),
     async (screen, _rerender, stdin) => {
-      check('G17 panel: script begins folded at its first statement', await settled(() => screen().includes('PANEL-SCRIPT-01')) && !screen().includes('PANEL-SCRIPT-02'))
-      stdin.write('e')
-      await settle(() => screen().includes('PANEL-SCRIPT-02'))
+      // fork 契约：深视图命令默认全文（首语句起全部可见）。
+      check('G17 panel: script begins at its first statement in full', await settled(() => screen().includes('PANEL-SCRIPT-01')) && screen().includes('PANEL-SCRIPT-02'))
       for (let row = 0; row < 16; row++) {
         stdin.write('\x1b[B')
         await sleep(30) // 固定窗:pacing 逐次滚动，按键和渲染不合并
