@@ -2059,6 +2059,8 @@ const dict = {
   'provider-row-meta-effort': { zh: '思考 {{value}}', en: 'effort {{value}}' },
   'provider-row-meta-no-reasoning': { zh: '无思考档', en: 'no reasoning' },
   'provider-sync-row-retired': { zh: '官方已下架（仍启用）', en: 'no longer advertised (still enabled)' },
+  'provider-sync-row-anthropic': { zh: '走 anthropic-messages（派生路由 -live-anthropic）', en: 'via anthropic-messages (derived route -live-anthropic)' },
+  'provider-sync-transcript-split': { zh: '{{derived}}：{{models}}', en: '{{derived}}: {{models}}' },
   'provider-sync-detail': { zh: '官方端点共 {{total}} 个内置目录之外的模型：已启用 {{enabled}}、未启用 {{unenabled}}。只有勾选的会启用；全部取消会移除派生路由 {{derived}}', en: 'The endpoint publishes {{total}} model(s) beyond the installed snapshot: {{enabled}} enabled, {{unenabled}} not. Only checked ids are enabled; clearing every row removes the derived route {{derived}}' },
   'provider-rollback-ok': { zh: '已回滚刚写入的密钥', en: 'Rolled back the just-written key' },
   'provider-rollback-failed': { zh: '密钥回滚失败，请手动检查 ~/.dsh/.credentials.yaml', en: 'Key rollback failed — check ~/.dsh/.credentials.yaml manually' },

@@ -22,9 +22,10 @@ export type { ProviderSetupHost, CatalogProviderCandidate, ConfiguredProvider, P
 import { t } from '../i18n.js'
 import {
   catalogLiveTarget,
-  derivedCatalogRoute,
+  derivedCatalogRoutes,
   inspectCatalogRoutes,
   readVendorCatalog,
+  requiresAnthropicLiveProtocol,
   syncableCatalogRoutes,
   vendorMetadataFor,
   writeCatalogSyncSelection,
@@ -266,7 +267,7 @@ async function runCatalogSyncWizard(deps: ProviderWizardDeps): Promise<ProviderW
   if (status.reason !== undefined) {
     notify(t(catalogSyncReasonKey(status), {
       route: status.route,
-      derived: status.derived,
+      derived: status.conflictedDerived ?? status.derived,
     }), { color: 'warning', timeoutMs: 8000 })
     return status.failed === true ? 'failed' : 'cancelled'
   }
@@ -287,6 +288,9 @@ async function runCatalogSyncWizard(deps: ProviderWizardDeps): Promise<ProviderW
   const vendorRows = status.vendorOnly ?? []
   const vendorIds = new Set(vendorRows.map(row => row.id))
   const retiredRows = status.enabled.filter(id => !vendorIds.has(id))
+  const derivedList = status.derivedAnthropic === undefined
+    ? status.derived
+    : `${status.derived}, ${status.derivedAnthropic}`
   const modelsAnswer = await ask({
     questions: [optionQuestion('sync-models', t('provider-q-sync-models', { route: status.route }), [
       ...vendorRows.map(row => ({
@@ -301,7 +305,7 @@ async function runCatalogSyncWizard(deps: ProviderWizardDeps): Promise<ProviderW
         total: vendorRows.length,
         enabled: status.enabled.length,
         unenabled: status.unenabled?.length ?? 0,
-        derived: status.derived,
+        derived: derivedList,
       }),
     })],
   })
@@ -319,24 +323,25 @@ async function runCatalogSyncWizard(deps: ProviderWizardDeps): Promise<ProviderW
     return 'failed'
   }
   if (write.status === 'unchanged' || write.status === 'nothing') {
-    notify(t('provider-sync-unchanged', { route: status.route, derived: status.derived }))
+    notify(t('provider-sync-unchanged', { route: status.route, derived: derivedList }))
     return 'cancelled'
   }
   if (write.status === 'removed') {
     pushLocal('/provider', [
-      t('provider-sync-transcript-route', { route: status.route, derived: status.derived }),
+      t('provider-sync-transcript-route', { route: status.route, derived: derivedList }),
       t('provider-sync-line-pruned', { n: write.removed.length }),
     ])
-    notify(t('provider-sync-removed', { route: status.route, derived: status.derived }), { color: 'success' })
+    notify(t('provider-sync-removed', { route: status.route, derived: derivedList }), { color: 'success' })
     return 'synced'
   }
   pushLocal('/provider', [
-    t('provider-sync-transcript-route', { route: status.route, derived: status.derived }),
+    t('provider-sync-transcript-route', { route: status.route, derived: derivedList }),
     modelsSummaryLine(write.models, { added: write.added, removed: write.removed }),
+    ...splitSummaryLines(write),
   ])
   notify(t('provider-sync-success', {
     route: status.route,
-    derived: status.derived,
+    derived: derivedList,
     n: write.models.length,
     added: write.added.length,
     removed: write.removed.length,
@@ -345,12 +350,34 @@ async function runCatalogSyncWizard(deps: ProviderWizardDeps): Promise<ProviderW
 }
 
 /**
+ * One transcript line per active derived route when the selection spans
+ * protocols (e.g. `opencode-go-live: …` plus
+ * `opencode-go-live-anthropic: …`). Single-protocol selections report the
+ * aggregate only, preserving the historical single-line shape.
+ */
+function splitSummaryLines(write: CatalogSyncWrite): readonly string[] {
+  const perRoute = write.perRoute
+  if (perRoute === undefined) return []
+  const active = perRoute.filter(entry => entry.models.length > 0)
+  if (active.length <= 1) return []
+  return active.map(entry =>
+    t('provider-sync-transcript-split', { derived: entry.derived, models: entry.models.join(', ') }),
+  )
+}
+
+/**
  * The panel description for one vendor-only model: what the vendor catalog
  * says about it, in the wizard's own words. An id the catalog does not
- * describe says so instead of pretending to know.
+ * describe says so instead of pretending to know. A Claude id notes its
+ * anthropic-only routing, since the vendor answers it over
+ * openai-completions with `ModelProtocolUnsupported`.
  */
 function vendorRowDescription(id: string, metadata: VendorModelMetadata | undefined): string | undefined {
-  if (metadata === undefined) return t('provider-sync-row-no-meta')
+  const suffix = requiresAnthropicLiveProtocol(id) ? ` · ${t('provider-sync-row-anthropic')}` : undefined
+  if (metadata === undefined) {
+    const base = t('provider-sync-row-no-meta')
+    return suffix === undefined ? base : `${base}${suffix}`
+  }
   const parts = [metadata.name ?? id]
   if (metadata.contextWindow !== undefined) {
     parts.push(t('provider-row-meta-ctx', { value: formatCapacity(metadata.contextWindow) }))
@@ -367,7 +394,8 @@ function vendorRowDescription(id: string, metadata: VendorModelMetadata | undefi
     const levels = Object.keys(efforts)
     if (levels.length > 0) parts.push(t('provider-row-meta-effort', { value: levels.join('/') }))
   }
-  return parts.join(' · ')
+  const base = parts.join(' · ')
+  return suffix === undefined ? base : `${base}${suffix}`
 }
 
 /**
@@ -1456,7 +1484,7 @@ async function discoverRouteModels(
       ...(vendor.live === 'fetched'
         ? {
           vendorOnly: vendor.rows.filter(row => !catalogIds.has(row.id)),
-          vendorDerived: derivedCatalogRoute(provider),
+          vendorDerived: derivedCatalogRoutes(provider).join(', '),
         }
         : {}),
     }

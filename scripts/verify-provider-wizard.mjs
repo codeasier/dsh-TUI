@@ -318,6 +318,13 @@ const VENDOR_CATALOG = {
         reasoning: true,
         reasoning_options: [{ type: 'toggle' }],
       },
+      'claude-haiku-5-5': {
+        name: 'Claude Haiku 5.5',
+        limit: { context: 1000000, output: 128000 },
+        modalities: { input: ['text', 'image'] },
+        reasoning: true,
+        reasoning_options: [{ type: 'toggle' }],
+      },
     },
   },
   'opencode': {
@@ -1874,7 +1881,7 @@ for (const invalid of [
       total: 2,
       enabled: 0,
       unenabled: 2,
-      derived: 'opencode-go-live',
+      derived: 'opencode-go-live, opencode-go-live-anthropic',
     }), JSON.stringify(calls.details['sync-models']))
   const written = calls.mutations[0]?.[1]?.[0]?.value ?? []
   check('43 manage: the derived route enables exactly the ticked id, enriched',
@@ -1901,14 +1908,14 @@ for (const invalid of [
     JSON.stringify({ profiles: calls.profiles, credentials: calls.credentials }))
   check('43 manage: transcript reports the enabled set',
     calls.pushed.some(entry => entry.title === '/provider'
-      && entry.lines[0] === t('provider-sync-transcript-route', { route: 'opencode-go', derived: 'opencode-go-live' })
+      && entry.lines[0] === t('provider-sync-transcript-route', { route: 'opencode-go', derived: 'opencode-go-live, opencode-go-live-anthropic' })
       && entry.lines[1].includes('longcat-2.5-preview-free')),
     JSON.stringify(calls.pushed))
   check('43 manage: success toast counts the enabled set',
     calls.notifications.some(n => n.color === 'success'
       && n.text === t('provider-sync-success', {
         route: 'opencode-go',
-        derived: 'opencode-go-live',
+        derived: 'opencode-go-live, opencode-go-live-anthropic',
         n: 1,
         added: 1,
         removed: 0,
@@ -1943,6 +1950,99 @@ for (const invalid of [
     calls.optionDescriptions['sync-models']?.['longcat-2.5-preview-free'] === t('provider-sync-row-no-meta')
       && calls.notifications.some(n => n.color === 'warning' && n.text === t('provider-sync-meta-unavailable')),
     JSON.stringify({ rows: calls.optionDescriptions['sync-models'], notifications: calls.notifications }))
+}
+
+// 43c. A Claude id splits to the anthropic derived route: the vendor serves
+// `claude-*` over anthropic-messages only, and an openai-completions request
+// for it fails the first turn with 400 ModelProtocolUnsupported.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['claude-haiku-5-5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'claude-haiku-5-5' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('43c claude split: outcome synced', outcome === 'synced', outcome)
+  check('43c claude split: the row notes its anthropic-only routing',
+    (calls.optionDescriptions['sync-models']?.['claude-haiku-5-5'] ?? '').includes(t('provider-sync-row-anthropic')),
+    JSON.stringify(calls.optionDescriptions['sync-models']))
+  const anthropicMutation = calls.mutations.find(([route]) => route === 'opencode-go-live-anthropic')
+  check('43c claude split: the anthropic derived route carries the Claude id',
+    calls.mutations.length === 1 && anthropicMutation !== undefined
+      && anthropicMutation[1].find(op => op.path.join('.') === 'models')?.value?.[0]?.id === 'claude-haiku-5-5',
+    JSON.stringify(calls.mutations))
+  check('43c claude split: the anthropic route declares its protocol and endpoint',
+    eq(anthropicMutation?.[1]?.slice(1, 5), [
+      { op: 'set', path: ['api'], value: 'anthropic-messages' },
+      { op: 'set', path: ['baseURL'], value: 'https://opencode.ai/zen/go' },
+      { op: 'set', path: ['apiKeyEnv'], value: 'OPENCODE_GO_API_KEY' },
+      { op: 'set', path: ['displayName'], value: 'OpenCode Go (live-anthropic)' },
+    ]), JSON.stringify(anthropicMutation?.[1]))
+  check('43c claude split: the primary derived route is untouched',
+    !calls.mutations.some(([route]) => route === 'opencode-go-live')
+      && !calls.removedProfiles.includes('opencode-go-live'),
+    JSON.stringify({ mutations: calls.mutations, removed: calls.removedProfiles }))
+}
+
+// 43d. A mixed selection splits across both derived routes, with one
+// transcript line per active route.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['longcat-2.5-preview-free', 'claude-haiku-5-5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'longcat-2.5-preview-free' }, { id: 'claude-haiku-5-5' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  const byRoute = new Map(calls.mutations.map(([route, ops]) => [route, ops]))
+  check('43d mixed split: outcome synced', outcome === 'synced', outcome)
+  check('43d mixed split: each protocol lands on its own derived route',
+    calls.mutations.length === 2
+      && byRoute.get('opencode-go-live')?.find(op => op.path.join('.') === 'models')?.value?.[0]?.id === 'longcat-2.5-preview-free'
+      && byRoute.get('opencode-go-live-anthropic')?.find(op => op.path.join('.') === 'models')?.value?.[0]?.id === 'claude-haiku-5-5',
+    JSON.stringify(calls.mutations))
+  check('43d mixed split: transcript names both derived routes',
+    calls.pushed.some(entry => entry.title === '/provider'
+      && entry.lines.some(line => line.includes('opencode-go-live: longcat-2.5-preview-free'))
+      && entry.lines.some(line => line.includes('opencode-go-live-anthropic: claude-haiku-5-5'))),
+    JSON.stringify(calls.pushed))
+}
+
+// 43e. A Claude id stranded on the primary route by an older build migrates
+// on the next write: the primary route drops it, the anthropic route gains it.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['claude-haiku-5-5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['claude-haiku-5-5'], modelEntries: [{ id: 'claude-haiku-5-5' }], headers: { 'x-opencode-session': 'session-abc' } },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'claude-haiku-5-5' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('43e stranded migration: outcome synced', outcome === 'synced', outcome)
+  check('43e stranded migration: the primary route is removed, the anthropic route gains the id',
+    calls.removedProfiles.includes('opencode-go-live')
+      && calls.mutations.some(([route, ops]) => route === 'opencode-go-live-anthropic'
+        && ops.find(op => op.path.join('.') === 'models')?.value?.[0]?.id === 'claude-haiku-5-5'),
+    JSON.stringify({ removed: calls.removedProfiles, mutations: calls.mutations }))
 }
 
 // 44. Un-checking an enabled model disables it, while a kept id keeps the
@@ -1989,7 +2089,7 @@ for (const invalid of [
     calls.notifications.some(n => n.color === 'success'
       && n.text === t('provider-sync-success', {
         route: 'opencode-go',
-        derived: 'opencode-go-live',
+        derived: 'opencode-go-live, opencode-go-live-anthropic',
         n: 1,
         added: 0,
         removed: 1,
@@ -2026,7 +2126,7 @@ for (const invalid of [
   check('45 manage no-op: outcome cancelled (nothing written)', outcome === 'cancelled', outcome)
   check('45 manage no-op: no profile mutation', eq(calls.mutations, []), JSON.stringify(calls.mutations))
   check('45 manage no-op: toast says it already matches',
-    calls.notifications.some(n => n.text === t('provider-sync-unchanged', { route: 'opencode-go', derived: 'opencode-go-live' })),
+    calls.notifications.some(n => n.text === t('provider-sync-unchanged', { route: 'opencode-go', derived: 'opencode-go-live, opencode-go-live-anthropic' })),
     JSON.stringify(calls.notifications))
 
   // Same selection over a bare stored entry: the catalog fields are added once.
@@ -2364,7 +2464,7 @@ for (const invalid of [
     calls.details.models === t('provider-catalog-vendor-note', {
       n: 1,
       models: 'longcat-2.5-preview-free',
-      derived: 'opencode-go-live',
+      derived: 'opencode-go-live, opencode-go-live-anthropic',
     }) && calls.optionDescriptions.models?.['longcat-2.5-preview-free'] === undefined,
     JSON.stringify({ detail: calls.details.models, options: Object.keys(calls.optionDescriptions.models ?? {}) }))
   check('52 connect: the catalog profile pins only the selected snapshot model',
@@ -2425,7 +2525,7 @@ for (const invalid of [
     calls.details.models === t('provider-catalog-vendor-note', {
       n: 1,
       models: 'longcat-2.5-preview-free',
-      derived: 'opencode-go-live',
+      derived: 'opencode-go-live, opencode-go-live-anthropic',
     }), JSON.stringify(calls.details.models))
   check('54 edit with vendor extras: only catalog-covered ids are selectable',
     eq(Object.keys(calls.optionDescriptions.models ?? {}).sort(), ['glm-5.2', 'glm-5.3']),

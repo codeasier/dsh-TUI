@@ -6,21 +6,23 @@
  * listing, and a profile only carries ROUTE-level `api`/`baseURL`, so an id
  * the installed catalog does not describe cannot join the catalog route
  * without forcing every catalog model of that route onto one wire protocol.
- * The vendor's extras therefore live on a derived route the USER manages
- * (`<route>-live`, see {@link derivedCatalogRoute}), whose single protocol and
- * endpoint are facts of this module.
+ * The vendor's extras therefore live on derived routes the USER manages
+ * (`<route>-live` for the listing protocol, plus `<route>-live-anthropic`
+ * when the roster spans protocols — see {@link derivedCatalogRoute} and
+ * {@link derivedAnthropicCatalogRoute}), whose single protocol and endpoint
+ * each are facts of this module.
  *
  * Enablement is the user's, never this module's:
  *
- *   - The derived route's stored `models` IS the enabled set. Nothing here
- *     turns a model on by itself — not the boot pass, not the inspection. A
- *     model the vendor advertises beyond the installed catalog only ever
- *     surfaces as a report until the user enables it.
+ *   - Each derived route's stored `models` IS the enabled set for its
+ *     protocol. Nothing here turns a model on by itself — not the boot pass,
+ *     not the inspection. A model the vendor advertises beyond the installed
+ *     catalog only ever surfaces as a report until the user enables it.
  *   - The boot pass ({@link reportCatalogRoutesQuietly}) inspects and logs;
  *     the only writer is {@link writeCatalogSyncSelection}, called with
- *     exactly the ids the user picked.
+ *     exactly the ids the user picked (split by protocol inside).
  *
- * The derived route also carries the vendor's routing header
+ * Each derived route also carries the vendor's routing header
  * ({@link OPENCODE_SESSION_HEADER}): declared routes bypass pi-ai's own
  * per-request OpenCode wrapper, and the vendor refuses a request without it.
  *
@@ -70,6 +72,14 @@ export interface CatalogLiveTarget {
  * anthropic-messages, `/zen/go/v1` for both OpenAI protocols), while the
  * `/v1/models` listing is the vendor's whole Go roster — and the snapshot
  * that ships inside pi-ai lags it by double-digit model counts.
+ *
+ * The listing endpoint speaks one protocol but advertises every model; the
+ * write side therefore splits by the vendor's per-model protocol (see
+ * {@link requiresAnthropicLiveProtocol} and
+ * {@link CATALOG_LIVE_ANTHROPIC_TARGETS}). A Claude id forced onto the
+ * OpenAI-compatible derived route fails its first turn with
+ * `400 {"type":"ModelProtocolUnsupported"}` — the vendor only serves it over
+ * anthropic-messages at `/zen/go`.
  */
 export const CATALOG_LIVE_TARGETS: Readonly<Record<string, CatalogLiveTarget>> = {
   'opencode-go': {
@@ -80,9 +90,51 @@ export const CATALOG_LIVE_TARGETS: Readonly<Record<string, CatalogLiveTarget>> =
   },
 }
 
+/**
+ * Write targets for vendor-only models the listing protocol cannot serve.
+ * `opencode-go` Claude ids (`claude-*`) are the registered case: the
+ * `/v1/models` listing advertises them, but the vendor answers an
+ * openai-completions request for them with `ModelProtocolUnsupported`.
+ * They are managed on a second derived route speaking anthropic-messages at
+ * the vendor's anthropic base path, sharing the parent route's key.
+ */
+export const CATALOG_LIVE_ANTHROPIC_TARGETS: Readonly<Record<string, CatalogLiveTarget>> = {
+  'opencode-go': {
+    api: 'anthropic-messages',
+    baseURL: 'https://opencode.ai/zen/go',
+    envRef: 'OPENCODE_API_KEY',
+    metadataProviders: ['opencode-go', 'opencode'],
+  },
+}
+
 /** The live target of one catalog route, or undefined when it has none. */
 export function catalogLiveTarget(route: string): CatalogLiveTarget | undefined {
   return Object.hasOwn(CATALOG_LIVE_TARGETS, route) ? CATALOG_LIVE_TARGETS[route] : undefined
+}
+
+/** The anthropic write target of one catalog route, or undefined when all its models share the listing protocol. */
+export function catalogLiveAnthropicTarget(route: string): CatalogLiveTarget | undefined {
+  return Object.hasOwn(CATALOG_LIVE_ANTHROPIC_TARGETS, route)
+    ? CATALOG_LIVE_ANTHROPIC_TARGETS[route]
+    : undefined
+}
+
+/**
+ * Whether a vendor-only id must be served over anthropic-messages rather
+ * than the listing protocol.
+ *
+ * Vendor fact, not a guess at the gateway: every `claude-*` id the installed
+ * pi-ai catalog describes on either OpenCode provider (`opencode` zen and
+ * `opencode-go`) speaks anthropic-messages — thirteen Claude ids on zen,
+ * zero on Go (the snapshot predates Go serving Claude at all) — and the live
+ * Go endpoint refuses them over openai-completions with
+ * `ModelProtocolUnsupported`. Non-Claude Go ids stay on the listing
+ * protocol: the snapshot serves the rest of the Go roster over the two OpenAI
+ * protocols from the same `/v1` base path, and the vendor translates between
+ * them there.
+ */
+export function requiresAnthropicLiveProtocol(id: string): boolean {
+  return id.startsWith('claude-')
 }
 
 /**
@@ -100,6 +152,18 @@ export const OPENCODE_SESSION_HEADER = 'x-opencode-session'
 /** The derived route one catalog route's vendor extras are managed on. */
 export function derivedCatalogRoute(route: string): string {
   return `${route}-live`
+}
+
+/** The derived route one catalog route's anthropic-only vendor extras are managed on. */
+export function derivedAnthropicCatalogRoute(route: string): string {
+  return `${route}-live-anthropic`
+}
+
+/** Every derived route one catalog route's vendor extras may be managed on, primary first. */
+export function derivedCatalogRoutes(route: string): readonly string[] {
+  return catalogLiveAnthropicTarget(route) === undefined
+    ? [derivedCatalogRoute(route)]
+    : [derivedCatalogRoute(route), derivedAnthropicCatalogRoute(route)]
 }
 
 /**
@@ -129,6 +193,13 @@ export interface CatalogSyncStatus {
   readonly route: string
   /** The derived route this status addresses: {@link derivedCatalogRoute}. */
   readonly derived: string
+  /**
+   * The anthropic derived route this status also addresses, when the route
+   * splits vendor-only ids by protocol (see
+   * {@link CATALOG_LIVE_ANTHROPIC_TARGETS}). Absent for single-protocol
+   * routes.
+   */
+  readonly derivedAnthropic?: string
   readonly displayName: string
   /** The ref the derived route stores, when the inspection got that far. */
   readonly ref?: string
@@ -137,10 +208,15 @@ export interface CatalogSyncStatus {
    * only ids this feature can enable. Absent when the inspection refused.
    */
   readonly vendorOnly?: readonly LlmDiscoveredModel[]
-  /** Ids currently enabled on the derived route, in stored order. */
+  /**
+   * Ids currently enabled across every derived route, in stored order
+   * (primary first, then anthropic). The picker pre-checks exactly this set.
+   */
   readonly enabled: readonly string[]
   /** Resolved request headers of the derived route, when it is stored. */
   readonly headers?: Readonly<Record<string, string>>
+  /** Resolved request headers of the anthropic derived route, when stored. */
+  readonly headersAnthropic?: Readonly<Record<string, string>>
   /** Vendor-advertised ids that are NOT enabled (the "new on endpoint" set). */
   readonly unenabled?: readonly string[]
   /** Enabled ids the vendor no longer advertises. */
@@ -148,16 +224,35 @@ export interface CatalogSyncStatus {
   readonly reason?: CatalogSyncReason
   /** Whether the refusal is a failure (a probe) rather than a plain skip. */
   readonly failed?: boolean
+  /**
+   * Which derived route refused, when `reason` is `derived-conflict`.
+   * Defaults to {@link derived} for older callers that only read `derived`.
+   */
+  readonly conflictedDerived?: string
 }
 
-/** What one interactive write did to the derived route. */
+/** What one interactive write did to the derived route(s). */
 export interface CatalogSyncWrite {
   readonly status: 'written' | 'removed' | 'unchanged' | 'nothing'
-  /** Ids the derived route gained. */
+  /** Ids the derived route(s) gained, across every derived route. */
   readonly added: readonly string[]
-  /** Ids the derived route lost. */
+  /** Ids the derived route(s) lost, across every derived route. */
   readonly removed: readonly string[]
-  /** The enabled set after the write. */
+  /** The enabled set after the write, in the user's picked order. */
+  readonly models: readonly string[]
+  /**
+   * Per-derived-route outcome, primary first. Present when the route splits
+   * by protocol; single-protocol routes report the aggregate only.
+   */
+  readonly perRoute?: readonly CatalogSyncRouteWrite[]
+}
+
+/** What one interactive write did to one derived route. */
+export interface CatalogSyncRouteWrite {
+  readonly derived: string
+  readonly status: 'written' | 'removed' | 'unchanged' | 'nothing'
+  readonly added: readonly string[]
+  readonly removed: readonly string[]
   readonly models: readonly string[]
 }
 
@@ -200,10 +295,30 @@ export async function inspectCatalogRoute(
   options: CatalogSyncOptions = {},
 ): Promise<CatalogSyncStatus> {
   const derived = derivedCatalogRoute(provider.route)
+  const anthropicTarget = catalogLiveAnthropicTarget(provider.route)
+  const derivedAnthropic = anthropicTarget === undefined ? undefined : derivedAnthropicCatalogRoute(provider.route)
   const stored = host.listConfiguredProviders().find(row => row.route === derived)
-  const enabled = stored?.models ?? []
-  const refused = (reason: CatalogSyncReason, failed = false): CatalogSyncStatus =>
-    ({ route: provider.route, derived, displayName, enabled, headers: stored?.headers, reason, failed })
+  const storedAnthropic = derivedAnthropic === undefined
+    ? undefined
+    : host.listConfiguredProviders().find(row => row.route === derivedAnthropic)
+  // The enabled set spans every derived route (primary first, then
+  // anthropic) so the picker pre-checks exactly what is on. A legacy
+  // single-route install that enabled a Claude id on the primary route keeps
+  // surfacing it here — the next write migrates it to the anthropic route.
+  const enabled = [...(stored?.models ?? []), ...(storedAnthropic?.models ?? [])]
+  const refused = (reason: CatalogSyncReason, failed = false, conflictedDerived?: string): CatalogSyncStatus =>
+    ({
+      route: provider.route,
+      derived,
+      ...(derivedAnthropic === undefined ? {} : { derivedAnthropic }),
+      displayName,
+      enabled,
+      headers: stored?.headers,
+      ...(storedAnthropic?.headers === undefined ? {} : { headersAnthropic: storedAnthropic.headers }),
+      reason,
+      failed,
+      ...(conflictedDerived === undefined ? {} : { conflictedDerived }),
+    })
   if (!provider.isCatalog) return refused('not-catalog')
   const ref = await syncRefOf(host, provider, target)
   if (ref === undefined) return refused('no-credential')
@@ -216,7 +331,12 @@ export async function inspectCatalogRoute(
   if (stored !== undefined
     && ((stored.api !== undefined && stored.api !== target.api)
       || (stored.baseURL !== undefined && stored.baseURL !== target.baseURL))) {
-    return refused('derived-conflict')
+    return refused('derived-conflict', false, derived)
+  }
+  if (anthropicTarget !== undefined && derivedAnthropic !== undefined && storedAnthropic !== undefined
+    && ((storedAnthropic.api !== undefined && storedAnthropic.api !== anthropicTarget.api)
+      || (storedAnthropic.baseURL !== undefined && storedAnthropic.baseURL !== anthropicTarget.baseURL))) {
+    return refused('derived-conflict', false, derivedAnthropic)
   }
 
   // Pass 1: the ids the installed catalog describes — the catalog route
@@ -245,9 +365,11 @@ export async function inspectCatalogRoute(
   return {
     route: provider.route,
     derived,
+    ...(derivedAnthropic === undefined ? {} : { derivedAnthropic }),
     displayName,
     ref,
     headers: stored?.headers,
+    ...(storedAnthropic?.headers === undefined ? {} : { headersAnthropic: storedAnthropic.headers }),
     vendorOnly,
     enabled,
     unenabled: vendorOnly.filter(row => !enabled.includes(row.id)).map(row => row.id),
@@ -278,20 +400,32 @@ export async function inspectCatalogRoutes(
 }
 
 /**
- * Apply one route's enabled set to its derived route. This is the ONLY writer:
- * the caller passes exactly the ids the user picked, so nothing is ever enabled
- * on the user's behalf.
+ * Apply one route's enabled set to its derived route(s). This is the ONLY
+ * writer: the caller passes exactly the ids the user picked, so nothing is
+ * ever enabled on the user's behalf.
  *
- * An empty selection removes the derived route — a route serving no models
+ * A route with an anthropic write target (see
+ * {@link CATALOG_LIVE_ANTHROPIC_TARGETS}) splits the selection by the
+ * vendor's per-model protocol: `claude-*` ids go to `<route>-live-anthropic`
+ * (anthropic-messages at `/zen/go`), everything else to `<route>-live`.
+ * Forcing a Claude id onto the OpenAI-compatible derived route is the
+ * `400 ModelProtocolUnsupported` this split fixes — the vendor only serves
+ * Claude over anthropic-messages. Each derived route keeps its own stable
+ * `x-opencode-session` header and its own stored entries, so hand-tuned
+ * capacities survive per route.
+ *
+ * An empty selection removes every derived route — a route serving no models
  * cannot validate, and "nothing enabled" is the honest end state. Per-model
  * fields of ids that stay enabled re-enter their stored entries verbatim, so
  * hand-tuned capacities survive a management pass. An id the vendor listing
- * does not advertise is writable here (the derived route declares protocol and
- * endpoint outright) — that is what makes it the management surface.
+ * does not advertise is writable here (each derived route declares its own
+ * protocol and endpoint outright) — that is what makes it the management
+ * surface. A Claude id enabled on the primary route by an older build
+ * migrates to the anthropic route on the next write.
  *
  * @param host - the provider-setup seam.
- * @param spec - the catalog route and the credential ref its derived route stores.
- * @param selectedIds - the ids to enable (order preserved).
+ * @param spec - the catalog route and the credential ref its derived route(s) store.
+ * @param selectedIds - the ids to enable (order preserved per derived route).
  */
 export async function writeCatalogModels(
   host: ProviderSetupHost,
@@ -301,15 +435,64 @@ export async function writeCatalogModels(
 ): Promise<CatalogSyncWrite> {
   const target = catalogLiveTarget(spec.route)
   if (target === undefined) throw new Error(`dsh-tui: "${spec.route}" has no live target`)
+  const anthropicTarget = catalogLiveAnthropicTarget(spec.route)
+  // Single-protocol routes keep the historical single-write path verbatim so
+  // their stored shape never changes.
+  if (anthropicTarget === undefined) {
+    return await writeOneDerivedRoute(host, spec, target, derivedCatalogRoute(spec.route), selectedIds, metadata, '(live)')
+  }
+  const anthropicIds = selectedIds.filter(id => requiresAnthropicLiveProtocol(id))
+  const primaryIds = selectedIds.filter(id => !requiresAnthropicLiveProtocol(id))
   const derived = derivedCatalogRoute(spec.route)
+  const derivedAnthropic = derivedAnthropicCatalogRoute(spec.route)
+  const primaryWrite = await writeOneDerivedRoute(host, spec, target, derived, primaryIds, metadata, '(live)')
+  const anthropicWrite = await writeOneDerivedRoute(host, spec, anthropicTarget, derivedAnthropic, anthropicIds, metadata, '(live-anthropic)')
+  const perRoute: readonly CatalogSyncRouteWrite[] = [primaryWrite, anthropicWrite].map(write => ({
+    derived: write.derived,
+    status: write.status,
+    added: [...write.added],
+    removed: [...write.removed],
+    models: [...write.models],
+  }))
+  const previous = [...primaryWrite.previous, ...anthropicWrite.previous]
+  const added = selectedIds.filter(id => !previous.includes(id))
+  const removed = previous.filter(id => !selectedIds.includes(id))
+  const models = [...selectedIds]
+  const statuses = [primaryWrite.status, anthropicWrite.status]
+  if (statuses.every(status => status === 'unchanged')) {
+    return { status: 'unchanged', added: [], removed: [], models, perRoute }
+  }
+  if (statuses.every(status => status === 'nothing' || status === 'unchanged')) {
+    return { status: 'nothing', added: [], removed: [], models: [], perRoute }
+  }
+  if (statuses.every(status => status === 'removed' || status === 'nothing' || status === 'unchanged')) {
+    const anyRemoved = primaryWrite.status === 'removed' || anthropicWrite.status === 'removed'
+    return { status: anyRemoved ? 'removed' : 'unchanged', added: [], removed, models, perRoute }
+  }
+  return { status: 'written', added, removed, models, perRoute }
+}
+
+interface OneRouteWrite extends CatalogSyncRouteWrite {
+  readonly previous: readonly string[]
+}
+
+async function writeOneDerivedRoute(
+  host: ProviderSetupHost,
+  spec: { readonly route: string; readonly ref: string },
+  target: CatalogLiveTarget,
+  derived: string,
+  selectedIds: readonly string[],
+  metadata: ReadonlyMap<string, VendorModelMetadata> | undefined,
+  displaySuffix: string,
+): Promise<OneRouteWrite> {
   const stored = host.listConfiguredProviders().find(row => row.route === derived)
   const previous = stored?.models ?? []
   if (selectedIds.length === 0) {
     if (!host.routeExists(derived)) {
-      return { status: 'nothing', added: [], removed: [], models: [] }
+      return { derived, status: 'nothing', added: [], removed: [], models: [], previous }
     }
     await host.removeProfile(derived)
-    return { status: 'removed', added: [], removed: previous, models: [] }
+    return { derived, status: 'removed', added: [], removed: [...previous], models: [], previous }
   }
   const added = selectedIds.filter(id => !previous.includes(id))
   const removed = previous.filter(id => !selectedIds.includes(id))
@@ -322,6 +505,10 @@ export async function writeCatalogModels(
   // itself always wins, so a hand-tuned capacity (or a name) survives every
   // management pass. An id the vendor catalog does not describe stays a bare
   // `{id}` and keeps the adapter's route-level defaults.
+  // NOTE: `storedById` is read from THIS derived route only, so a Claude id
+  // migrating from the primary route does not carry the primary route's
+  // entry verbatim — its metadata is re-resolved for the anthropic route.
+  // A hand-tuned entry already on the correct route still wins, as before.
   const entries = selectedIds.map(id => ({
     ...(metadata?.get(id) ?? {}),
     ...(storedById.get(id) ?? { id }),
@@ -340,17 +527,17 @@ export async function writeCatalogModels(
   if (stored !== undefined && stored.ref === spec.ref
     && sameEntries(entries, storedEntries)
     && sameHeaders(headers, stored.headers)) {
-    return { status: 'unchanged', added: [], removed: [], models: [...selectedIds] }
+    return { derived, status: 'unchanged', added: [], removed: [], models: [...selectedIds], previous }
   }
   await host.mutateProfile(derived, [
     { op: 'set', path: ['models'], value: entries },
     { op: 'set', path: ['api'], value: target.api },
     { op: 'set', path: ['baseURL'], value: target.baseURL },
     { op: 'set', path: ['apiKeyEnv'], value: spec.ref },
-    { op: 'set', path: ['displayName'], value: `${displayName} (live)` },
+    { op: 'set', path: ['displayName'], value: `${displayName} ${displaySuffix}` },
     { op: 'set', path: ['headers'], value: headers },
   ])
-  return { status: 'written', added, removed, models: [...selectedIds] }
+  return { derived, status: 'written', added, removed, models: [...selectedIds], previous }
 }
 
 /**
@@ -541,12 +728,14 @@ function reasoningEffortsFrom(entry: Record<string, unknown>): Readonly<Record<s
 
 /**
  * Best-effort boot pass: inspect every eligible route, log what the user has
- * not enabled (and what the vendor retired), and repair the one thing that is
- * not a user choice — a derived route that carries enabled models but not the
- * vendor's routing header ({@link OPENCODE_SESSION_HEADER}), which the vendor
- * answers with `400 MissingSessionID`. Enablement is never touched: no model is
- * turned on or off here, so an unchanged start stays silent apart from its
- * lines.
+ * not enabled (and what the vendor retired), and repair the two things that
+ * are not user choices — a derived route that carries enabled models but not
+ * the vendor's routing header ({@link OPENCODE_SESSION_HEADER}), which the
+ * vendor answers with `400 MissingSessionID`, and a Claude id stranded on
+ * the OpenAI-compatible derived route by an older build, which the vendor
+ * answers with `400 ModelProtocolUnsupported`. Both repairs add no model
+ * and remove none (the second only moves an id to the route that can serve
+ * it), so neither is an enablement decision.
  * @param host - the provider-setup seam.
  * @param log - one line per real event; the caller picks level and prefix.
  */
@@ -568,14 +757,34 @@ export async function reportCatalogRoutesQuietly(
     if (retired.length > 0) {
       log(`${status.route}: ${retired.length} enabled model(s) the endpoint no longer advertises (${retired.join(', ')})`, 'debug')
     }
+    if (status.ref === undefined || status.enabled.length === 0) continue
     const sessionId = status.headers?.[OPENCODE_SESSION_HEADER]
-    if (status.enabled.length > 0 && status.ref !== undefined
-      && (typeof sessionId !== 'string' || sessionId === '')) {
+    const sessionIdAnthropic = status.headersAnthropic?.[OPENCODE_SESSION_HEADER]
+    const needsHeaderRepair = typeof sessionId !== 'string' || sessionId === ''
+    const needsAnthropicHeaderRepair = status.derivedAnthropic !== undefined
+      && status.enabled.some(id => requiresAnthropicLiveProtocol(id))
+      && (typeof sessionIdAnthropic !== 'string' || sessionIdAnthropic === '')
+    // A Claude id on the primary route is a leftover from before the split:
+    // the vendor rejects it there with ModelProtocolUnsupported, so move it.
+    // Reading the primary route's stored models directly keeps the repair
+    // independent of the merged `enabled` order.
+    const primaryStored = host.listConfiguredProviders().find(row => row.route === status.derived)
+    const stranded = (primaryStored?.models ?? []).filter(id => requiresAnthropicLiveProtocol(id))
+      .filter(id => catalogLiveAnthropicTarget(status.route) !== undefined)
+    if (needsHeaderRepair || needsAnthropicHeaderRepair || stranded.length > 0) {
       // A route enabled before the header requirement — or written by an older
       // build — cannot serve a single request without it. Repairing it adds no
       // model and removes none, so it is not an enablement decision.
       await writeCatalogModels(host, { route: status.route, ref: status.ref }, status.enabled)
-      log(`${status.route}: added the ${OPENCODE_SESSION_HEADER} routing header to ${status.derived}`, 'debug')
+      if (needsHeaderRepair) {
+        log(`${status.route}: added the ${OPENCODE_SESSION_HEADER} routing header to ${status.derived}`, 'debug')
+      }
+      if (needsAnthropicHeaderRepair && status.derivedAnthropic !== undefined) {
+        log(`${status.route}: added the ${OPENCODE_SESSION_HEADER} routing header to ${status.derivedAnthropic}`, 'debug')
+      }
+      if (stranded.length > 0 && status.derivedAnthropic !== undefined) {
+        log(`${status.route}: moved ${stranded.join(', ')} to ${status.derivedAnthropic} (anthropic-messages only)`, 'debug')
+      }
     }
   }
 }

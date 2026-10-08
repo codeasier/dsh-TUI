@@ -316,10 +316,15 @@ providers without a restart.
   cannot join the catalog route itself. The branch reads the vendor's published
   listing live (`opencode-go` uses `https://opencode.ai/zen/go/v1/models`) and
   lists the models beyond the installed catalog as CHECKABLE rows, with the
-  currently enabled ones pre-checked. The selection is written to the derived
-  route `<route>-live` (protocol and endpoint declared there, sharing the
-  parent's key). **Nothing is ever enabled automatically**: unchecked ids stay
-  off, and clearing every row removes the derived route. Both the row
+  currently enabled ones pre-checked. The selection is written to derived
+  route(s) by the vendor's per-model protocol: `claude-*` goes to
+  `<route>-live-anthropic` (anthropic-messages at `https://opencode.ai/zen/go`),
+  everything else to `<route>-live` (protocol and endpoint declared there,
+  sharing the parent's key). Forcing a Claude id onto the OpenAI-compatible
+  derived route fails its first turn with
+  `400 {"type":"ModelProtocolUnsupported"}` — the split fixes exactly that.
+  **Nothing is ever enabled automatically**: unchecked ids stay
+  off, and clearing every row removes the derived route(s). Both the row
   descriptions and the written model entries come from the vendor catalog
   [models.dev](https://models.dev) (the endpoint publishes ids only): name,
   context/output capacities, input modalities (text/image, narrowed when the
@@ -331,14 +336,17 @@ providers without a restart.
   models the catalog already describes keep being served by that route over
   their native protocols. A model the vendor added shows up in that panel (and in
   the add flow's question detail) until you decide; an enabled id the vendor
-  retired is marked as such so you can drop it.
+  retired is marked as such so you can drop it. Claude rows carry an extra
+  anthropic-routing note.
 - The boot-time `catalogModelSync` (on by default) inspects and logs: models the
   vendor publishes but you have not enabled, and enabled ids the vendor retired.
   An offline host, a missing key or an unreadable listing is silent. Its only
-  write is a repair: a stored derived route missing the vendor's
+  writes are non-enablement repairs: a stored derived route missing the vendor's
   `x-opencode-session` header (the OpenCode endpoints answer `400
-  MissingSessionID` without it) gets one stable value — no model is enabled or
-  disabled by it.
+  MissingSessionID` without it) gets one stable value, and a Claude id stranded
+  on the primary derived route by an older build migrates to `-live-anthropic`
+  (otherwise its first turn answers `400 ModelProtocolUnsupported`). Neither
+  enables nor disables any model.
 - While adding a catalog route, the model question names the vendor's extra
   models and the route they are managed on. Those ids are never selectable rows
   on that route (it cannot serve them) and are not enabled by connecting;
