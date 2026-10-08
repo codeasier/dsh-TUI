@@ -10,8 +10,9 @@ import { kernelDisplayName } from './kernelCatalog.js'
 import { Box, Text, useInput, useTerminalSize, useTheme, type ScrollBoxHandle } from '../ui.js'
 import { EffortChargeGlyph } from './EffortChargeGlyph.js'
 import { EffortInputBorder, type InputBorderLabel } from './EffortInputBorder.js'
+import { usePagePanelBleed } from './PageMargin.js'
 import { EffortTierBadge } from './EffortTierBadge.js'
-import { cursorGlyphColor, getTheme } from '../theme.js'
+import { cursorGlyphColor, getTheme, isLightThemeActive } from '../theme.js'
 import { sessionColorHex } from '../terminal-utils/sessionColors.js'
 import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
@@ -23,7 +24,7 @@ import { noteAuxNumber } from '../ink/geometry-trace.js'
 import instances from '../ink/instances.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
-import { getGraphemeSegmenter } from '../utils/intl.js'
+import { getGraphemeSegmenter, getWordSegmenter } from '../utils/intl.js'
 import { draftWordRangeAt, isDraftWordBoundary } from '../utils/draftWordBoundary.js'
 import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
 import { imagePathMediaType, parsePastedImagePath, stageClipboardFilePaths } from '../utils/pastedImagePath.js'
@@ -325,21 +326,31 @@ async function readBoundedRegularFile(path: string, maxBytes: number): Promise<U
   }
 }
 
-/** Index of the word boundary at or before `cursor` (readline alt+b). */
+/** Previous Unicode word start, skipping trailing whitespace. Punctuation
+ *  and emoji are their own units, so deleting after them never eats a word too. */
 function wordBoundaryLeft(text: string, cursor: number): number {
-  let index = cursor
-  while (index > 0 && /\s/.test(text[index - 1]!)) index--
-  while (index > 0 && !/\s/.test(text[index - 1]!)) index--
-  return index
+  const segments = getWordSegmenter().segment(text)
+  let offset = cursor
+  while (offset > 0) {
+    const { index, segment } = segments.containing(offset - 1)!
+    if (!/^\s+$/u.test(segment)) return index
+    offset = index
+  }
+  return 0
 }
 
-/** Index of the word boundary after `cursor` (readline alt+f). */
+/** Next word start: finish the current segment, then skip following whitespace. */
 function wordBoundaryRight(text: string, cursor: number): number {
-  const length = text.length
-  let index = cursor
-  while (index < length && !/\s/.test(text[index]!)) index++
-  while (index < length && /\s/.test(text[index]!)) index++
-  return index
+  const segments = getWordSegmenter().segment(text)
+  const current = segments.containing(cursor)
+  if (current === undefined) return text.length
+  let offset = current.index + current.segment.length
+  while (offset < text.length) {
+    const next = segments.containing(offset)!
+    if (!/^\s+$/u.test(next.segment)) break
+    offset = next.index + next.segment.length
+  }
+  return offset
 }
 
 // --- vim normal-mode helpers -----------------------------------------------
@@ -549,6 +560,10 @@ export interface PromptInputProps {
   channel: Channel
   /** Keep the draft mounted while another prompt-slot panel owns the UI. */
   suspended?: boolean
+  /** Align the collapsed composer with the transcript's wider card surfaces. */
+  bleed?: boolean
+  /** Actual prose column width after reserving the transcript gutter. */
+  collapsedColumns?: number
   /**
    * Host judgement "this notice needs no toast" — the pet panel says it with
    * its speech bubble instead while it is the active panel. Evaluated during
@@ -644,8 +659,8 @@ export interface PromptInputProps {
 }
 
 /**
- * dsh-TUI prompt input: rounded border box (top+bottom borders
- * only), `❯ ` prompt char (dimmed while a turn is working), the text with a
+ * dsh-TUI prompt input: filled block with a single left accent rail,
+ * `❯ ` prompt char (dimmed while a turn is working), the text with a
  * block cursor at the cursor position, and above it the slash-command /
  * file-completion suggestion card (SuggestionCard: rounded panel with the
  * selected row behind a `❯` pointer in the theme's `suggestion` color).
@@ -677,6 +692,8 @@ export function PromptInput({
   channel,
   toastSuppressed,
   suspended = false,
+  bleed = false,
+  collapsedColumns,
   draftCache,
   helpOpen,
   onToggleHelp,
@@ -1286,7 +1303,10 @@ export function PromptInput({
       }
     }
   }, [])
-  const { columns, rows: terminalRows } = useTerminalSize()
+  const { columns: terminalColumns, rows: terminalRows } = useTerminalSize()
+  const panelBleed = usePagePanelBleed(bleed && !expanded)
+  const columns = expanded ? terminalColumns
+    : (collapsedColumns ?? terminalColumns) + panelBleed.left + panelBleed.right
   React.useEffect(() => {
     // PromptInput self-detects double-clicks because its drag target resets
     // App's global chain. Geometry changed across resize, so the same screen
@@ -3027,16 +3047,19 @@ export function PromptInput({
       }
       return
     }
-    if (isMod(key) && key.leftArrow) {
-      // Jump to the previous word boundary (readline alt+b). Must precede the
-      // bare-arrow arms: Ctrl+Left arrives as leftArrow + ctrl. An active
-      // selection collapses to its START edge first (editor semantics).
+    // Legacy ESC b/f already arrive as Meta arrows; CSI-u/modifyOtherKeys
+    // report Alt+B/F as character keys instead. Both belong to word editing.
+    const altWordKey = key.meta && !key.ctrl && !key.super && !key.shift
+    if (((isMod(key) || altWordKey) && key.leftArrow) || (altWordKey && input === 'b')) {
+      // Modified word moves precede bare arrows, including on an empty draft:
+      // Option+Left must not trigger the session-background action. A selection
+      // collapses to its START edge first (editor semantics).
       const sel = selectionRef.current
       setInput(value, sel ? sel.start : wordBoundaryLeft(value, cursor))
       return
     }
-    if (isMod(key) && key.rightArrow) {
-      // Jump to the next word boundary (readline alt+f).
+    if (((isMod(key) || altWordKey) && key.rightArrow) || (altWordKey && input === 'f')) {
+      // Jump to the next word boundary, or collapse to the selection's END.
       const sel = selectionRef.current
       setInput(value, sel ? sel.end : wordBoundaryRight(value, cursor))
       return
@@ -3118,16 +3141,12 @@ export function PromptInput({
       return
     }
     if (isMod(key) && input === 'w') {
-      // Delete the word before the cursor: readline's whitespace-delimited
-      // rule (skip trailing whitespace, then the word). The ICU/CJK
-      // alternative is a separate editor-UX change, not part of draft undo.
-      // The deletion start never crosses into the block.
-      const before = value.slice(0, cursor)
-      let end = before.length
-      while (end > 0 && /\s/.test(before[end - 1]!)) end--
-      let start = end
-      while (start > 0 && !/\s/.test(before[start - 1]!)) start--
-      deleteInputRange(clampRowStart(start), cursor)
+      // Share the jump-left boundary: whitespace-only splitting deletes an
+      // entire unspaced Chinese draft. Keep fold and staged-image atomicity;
+      // a selected span is one undo step, like Backspace/Delete selection.
+      const sel = selectionRef.current
+      if (sel) deleteInputRange(sel.start, sel.end, 'step')
+      else deleteInputRange(clampRowStart(wordBoundaryLeft(value, cursor)), cursor)
       return
     }
     // ── vim mode (`/vim`) ──────────────────────────────────────────────
@@ -3517,13 +3536,13 @@ export function PromptInput({
   // 展开态布局参数：编辑器独占整屏 —— 行号槽（宽度随逻辑行数伸缩）+
   // 圆角边框 2 + 两侧 padding 各 1 占列，⌸ 入口 / ❯ 前缀 / vim 徽标 /
   // ⛶ 按钮全部让位；收起态额外扣掉行首 ⌸ 入口（未渲染时 0 列）与行尾
-  // ⛶ 按钮的 2 列。
+  // ⛶ 按钮的 2 列，以及块状输入左竖条的 1 列。
   const editorLogicalLines = expanded ? value.split('\n').length : 1
   const editorNoWidth = Math.max(2, String(editorLogicalLines).length)
   const editorGutterCols = editorNoWidth + 3
   const inputWidth = expanded
     ? Math.max(1, columns - 4 - editorGutterCols)
-    : Math.max(1, columns - 3 - vimBadgeCols - homeButtonCols - (expandEnabled ? 2 : 0))
+    : Math.max(1, columns - 4 - vimBadgeCols - homeButtonCols - (expandEnabled ? 2 : 0))
   // 展开态无视折叠块：全屏编辑就是为了看全文（foldBlock 状态保留，
   // 收起后折叠显示恢复）。
   const block = expanded ? null : foldBlock
@@ -4336,7 +4355,13 @@ export function PromptInput({
   if (suspended) return null
 
   return (
-    <Box flexDirection="column" marginTop={1}>
+    <Box
+      flexDirection="column"
+      marginTop={1}
+      width={columns}
+      marginLeft={-panelBleed.left}
+      marginRight={-panelBleed.right}
+    >
       {/* 瞬态面板浮层（帮助/队列/补全）：零布局高度、向上覆盖转录尾部，
           帧高不随面板开关涨落——否则帧顶行会被滚进 scrollback 并在关闭
           重绘时二次写入（/model 切换多一份启动画的根因，见 OverlayAbove）。 */}
@@ -4533,15 +4558,14 @@ export function PromptInput({
           </Box>
         </Box>
       )}
-      {/* The prompt's own top/bottom border rows, self-drawn so the effort
-          overlay can play on them (sweep → tier name → fade; see
-          EffortInputBorder). Idle colour keeps the plan-mode accent the old
-          Box border carried. */}
+      {/* Heavy yellow composer rail; session/plan accents and effort ignition
+          still override it. Permanent padding rows keep overlay anchors. */}
       <EffortInputBorder
         effort={channel.reasoningEffort}
         levels={channel.effortLevels}
         columns={columns}
-        idleColor={promptAccent}
+        onLight={isLightThemeActive(themeName)}
+        idleColor={channel.mode.plan === true || sessionAccent !== undefined ? promptAccent : 'userPromptLabel'}
         topRightLabel={topRightLabel}
       >
         <Box flexDirection="row" alignItems="flex-start" width="100%">
@@ -4597,13 +4621,13 @@ export function PromptInput({
                 {caretCell('empty', ' ')}
                 {/* 三幕点焰第二幕：空输入行居中短暂浮现档名大写（纯文
                     本流自带偏移空格——不引入嵌套 Box，行数恒定；有文字
-                    时不显示）。3 = 行内 `❯ `（2 列）+ 空输入块光标（1
+                    时不显示）。4 = 左竖条（1 列）+ `❯ `（2 列）+ 空输入块光标（1
                     列）；行首 ⌂ 入口渲染时徽标之前还要多占它的列数。 */}
                 <EffortTierBadge
                   effort={channel.reasoningEffort}
                   levels={channel.effortLevels}
                   columns={columns}
-                  leadingColumns={3 + homeButtonCols}
+                  leadingColumns={4 + homeButtonCols}
                 />
               </>
             ) : (

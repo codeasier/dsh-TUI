@@ -239,8 +239,8 @@ export interface ChannelUi {
    *  the expandEditor shortcut. */
   readonly expandEditor: boolean
   /** Smooth streaming reveal (settings `dsh-tui.smoothStreaming`; on by
-   *  default): live-arriving assistant text, expanded thinking, and tool
-   *  call bodies paint through a ~30fps reveal instead of jumping per
+   *  default): live-arriving assistant text and expanded thinking
+   *  paint through a ~30fps reveal instead of jumping per
    *  provider burst. */
   readonly smoothStreaming: boolean
   /** Live status-footer visibility and compactness preferences. */

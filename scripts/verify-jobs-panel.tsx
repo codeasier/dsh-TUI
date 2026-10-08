@@ -2,19 +2,22 @@
  * 后台任务（ctx.jobs）UI 投影回归：/jobs 面板、转录任务卡、状态栏角标、完成 toast。
  *
  * Group A — BackgroundJobStore 单元（无渲染）：
- *   注册/转换/消失合成 killed、onSettled 恰好一次、输出镜像过滤与有界、时长格式化。
+ *   注册/转换/消失合成 killed、概述 metadata 生命周期、输出镜像过滤与有界、时长格式化。
  * Group B — channel 集成（真实 cordis Context + 假 agents/jobs 服务）：
  *   任务注册建卡、job_output 结果镜像进瀑布、落定 toast、存活任务消失冻结、
- *   jobControl.kill 权限传递、无 jobs 服务降级、/new 重置投影。
+ *   jobControl.kill 权限传递、无 jobs 服务降级、/new 重置投影；前台 shell 隐藏、后台启动/超时移交显卡；
+ *   native/PTC/live/replay 概述关联、并发反序结果、无效概述回退。
  * Group C — 渲染冒烟（headless xterm）：
  *   JobCard 运行态三行瀑布（有输出时）/仅头行（无输出时）、settled 折叠、JobsPanel 标题/行/提示。
  * Group D — 按键归属（Chat 整屏 + 假 channel）：
  *   面板打开时 Esc 关面板而非中断对话；面板关闭后 Esc 仍能中断（防假通过）。
+ * Group E — 40 列 inline/fullscreen Chat：前台不重复显卡、后台概述/ID/状态同一行。
  *
  * 运行：node --import tsx/esm scripts/verify-jobs-panel.tsx
  */
 process.env.DSH_TUI_LANG = 'en'
 process.env.FORCE_COLOR = '3'
+process.env.DSH_TUI_THEME = 'dark'
 
 // 家目录隔离：channel 构造路径会 touch 用户目录，先切临时目录再 import。
 const { mkdtempSync, mkdirSync } = await import('node:fs')
@@ -28,7 +31,7 @@ mkdirSync(joinPath(isolatedHome, '.dsh-tui'), { recursive: true })
 const [
   { Context },
   { createChannel },
-  { BackgroundJobStore, formatJobDuration, JOBS_MAX_TRACKED, JOBS_MAX_OUTPUT_LINES },
+  { BackgroundJobStore, formatJobDuration, jobTitleOf, JOBS_MAX_TRACKED, JOBS_MAX_OUTPUT_LINES },
   { settled, settle, sleep },
   React,
   { render },
@@ -37,6 +40,7 @@ const [
   { Chat },
   { QuestionStore },
   { createJobProjection },
+  { getTheme },
 ] = await Promise.all([
   import('@deepseek-ai/cordis'),
   import('../src/dsh-adapter/channel.js'),
@@ -49,6 +53,7 @@ const [
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
   import('../src/dsh-adapter/channel/job-projection.js'),
+  import('../src/theme.js'),
 ])
 const { Writable, PassThrough } = await import('node:stream')
 const { Terminal: XTerm } = (await import('@xterm/headless')) as unknown as {
@@ -173,6 +178,68 @@ console.log('--- A: BackgroundJobStore units ---')
       && formatJobDuration({ startedAt: 0, finishedAt: 3_720_000 }) === '1h02m',
     `${formatJobDuration({ startedAt: 0, finishedAt: 192_000 })}`,
   )
+
+  const proofs = new BackgroundJobStore()
+  proofs.onStarted('bash-live', 'sleep 99')
+  proofs.replace([{ id: 'bash-live', kind: 'bash', label: 'live', status: 'running', startedAt: 0 }])
+  for (let i = 0; i <= JOBS_MAX_TRACKED; i += 1) proofs.onStarted(`bash-old-${i}`, 'true')
+  proofs.replace([
+    { id: 'bash-live', kind: 'bash', label: 'live', status: 'running', startedAt: 0 },
+    { id: 'bash-old-0', kind: 'bash', label: 'evicted proof', status: 'completed', startedAt: 0 },
+    { id: `bash-old-${JOBS_MAX_TRACKED}`, kind: 'bash', label: 'recent proof', status: 'completed', startedAt: 0 },
+  ])
+  check('A8 回放暂存有界但不丢存活任务证明',
+    proofs.isBackground('bash-live') && !proofs.isBackground('bash-old-0') && proofs.isBackground(`bash-old-${JOBS_MAX_TRACKED}`))
+  proofs.reset()
+  proofs.onStarted('bash-next', 'sleep 1', 'old session summary')
+  proofs.reset()
+  proofs.replace([{ id: 'bash-next', kind: 'bash', label: 'next session', status: 'running', startedAt: 0 }])
+  check('A8 空名册 reset 也清掉待注册移交（不串会话）', !proofs.isBackground('bash-next')
+    && proofs.get('bash-next')?.command === undefined && proofs.get('bash-next')?.description === undefined)
+
+  const metadataSettled: string[] = []
+  const metadata = new BackgroundJobStore({ onSettled: job => metadataSettled.push(jobTitleOf(job)) })
+  for (const ackFirst of [true, false]) {
+    const id = ackFirst ? 'bash-ack-first' : 'pwsh-roster-first'
+    const shot = { id, kind: ackFirst ? 'bash' : 'pwsh', label: `registry ${id}`, status: 'running' as const, startedAt: 0 }
+    const description = `summary ${id}`
+    if (ackFirst) metadata.onStarted(id, 'sleep 77', description)
+    metadata.replace([...metadata.snapshot(), shot])
+    if (!ackFirst) metadata.onStarted(id, 'sleep 77', description)
+    check(`A9 ${id} ACK/roster 两种顺序均保留 registry label 和概述`,
+      metadata.get(id)?.label === shot.label && metadata.get(id)?.description === description
+        && metadata.get(id)?.command === 'sleep 77' && jobTitleOf(metadata.get(id)!) === description)
+    metadata.onStarted(id)
+    check(`A9 ${id} job_output 无 metadata 不清空概述/命令`,
+      metadata.get(id)?.description === description && metadata.get(id)?.command === 'sleep 77')
+    metadata.replace(metadata.snapshot().map(job => job.id === id ? { ...shot, label: `updated ${id}`, progress: '1/2' } : job))
+    check(`A9 ${id} replace 更新 label/progress 不覆盖概述`,
+      metadata.get(id)?.label === `updated ${id}` && metadata.get(id)?.progress === '1/2'
+        && metadata.get(id)?.description === description)
+    metadata.replace(metadata.snapshot().map(job => job.id === id
+      ? { ...shot, label: `settled ${id}`, status: 'completed' as const, finishedAt: 10 } : job))
+    check(`A9 ${id} settle 保留概述且回调优先概述`,
+      metadata.get(id)?.description === description && metadataSettled.at(-1) === description)
+  }
+  metadata.onStarted('bash-pending', 'sleep 88', 'pending summary')
+  metadata.onStarted('bash-pending')
+  metadata.reset({ preservePendingStarts: true })
+  metadata.replace([
+    { id: 'bash-pending', kind: 'bash', label: 'pending registry', status: 'running', startedAt: 0 },
+    { id: 'bash-ack-first', kind: 'bash', label: 'new registry', status: 'running', startedAt: 0 },
+  ])
+  check('A10 preservePendingStarts 保留待注册全部 metadata', metadata.isBackground('bash-pending')
+    && metadata.get('bash-pending')?.description === 'pending summary' && metadata.get('bash-pending')?.command === 'sleep 88')
+  check('A10 preservePendingStarts 不保留旧名册 metadata', !metadata.isBackground('bash-ack-first')
+    && metadata.get('bash-ack-first')?.description === undefined && metadata.get('bash-ack-first')?.command === undefined)
+  metadata.reset()
+  metadata.replace([{ id: 'bash-pending', kind: 'bash', label: 'fresh registry', status: 'running', startedAt: 0 }])
+  check('A10 reset 清理已注册 metadata', metadata.get('bash-pending')?.description === undefined
+    && metadata.get('bash-pending')?.command === undefined && !metadata.isBackground('bash-pending'))
+  check('A11 jobTitleOf description 优先，否则回退 registry label',
+    jobTitleOf({ label: 'registry', description: 'summary' }) === 'summary'
+      && jobTitleOf({ label: 'registry' }) === 'registry'
+      && jobTitleOf({ label: 'registry', description: '' }) === 'registry')
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +327,40 @@ const NOW = Date.now()
     model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
   })
 
+  const shellResult = (id: string, name: string, command: string, result: string, background = false, description?: unknown): void => {
+    emit('session/event', initial.session, {
+      type: 'tool/call',
+      data: { callId: `call-${id}`, name, arguments: JSON.stringify({ command, run_in_background: background, description }) },
+    })
+    emit('session/event', initial.session, {
+      type: 'tool/result',
+      data: { message: { source: { callId: `call-${id}` }, content: [{ type: 'text', text: result }] } },
+    })
+  }
+
+  // Modern shell producers register even foreground commands, settle them
+  // while the tool waits, then remove the record before returning the result.
+  for (const kind of ['bash', 'pwsh']) {
+    for (const status of ['completed', 'failed', 'killed']) {
+      const id = `${kind}-foreground-${status}`
+      const notices = channel.notifications.length
+      fake.register({ id, kind, label: 'git status', status: 'running', startedAt: NOW })
+      check(`B0 ${id} 运行中只显示工具事实`, jobRows(channel).length === 0 && channel.backgroundJobs.length === 0)
+      fake.update({ id, kind, label: 'git status', status, startedAt: NOW, finishedAt: NOW })
+      fake.remove(id)
+      shellResult(id, kind, 'git status', status === 'completed' ? 'clean' : '[exit code: 1]')
+      check(`B0 ${id} 落定不留 job 卡/面板记录/重复通知`,
+        jobRows(channel).length === 0 && channel.backgroundJobs.length === 0 && channel.notifications.length === notices)
+      check(`B0 ${id} 工具输出仍保留`, channel.rows.some(row => row.tool?.callId === `call-${id}` && row.tool.resultFull !== undefined))
+    }
+  }
+
   fake.register({ id: 'pwsh-1', kind: 'pwsh', label: 'gh run watch 42', status: 'running', startedAt: NOW - 3000 })
+  shellResult('pwsh-1', 'pwsh', 'gh run watch 42', 'started background job pwsh-1', true, '  Watch\n  CI\tresults  ')
+  check('B1 roster 先于 native explicit ACK：概述归一化且 registry label 保留',
+    await settled(() => channel.backgroundJobs[0]?.description === 'Watch CI results' && channel.backgroundJobs[0]?.label === 'gh run watch 42'
+      && jobRows(channel)[0]?.job?.description === 'Watch CI results' && jobRows(channel)[0]?.text === 'Watch CI results'),
+    JSON.stringify(channel.backgroundJobs))
   check('B1 任务注册进快照', await settled(() => channel.backgroundJobs.length === 1))
   check('B1 转录出现任务卡行', await settled(() => jobRows(channel).length === 1))
   check('B1 卡行初态 running', jobRows(channel)[0]?.job?.status === 'running', String(jobRows(channel)[0]?.job?.status))
@@ -290,6 +390,13 @@ const NOW = Date.now()
     String(channel.backgroundJobs[0]?.lastOutputAt),
   )
 
+  check('B2 job_output 无 command/description 不清空启动 metadata',
+    channel.backgroundJobs[0]?.description === 'Watch CI results' && channel.backgroundJobs[0]?.command === 'gh run watch 42'
+      && jobRows(channel)[0]?.job?.description === 'Watch CI results')
+  fake.update({ id: 'pwsh-1', kind: 'pwsh', label: 'registry watch updated', progress: '1/2', status: 'running', startedAt: NOW - 3000 })
+  check('B2 roster replace 更新 label/progress 但不丢概述', channel.backgroundJobs[0]?.label === 'registry watch updated'
+    && channel.backgroundJobs[0]?.description === 'Watch CI results' && jobRows(channel)[0]?.job?.description === 'Watch CI results')
+
   const noticesBefore = channel.notifications.length
   fake.update({ id: 'pwsh-1', kind: 'pwsh', label: 'gh run watch 42', status: 'completed', detail: 'exit code: 0', startedAt: NOW - 3000, finishedAt: NOW })
   check('B3 落定后卡行 completed + exit detail', await settled(() =>
@@ -298,12 +405,14 @@ const NOW = Date.now()
   check(
     'B3 完成 toast 送达（含任务 id）',
     await settled(() => channel.notifications.length > noticesBefore
-      && channel.notifications.some(item => item.text.includes('pwsh-1'))),
+      && channel.notifications.some(item => item.text.includes('pwsh-1') && item.text.includes('Watch CI results')
+        && !item.text.includes('gh run watch 42'))),
     JSON.stringify(channel.notifications.map(item => item.text)),
   )
 
   // 第二个任务：存活中消失（owner 处置）→ 卡行冻结为 killed，随后移出面板。
   fake.register({ id: 'bash-2', kind: 'bash', label: 'sleep 99', status: 'running', startedAt: NOW })
+  shellResult('bash-2', 'bash', 'sleep 99', 'started background job bash-2', true)
   check('B4 第二个任务注册', await settled(() => channel.backgroundJobs.length === 2))
   fake.remove('bash-2')
   check('B4 存活任务消失→卡行冻结 killed', await settled(() => {
@@ -320,6 +429,7 @@ const NOW = Date.now()
 
   // 存活任务被用户 kill → steer 通知模型（kill 会抑制 harness 完成通知）。
   fake.register({ id: 'bash-3', kind: 'bash', label: 'sleep 100', status: 'running', startedAt: NOW })
+  shellResult('bash-3', 'bash', 'sleep 100', 'started background job bash-3', true)
   check('B8 存活任务注册', await settled(() => channel.backgroundJobs.some(job => job.id === 'bash-3')))
   check('B8 存活 kill 返回 true', channel.jobControl.kill('bash-3') === true)
   check(
@@ -342,16 +452,149 @@ const NOW = Date.now()
       },
     },
   })
-  fake.register({ id: 'pwsh-9', kind: 'pwsh', label: 'watch ci', status: 'running', startedAt: NOW })
+  fake.register({ id: 'pwsh-9', kind: 'pwsh', label: 'gh pr checks --watch 42', status: 'running', startedAt: NOW })
+  check('B9 legacy nested explicit ACK 先于 roster：概述/label 独立保留',
+    channel.backgroundJobs.find(job => job.id === 'pwsh-9')?.description === 'watch ci'
+      && channel.backgroundJobs.find(job => job.id === 'pwsh-9')?.label === 'gh pr checks --watch 42'
+      && jobRows(channel).find(row => row.job?.id === 'pwsh-9')?.job?.description === 'watch ci')
   check(
     'B9 启动 ack 捕获完整命令（注册后挂上）',
     await settled(() => channel.backgroundJobs.find(job => job.id === 'pwsh-9')?.command === 'gh pr checks --watch 42'),
     String(channel.backgroundJobs.find(job => job.id === 'pwsh-9')?.command),
   )
+  check('B9 ack 先于注册也显示任务卡', jobRows(channel).some(row => row.job?.id === 'pwsh-9'))
+
+  for (const kind of ['bash', 'pwsh']) {
+    const id = `${kind}-promoted`
+    fake.register({ id, kind, label: 'sleep 99', status: 'running', startedAt: NOW })
+    check(`B10 ${kind} 移交前没有独立任务卡`, !jobRows(channel).some(row => row.job?.id === id))
+    shellResult(id, kind, 'sleep 99', `partial output\n[still running after 100ms; moved to background job ${id}]\nThe command keeps running in the background.`, false, `  ${kind}\n timeout task  `)
+    check(`B10 ${kind} 超时转后台显卡并保留命令/概述/registry label`,
+      jobRows(channel).some(row => row.job?.id === id && row.job.status === 'running' && row.job.description === `${kind} timeout task`)
+        && channel.backgroundJobs.some(job => job.id === id && job.command === 'sleep 99'
+          && job.description === `${kind} timeout task` && job.label === 'sleep 99'))
+    fake.update({ id, kind, label: 'sleep 99', status: 'completed', startedAt: NOW, finishedAt: NOW })
+    check(`B10 ${kind} 超时任务落定不丢概述`, jobRows(channel).some(row => row.job?.id === id
+      && row.job.status === 'completed' && row.job.description === `${kind} timeout task`))
+  }
+
+  // A very short explicit background command may settle before its ack.
+  fake.register({ id: 'bash-fast', kind: 'bash', label: 'true', status: 'running', startedAt: NOW })
+  fake.update({ id: 'bash-fast', kind: 'bash', label: 'true', status: 'completed', startedAt: NOW, finishedAt: NOW })
+  shellResult('bash-fast', 'bash', 'true', 'started background job bash-fast', true, 'Fast background check')
+  check('B11 快速后台任务 ack 到达后仍显示完成卡与概述', jobRows(channel).some(row => row.job?.id === 'bash-fast'
+    && row.job.status === 'completed' && row.job.description === 'Fast background check'))
+
+  // Reading an existing job is evidence even if its start was compacted away.
+  fake.register({ id: 'bash-existing', kind: 'bash', label: 'existing work', status: 'running', startedAt: NOW })
+  emit('session/event', initial.session, {
+    type: 'tool/call', data: { callId: 'existing-output', name: 'job_output', arguments: JSON.stringify({ job_id: 'bash-existing' }) },
+  })
+  emit('session/event', initial.session, {
+    type: 'tool/result', data: { message: { source: { callId: 'existing-output' }, content: [{ type: 'text', text: '[status: running]' }] } },
+  })
+  check('B12 job_output 可恢复已有后台任务卡', jobRows(channel).some(row => row.job?.id === 'bash-existing'))
+
+  fake.register({ id: 'other-producer', kind: 'pty-send', label: 'independent work', status: 'running', startedAt: NOW })
+  check('B13 其他任务生产者注册即显卡', jobRows(channel).some(row => row.job?.id === 'other-producer'))
+
+  for (const kind of ['bash', 'pwsh']) {
+    const id = `${kind}-ptc`
+    fake.register({ id, kind, label: 'sleep 99', status: 'running', startedAt: NOW })
+    emit('session/event', initial.session, {
+      type: 'tool/ptc-dispatch',
+      data: {
+        rootCallId: 'run-code', parentCallId: 'run-code:ptc:outer', subCallId: `run-code:ptc:outer:${kind}`, name: kind,
+        arguments: { command: 'sleep 99', description: `  Nested\n ${kind} task  `, run_in_background: kind === 'bash' }, isError: false,
+        content: [{ type: 'text', text: kind === 'bash' ? `started background job ${id}`
+          : `[still running after 100ms; moved to background job ${id}]` }],
+      },
+    })
+    check(`B14 nested PTC ${kind} explicit/timeout 共享概述投影路径`,
+      jobRows(channel).some(row => row.job?.id === id && row.job.description === `Nested ${kind} task`)
+        && channel.backgroundJobs.some(job => job.id === id && job.label === 'sleep 99'
+          && job.command === 'sleep 99' && job.description === `Nested ${kind} task`))
+  }
+
+  const invalidDescriptions: unknown[] = [undefined, '', ' \n\t ', 42, false, null, { text: 'not a string' }, '\u001b[31m\u0000\u001b[0m']
+  for (const [index, description] of invalidDescriptions.entries()) {
+    const kind = index % 2 === 0 ? 'bash' : 'pwsh'
+    const id = `${kind}-fallback-${index}`
+    fake.register({ id, kind, label: `fallback ${index}`, status: 'running', startedAt: NOW })
+    shellResult(id, kind, 'true', `started background job ${id}`, true, description)
+    const job = channel.backgroundJobs.find(job => job.id === id)
+    check(`B15 缺失/空/非字符串/纯控制概述回退 ${index}`,
+      job?.description === undefined && job !== undefined && jobTitleOf(job) === `fallback ${index}`
+        && jobRows(channel).find(row => row.job?.id === id)?.text === `fallback ${index}`)
+  }
+  shellResult('bash-clean', 'bash', 'true', 'started background job bash-clean', true, '\u001b[31m  Clean\n title\u001b[0m')
+  fake.register({ id: 'bash-clean', kind: 'bash', label: 'true', status: 'running', startedAt: NOW })
+  check('B15 ANSI 描述剥离并归一化单行', channel.backgroundJobs.find(job => job.id === 'bash-clean')?.description === 'Clean title')
+
+  // Calls interleave; results arrive in reverse order and only one has a roster yet.
+  for (const kind of ['bash', 'pwsh']) {
+    emit('session/event', initial.session, {
+      type: 'tool/call', data: { callId: `concurrent-${kind}`, name: kind,
+        arguments: JSON.stringify({ command: `command ${kind}`, description: `Summary ${kind}`, run_in_background: true }) },
+    })
+  }
+  fake.register({ id: 'bash-concurrent', kind: 'bash', label: 'registry bash', status: 'running', startedAt: NOW })
+  for (const kind of ['pwsh', 'bash']) {
+    emit('session/event', initial.session, {
+      type: 'tool/result', data: { message: { source: { callId: `concurrent-${kind}` },
+        content: [{ type: 'text', text: `started background job ${kind}-concurrent` }] } },
+    })
+  }
+  fake.register({ id: 'pwsh-concurrent', kind: 'pwsh', label: 'registry pwsh', status: 'running', startedAt: NOW })
+  check('B16 并发不同 call ID 反序结果不串命令/概述', ['bash', 'pwsh'].every(kind =>
+    channel.backgroundJobs.some(job => job.id === `${kind}-concurrent` && job.description === `Summary ${kind}`
+      && job.command === `command ${kind}` && job.label === `registry ${kind}`)
+      && jobRows(channel).some(row => row.job?.id === `${kind}-concurrent` && row.job.description === `Summary ${kind}`)))
 
   check('B6 /new 成功', (await channel.newSession()) === true)
   check('B6 切换后面板快照清空', channel.backgroundJobs.length === 0)
   check('B6 切换后任务卡行清空', jobRows(channel).length === 0)
+}
+
+// Durable replay uses the same result projection as live native and nested PTC events.
+{
+  const ctx = new Context()
+  const provide = (ctx as unknown as { provide(name: string, value: unknown): void }).provide.bind(ctx)
+  const agent = makeAgent('replay-agent', 'replay-session')
+  const fake = makeFakeJobs(() => agent.id)
+  provide('jobs', fake.runtime)
+  agent.session.events = [
+    { type: 'tool/call', data: { callId: 'replay-native', name: 'bash', arguments: JSON.stringify({
+      command: 'sleep 11', description: ' Replay\n native task ', run_in_background: true,
+    }) } },
+    { type: 'tool/result', data: { message: { source: { callId: 'replay-native' },
+      content: [{ type: 'text', text: 'started background job bash-replay' }] } } },
+    { type: 'tool/ptc-dispatch', data: {
+      rootCallId: 'replay-code', parentCallId: 'replay-code:outer', subCallId: 'replay-code:outer:pwsh', name: 'pwsh',
+      arguments: { command: 'sleep 22', description: 'Replay PTC task' }, isError: false,
+      content: [{ type: 'text', text: '[still running after 100ms; moved to background job pwsh-replay]' }],
+    } },
+    { type: 'tool/call', data: { callId: 'replay-output', name: 'job_output', arguments: JSON.stringify({ job_id: 'bash-replay' }) } },
+    { type: 'tool/result', data: { message: { source: { callId: 'replay-output' }, content: [{ type: 'text', text: '[status: running]' }] } } },
+  ].map((event, seq) => ({ ...event, seq, time: NOW + seq }))
+  agent.session.seq = agent.session.events.length
+  fake.register({ id: 'bash-replay', kind: 'bash', label: 'sleep 11', status: 'running', startedAt: NOW })
+  const channel = createChannel(ctx as never, agent as never, { model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false })
+  try {
+    fake.register({ id: 'pwsh-replay', kind: 'pwsh', label: 'sleep 22', status: 'running', startedAt: NOW })
+    check('B17 replay native explicit + job_output 保留概述/命令/registry label',
+      await settled(() => channel.backgroundJobs.some(job => job.id === 'bash-replay' && job.description === 'Replay native task'
+        && job.command === 'sleep 11' && job.label === 'sleep 11')
+        && jobRows(channel).some(row => row.job?.id === 'bash-replay' && row.job.description === 'Replay native task')),
+      JSON.stringify(channel.backgroundJobs))
+    check('B17 replay nested PTC timeout 先于 roster 保留概述/命令/registry label',
+      await settled(() => channel.backgroundJobs.some(job => job.id === 'pwsh-replay' && job.description === 'Replay PTC task'
+        && job.command === 'sleep 22' && job.label === 'sleep 22')
+        && jobRows(channel).some(row => row.job?.id === 'pwsh-replay' && row.job.description === 'Replay PTC task')),
+      JSON.stringify(channel.backgroundJobs))
+  } finally {
+    channel.releaseContributions()
+  }
 }
 
 // 无 jobs 服务：功能静默降级，kill 返回 false。
@@ -427,6 +670,14 @@ console.log('--- B2: kernel event bus integration ---')
   ;(kernelAgent as unknown as { id: string }).id = 'agent-k-id'
   const channel2 = createChannel(ctx2 as never, kernelAgent as never, {
     model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
+  })
+  const emit2 = (event: string, ...args: unknown[]) =>
+    (ctx2 as unknown as { emit(event: string, ...args: unknown[]): void }).emit(event, ...args)
+  emit2('session/event', kernelAgent.session, {
+    type: 'tool/call', data: { callId: 'kernel-start', name: 'pwsh', arguments: JSON.stringify({ command: 'kernel stream', run_in_background: true }) },
+  })
+  emit2('session/event', kernelAgent.session, {
+    type: 'tool/result', data: { message: { source: { callId: 'kernel-start' }, content: [{ type: 'text', text: 'started background job pwsh-7' }] } },
   })
 
   shots.set('pwsh-7', {
@@ -541,9 +792,15 @@ console.log('--- B3: session rebind (the roster must follow the binding) ---')
   check('B3c 会话未变时 reanchor 不重复读（挂载只读一次）', calls.length === 1, calls.join(','))
 
   bound = { id: 'sess-user' }
+  projection.reset()
+  // Adoption replays the new log before bind/reanchor reads its live roster.
+  projection.store.onStarted('user-job', 'user work', 'Resumed user task')
   projection.reanchor()
   check('B3d 换绑后按新会话重读且旧名册被替换',
     calls.at(-1) === 'sess-user' && ids() === 'user-job', `${calls.join(',')} → ${ids()}`)
+  check('B3d 重锚保留新会话回放的后台移交与待注册 metadata', projection.store.isBackground('user-job')
+    && projection.store.get('user-job')?.description === 'Resumed user task' && projection.store.get('user-job')?.command === 'user work'
+    && projection.store.get('user-job')?.label === 'user work')
 
   const beforeEvent = calls.length
   emit({ type: 'registered', job: userJob }, 'sess-user')
@@ -577,11 +834,12 @@ class Input extends PassThrough {
 }
 async function withTerminal(
   make: () => React.ReactNode,
-  run: (screen: () => string, rerender: (node: React.ReactNode) => void, stdin: Input) => Promise<void>,
-  cols = COLS,
+  run: (screen: () => string, rerender: (node: React.ReactNode) => void, stdin: Input, term: InstanceType<typeof XTerm>) => Promise<void>,
+  columns = COLS,
 ): Promise<void> {
-  const term = new XTerm({ cols, rows: ROWS, scrollback: 0, allowProposedApi: true })
-  const stdout = new FakeStdout(term, cols) as unknown as NodeJS.WriteStream
+  const term = new XTerm({ cols: columns, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(term) as unknown as NodeJS.WriteStream
+  stdout.columns = columns
   const stdin = new Input()
   const instance = await render(make(), {
     stdout,
@@ -592,15 +850,43 @@ async function withTerminal(
   const screen = (): string =>
     Array.from({ length: ROWS }, (_, y) => term.buffer.active.getLine(y)?.translateToString(true) ?? '').join('\n')
   try {
-    await run(screen, node => instance.rerender(node), stdin)
+    await run(screen, node => instance.rerender(node), stdin, term)
   } finally {
     await instance.unmount()
     term.dispose()
   }
 }
 
+// ThemedText's dimColor uses inactive RGB rather than the ANSI faint flag.
+function textHasStyle(term: InstanceType<typeof XTerm>, text: string, style: 'bold' | 'inactive'): boolean {
+  const channels = /^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/.exec(getTheme('dark').inactive)
+  if (channels === null) throw new Error('Expected the dark theme inactive color to use rgb()')
+  const inactiveRgb = (Number(channels[1]) << 16) | (Number(channels[2]) << 8) | Number(channels[3])
+  for (let y = 0; y < ROWS; y += 1) {
+    const line = term.buffer.active.getLine(y)
+    if (line === undefined) continue
+    for (let x = 0; x < term.cols; x += 1) {
+      let matched = ''
+      let styled = true
+      for (let column = x; column < term.cols && matched.length < text.length; column += 1) {
+        const cell = line.getCell(column)
+        // Cursor-skipped blank cells have no chars; wide-glyph continuation
+        // cells also have no chars but must not add a second space.
+        const chars = cell?.getWidth() === 0 ? '' : cell?.getChars() || ' '
+        matched += chars
+        if (chars !== '' && chars.trim() !== '') styled &&= style === 'bold'
+          ? Boolean(cell?.isBold())
+          : cell?.isFgRGB() === true && cell.getFgColor() === inactiveRgb && !cell.isBold()
+        if (!text.startsWith(matched)) break
+      }
+      if (matched === text && styled) return true
+    }
+  }
+  return false
+}
+
 const runningJob = {
-  id: 'pwsh-1', kind: 'pwsh', label: 'gh run watch 42', status: 'running' as const,
+  id: 'pwsh-1', kind: 'pwsh', label: 'gh pr checks --watch 42', description: 'Watch CI results', status: 'running' as const,
   command: 'gh pr checks --watch 42',
   startedAt: Date.now() - 65_000, outputLines: [{ text: 'build step 1 ok' }, { text: 'build step 2 ok' }],
 }
@@ -611,7 +897,8 @@ await withTerminal(
     // 迁移需把全部条件合进一个 settled 谓词并在其中捕获快照，非平凡改写。
     await sleep(150)
     const text = screen()
-    check('C1 运行卡头含 id/label', text.includes('pwsh-1') && text.includes('gh run watch 42'))
+    check('C1 运行卡头优先概述并保留 ID/kind', text.includes('job: Watch CI results') && text.includes('pwsh-1')
+      && text.includes('pwsh') && !text.includes(runningJob.label))
     check('C1 瀑布呈现镜像输出', text.includes('build step 1 ok') && text.includes('build step 2 ok'))
   },
 )
@@ -669,6 +956,39 @@ await withTerminal(
     // 非聚焦行不展开详情（bash-2 无输出 → 其无输出提示也不应出现）。
     check('C3 非聚焦行无详情块', !text.includes('no mirrored output yet'))
   },
+)
+
+for (const columns of [40, 100]) {
+  for (const status of ['running', 'completed'] as const) {
+    const description = 'Inspect jobs 🧪 regression headers without losing IDs'
+    const job = { ...runningJob, description, status, outputLines: [],
+      startedAt: NOW - 1000, ...(status === 'completed' ? { finishedAt: NOW } : {}) }
+    await withTerminal(
+      () => React.createElement(JobCard, { job, marginTopOnTurn: false }),
+      async (screen, _rerender, _stdin, term) => {
+        check(`C4 ${columns}列 ${status} 概述折行、ID/kind/状态留在首行`, await settled(() => {
+          const lines = screen().split('\n').filter(line => line.trim() !== '')
+          return (columns === 100 ? lines.length === 1 : lines.length > 1) && lines[0].includes('job: ')
+            && lines[0].includes('pwsh-1 pwsh') && lines[0].includes(status)
+            && lines.some(line => line.includes('IDs'))
+        }), screen())
+        const header = screen().split('\n').find(line => line.includes('job: ')) ?? ''
+        check(`C4 ${columns}列 ${status} 概述优先且窄宽不截断`, !screen().includes(job.label)
+          && (columns === 100 ? header.includes(`job: ${description}`) : !header.includes('…')), header)
+        check(`C4 ${columns}列 ${status} prefix+标题粗体、ID+kind dim`,
+          textHasStyle(term, columns === 100 ? `job: ${description}` : 'job:', 'bold')
+            && textHasStyle(term, 'pwsh-1 pwsh', 'inactive'), header)
+      },
+      columns,
+    )
+  }
+}
+await withTerminal(
+  () => React.createElement(JobCard, { job: { ...runningJob, description: undefined, outputLines: [] }, marginTopOnTurn: false }),
+  async screen => {
+    check('C5 缺失概述的卡片标题回退 registry label', await settled(() => screen().includes(`job: ${runningJob.label}`)), screen())
+  },
+  100,
 )
 
 await withTerminal(
@@ -855,17 +1175,71 @@ console.log('--- D: /jobs panel owns Esc ---')
   )
 }
 
+// Whole-screen evidence: the real channel feeds Chat in narrow inline and
+// fullscreen modes, so a hidden foreground record cannot leak via rendering.
+console.log('--- E: narrow Chat foreground/background projection ---')
+for (const fullscreen of [false, true]) {
+  const mode = fullscreen ? 'fullscreen' : 'inline'
+  const ctx = new Context()
+  const provide = (ctx as unknown as { provide(name: string, value: unknown): void }).provide.bind(ctx)
+  const emit = (event: string, ...args: unknown[]) =>
+    (ctx as unknown as { emit(event: string, ...args: unknown[]): void }).emit(event, ...args)
+  const agent = makeAgent(`screen-${mode}`, `screen-${mode}`)
+  const fake = makeFakeJobs(() => agent.id)
+  provide('jobs', fake.runtime)
+  const channel = createChannel(ctx as never, agent as never, {
+    model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
+  })
+  const result = (callId: string, text: string): void => {
+    emit('session/event', agent.session, {
+      type: 'tool/result', data: { message: { source: { callId }, content: [{ type: 'text', text }] } },
+    })
+  }
+  try {
+    await withTerminal(
+      () => React.createElement(Chat, {
+        channel: channel as never, questionStore: new QuestionStore() as never,
+        onExit: () => {}, fullscreen, trajectorySeen: true,
+      }),
+      async screen => {
+        emit('session/event', agent.session, {
+          type: 'tool/call', data: { callId: 'screen-fg', name: 'bash', arguments: JSON.stringify({ command: 'printf foreground-output', description: 'Foreground probe' }) },
+        })
+        fake.register({ id: 'bash-fg', kind: 'bash', label: 'foreground', status: 'running', startedAt: NOW })
+        fake.update({ id: 'bash-fg', kind: 'bash', label: 'foreground', status: 'completed', startedAt: NOW, finishedAt: NOW })
+        fake.remove('bash-fg')
+        result('screen-fg', 'foreground-output')
+        check(`E ${mode} 40列前台工具输出上屏`, await settled(() => screen().includes('foreground-output')))
+        check(`E ${mode} 40列不重复显示前台 job`, !screen().includes('job:')
+          && jobRows(channel).length === 0 && channel.backgroundJobs.length === 0)
+
+        emit('session/event', agent.session, {
+          type: 'tool/call', data: { callId: 'screen-bg', name: 'bash', arguments: JSON.stringify({ command: 'sleep 99', description: 'Wait for checks', run_in_background: true }) },
+        })
+        fake.register({ id: 'bash-bg', kind: 'bash', label: 'sleep 99', status: 'running', startedAt: NOW })
+        result('screen-bg', 'started background job bash-bg')
+        check(`E ${mode} 40列真正后台 job 概述卡上屏`, await settled(() => screen().split('\n').some(line =>
+          line.includes('job: Wait') && line.includes('bash-bg') && line.includes('running'))
+          && channel.backgroundJobs.some(job => job.id === 'bash-bg' && job.description === 'Wait for checks')), screen())
+        fake.update({ id: 'bash-bg', kind: 'bash', label: 'sleep 99', status: 'completed', detail: 'exit code: 0', startedAt: NOW, finishedAt: NOW })
+        check(`E ${mode} 40列后台任务可落定`, await settled(() => screen().includes('completed')))
+      },
+      40,
+    )
+  } finally {
+    channel.releaseContributions()
+  }
+}
+
 // ---------------------------------------------------------------------------
-// Group E — 侧栏形态的列宽分配纯函数（panel variant 的行网格契约）
+// Group F — 侧栏形态的列宽分配纯函数（panel variant 的行网格契约）
 // ---------------------------------------------------------------------------
-console.log('--- E: panel-variant column allocation ---')
+console.log('--- F: panel-variant column allocation ---')
 {
   const full = resolveJobsRowColumns(52)
   check('E1 宽面板（52）三列全开', full.showProgress && full.showDuration && full.showStatus && full.idWidth === 9 && full.statusWidth === 9 && !full.labelWrap)
   const mid46 = resolveJobsRowColumns(46)
   check('E1 中宽面板（46）无进度列、有时长与状态', !mid46.showProgress && mid46.showDuration && mid46.showStatus)
-  if (false) { const full2 = resolveJobsRowColumns(46)
-  check('E1 宽面板旧断言已迁移', false) }
   const mid = resolveJobsRowColumns(38)
   check('E1 中等面板（38）无进度列、有时长与状态', !mid.showProgress && mid.showDuration && mid.showStatus)
   const narrow = resolveJobsRowColumns(30)

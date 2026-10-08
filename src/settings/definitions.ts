@@ -107,8 +107,8 @@ export const SETTING_DEFINITIONS = {
     label: 'Fold terminal command',
     descriptions: { zh: '折叠终端命令' },
     group: 'conversation',
-    hint: 'Terminal cards (Bash/PowerShell): collapse a multi-line command header to its first line + count; Ctrl+O or a click expands it.',
-    hintDescriptions: { zh: '终端卡（Bash/PowerShell）：多行命令头部折叠为首行 + 计数；Ctrl+O 或点击卡片展开。' },
+    hint: 'Terminal cards (Bash/PowerShell): on keeps the first source line + count; off flattens a multi-line command into one summary row. Both truncate to width; Ctrl+O or a click opens the complete command.',
+    hintDescriptions: { zh: '终端卡（Bash/PowerShell）：开启取首行 + 行数，关闭把多行命令合成单行摘要。两者都按宽度截断；Ctrl+O 或点击展开完整命令。' },
     kind: 'boolean',
   },
   'fullscreen': {
@@ -215,8 +215,8 @@ export const SETTING_DEFINITIONS = {
     label: 'Page margin',
     descriptions: { zh: '页边距' },
     group: 'appearance',
-    hint: 'Inset the whole UI from the terminal edges. ←/→ cycles presets (none / slim / normal / roomy); Enter types a custom spec `NxM`: N columns per side, M rows top/bottom (e.g. 3x1, max 8x4; a bare `N` keeps rows at 1). Empty resets to the default `normal`. Applies immediately.',
-    hintDescriptions: { zh: '让整个界面相对终端四边内缩。←/→ 循环预设（none / slim / normal / roomy）；Enter 输入自定义 `NxM`：左右各 N 列、上下各 M 行（如 3x1，上限 8x4；只填 N 则上下保持 1 行）。清空恢复默认 normal。立即生效。' },
+    hint: 'Inset the whole UI from the terminal edges. ←/→ cycles presets (none / slim / normal / roomy); Enter types a custom spec `NxM`: N columns per side, M rows top/bottom (max 8x4; a bare `N` keeps rows at 1). Empty resets to `normal` (3x1); `2x1` retains the previous inset. Applies immediately.',
+    hintDescriptions: { zh: '让整个界面相对终端四边内缩。←/→ 循环预设（none / slim / normal / roomy）；Enter 输入自定义 `NxM`：左右各 N 列、上下各 M 行（上限 8x4；只填 N 则上下保持 1 行）。清空恢复 normal（3x1）；2x1 保留原边距。立即生效。' },
     kind: 'text',
     options: [
       { value: 'none', label: 'None', descriptions: { zh: '无' } },
@@ -290,8 +290,8 @@ export const SETTING_DEFINITIONS = {
     label: 'Smooth streaming',
     descriptions: { zh: '流式平滑输出' },
     group: 'conversation',
-    hint: 'Reveal live replies, expanded thinking, and tool-call bodies through an even ~30fps flow instead of per-burst jumps; one-shot non-streaming replies paint as a flow too. Replay/history always paints complete. On by default.',
-    hintDescriptions: { zh: '把实时回复、展开的思考与工具卡正文按 ~30fps 匀速揭示，不再随供应商突发一跳一跳；一次性到达的非流式回复也会平滑打出。回放/历史内容始终完整直出。默认开启。' },
+    hint: 'Reveal live replies and expanded thinking through an even ~30fps flow instead of per-burst jumps; one-shot non-streaming replies paint as a flow too. Replay/history and explicitly opened tool details always paint complete. On by default.',
+    hintDescriptions: { zh: '把实时回复与展开的思考按 ~30fps 匀速揭示，不再随供应商突发一跳一跳；一次性到达的非流式回复也会平滑打出。回放/历史内容与主动展开的工具详情始终完整直出。默认开启。' },
     kind: 'boolean',
   },
   'splashFont': {
@@ -471,8 +471,8 @@ export const SETTING_DEFINITIONS = {
     label: 'Tool background',
     descriptions: { zh: '工具卡背景' },
     group: 'appearance',
-    hint: 'Choose whether tool-call cards add no, subtle, or strong background emphasis.',
-    hintDescriptions: { zh: '选择工具调用卡片不添加、轻微或明显的背景强调。' },
+    hint: 'Tool-call cards use a subtle background by default. Choose None for no background, or Strong for more emphasis.',
+    hintDescriptions: { zh: '工具调用卡片默认使用轻微底色。选择「无」关闭底色，或「明显」增强背景强调。' },
     kind: 'select',
     options: [
       { value: 'none', label: 'None', descriptions: { zh: '无' } },

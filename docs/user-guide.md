@@ -73,6 +73,14 @@ dsh-tui
 - 命令都可用 **Tab 补全**（带参数时先输入 `/命令 ` 再 Tab）。
 - 非命令输入就是普通对话；**未知命令会作为普通消息发给模型**。
 
+### 1.4 阅读 Markdown 与思考
+
+标题与下一块保留一行空行；标题、粗体、强调、行内代码、引用、列表标记/编号及分隔线有独立[主题颜色](themes.md)。列表软折行对齐正文，显示补齐空格不混入复制文本。思考头与流式预览使用正常亮度的 warning 色；`Ctrl+O` 展开全文后保留 Markdown 配色，不再整段 dim。minimal UI 不强制这些思考颜色。
+
+代码块有语言/信息标签时，标题原样显示标签（如 `ts title=demo`），不带开围栏 ```` ``` ````；无标签时保留 ```` ``` ```` 提示。沿用已有语法高亮与缩进，不额外添加代码块底色。选区包含标题时也会复制标签；软折行仍合并为逻辑行，但显示缩进、制表符展开等可能与原始源码不同，不承诺原始代码或完整 Markdown 围栏的往返一致。
+
+极窄区域放不下列表标记与正文时回退普通换行。超长流式尾部被性能预算裁剪、且列表上下文已落在裁剪点之前时，暂按普通尾文呈现；输出落定后恢复完整列表排版。
+
 ## 2. 快捷键速查
 
 > 表内 `Ctrl` 在 macOS 上大多可换 `⌘`（`⌘V` `⌘O` `⌘R` `⌘T` `⌘L` `⌘Enter`）；
@@ -342,7 +350,7 @@ dsh-tui
 | `/effort` | `status` / `<id>` | 推理强度：无参滑杆（`←/→` 实时调整）；`status` 当前档位；`<id>` 直接设定。持久化 `~/.dsh-tui/effort.json`；新会话起始档看 /settings 的 `effortDefault`（§5.3） |
 | `/thinking` | 无 | 扩展思考显示开关（流式时思考逐条展开） |
 | `/tokens` | 无 | 分三段报数，不再并列两个不同量：**本次请求**上传量（input + 缓存读 + 缓存写，harness 的四个桶互斥）、**会话累计**（未缓存输入 / 输出 / 缓存读 / 缓存写）、**上下文占用** |
-| `/activity` | `frames <名>` / `status` | 工作状态行动画：无参选择器浏览，`frames <名>` 直接设置（含 `random`），默认 `moon8`。持久化 `~/.dsh-tui/working-activity.json` |
+| `/activity` | `frames <名>` / `status` | 工作状态行动画：无参选择器浏览，`frames <名>` 直接设置（含 `random`），默认 `moon`（文字半圆动画），已有持久化选择不变。持久化 `~/.dsh-tui/working-activity.json` |
 | `/preset` | `<id>` / `status` | Agent 预设切换：`standard` / `ptc`（旧 0.1.1 名 `code`）/ `minimal` / `cordis` / **梁神模式 `liangshen`**；**已开始的会话不可切换**。持久化 `~/.dsh-tui/agent-preset.json` |
 | `/theme` | `<名字>` / `status` | 主题：无参选择器；`<名字>` 直接切换；`status` 当前主题（auto 时附 OSC 11 解析结果）。持久化 `~/.dsh-tui/theme.json` |
 | `/color` | 无参 / `<名>` / `status` / `reset` | 会话强调色：无参打开调色板（`↑/↓` 选、`Enter` 应用）；`<名>` 直设；`reset` 恢复默认。颜色 `red/orange/yellow/green/blue/purple/pink/cyan`，按会话保存 |
@@ -356,6 +364,7 @@ dsh-tui
 |---|---|---|
 | `/provider` | 无 | 交互式管理模型提供方（添加 / 编辑 / 删除；标准 profile 的账号登录含 DSH 0.2.0-rc.1+ 的 DeepSeek，以及 ChatGPT/Codex / Claude / Grok；宿主 pi-ai 支持时还有 OpenAI 直连 / Meta Muse） |
 | `/auth` | `status` / `login [provider]` / `logout <provider>` | 查看账号状态、登录或登出（DeepSeek 用 `deepseek-account`；pi-ai 订阅用 `openai-codex` / `anthropic` / `xai`，较新 pi-ai 另有 `openai` / `meta`） |
+| `/fast` | 无 / `toggle` / `on` / `off` / `status` | OAuth 插件注册的 fast 开关：空参/`toggle` 切换，`on` 设 `priority`，`off` 设 `default`，`status` 报告；下一次模型请求生效，`effort` 不变 |
 | `/login` | 无 | 凭证状态（来源、存储可写性、base URL；OAuth 模块挂载时另列账号状态） |
 | `/logout` | 无 | 登出说明（env 来源需删环境变量并重启） |
 | `/permission` | 无 / `<preset>` / `status` | 查看/切换权限预设与策略（无参打开选择器） |
@@ -366,6 +375,12 @@ dsh-tui
 | `/plugins` | `check <dsh-plugin.json 路径>` | 插件诊断：信任横幅 + host 描述符 + 授权矩阵 + 台账；`check` 校验清单文件并给兼容状态 |
 | `/update` | 无 | 更新 TUI 并自动重启恢复会话（仅 `dsh --profile` 启动可用；回合运行中会拒绝） |
 | `/terminal-setup` | 无 | 终端配置建议（Windows Terminal ≥110 列、粘贴键位） |
+
+`/fast` 作用于当前 TUI 进程中本插件自注册的所有支持 OAuth 路由
+（`openai-codex-responses` / `openai-responses`），不限当前模型或会话；其他协议与
+其他插件的路由不变。开关不持久化，重启恢复可选的 `config.serviceTier` 启动默认，
+未配置时关闭/使用供应商默认。未挂载 OAuth 入口时不提供命令；入口已挂载但没有成功
+注册支持路由时明确报不可用错误。后端决定档位是否接受及额度。详见[内置订阅 OAuth](configuration.md#内置订阅-oauth)。
 
 ### 3.5 技能
 
@@ -499,6 +514,29 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 - 像素鲸鱼原图与闲置行为移植自 [dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale)（作者
   [@lhh010](https://github.com/lhh010)），特此致谢。
 
+**转录的块层级**
+
+- **用户回合**：满宽浅底色（`userPromptBackground`）+ 左端 `▌` 竖条，`❯` 后是金色加粗的提问原文。
+  往回翻长会话时，先看到的就是这一条。
+- **助手正文**：贴第 0 列、正常亮度、**不带任何前缀标记**——不写字号变化也是信号。
+- **机器活动**（工具卡 / 思考 / 子代理 / 后台任务 / `!` 命令）通过左侧竖线与正文区分。
+  工具卡有独立底色和贯穿标题、预览及展开正文的左侧边线；卡片之间留一行空行，
+  与正文、用户回合之间也保持空行。
+- **后台任务**：bash/pwsh 前台调用只显示工具卡；显式后台运行或等待超时后转入后台的命令
+  才显示独立任务卡，并进入 `/jobs`。任务卡、`/jobs`、通知和状态栏优先显示持久化调用中的
+  概述（`args.description`），缺失时回退上游 label；回放也使用同一概述，无需模型额外生成摘要。
+  job ID 仍保留用于 `job_output` 和停止任务，`/jobs` 详情保留实际 command。
+
+**工具预览与思考摘要**（默认开）
+
+- 落定思考仍收成一行 `│ + 思考 · 7s`。工具卡默认显示命令/标题及少量输出：文本最多 **3 行**，
+  diff 最多 **8 行**；终端标题为 `$ command`，其他工具显示工具名、参数或路径。
+- 终端过窄时，即使选择 `split` 也会自动回退统一式；大型差异的默认预览也使用统一式。
+  显式展开仍显示完整 diff，并在宽度允许且布局设置启用双栏时显示双栏。
+- 已完成工具摘要使用主题正文色、不加粗；长命令和参数按可用宽度截断，不产生续行。标题中被截断的内容可悬停查看；正文预览截断没有悬停提示，需点击或 `Ctrl+O` 展开全文。运行、失败和悬停状态保持可辨，展开后仍有工具分类色。
+- 展开/收起：**点工具卡或思考摘要**，或键盘 `Ctrl+O` 切换整段转录的详情。思考块的 `+` 展开后变成 `-`。
+- 展开后思考显示全文、工具卡显示完整命令与输出（不截断）；失败卡保留 `✗` 标记和失败提示。
+
 **超长单行折叠**（默认开）
 
 - **单行超过 1000 字符**的文本折叠为 `… 已折叠 N 字符（点击或 ctrl+o 展开）` 标记。
@@ -554,20 +592,20 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 | splashFont | 开屏大字字体：按天轮换（默认，随本地日期换款）/ 加粗 / 方角实心 / 半立体 / 宽体 / 点阵灰度 / 镂空模板 / 细笔 / 方板。选某一款即固定那一款，选回「按天轮换」恢复。立即生效 |
 | whaleGirl | 女仆娘立绘（默认关）：标题像素鲸鱼换成作者绘制的女仆娘**真图**（Kitty/Sixel 图像协议）；不支持时回落像素鲸鱼 |
 | diffLayout | Edit/Write diff 布局：auto（≥110 列双栏）/ split / unified |
-| thinkingFold | 思考块：preview（流式 2-3 行预览 + 落定折叠）/ full（展开到轮末） |
+| thinkingFold | 思考块：preview（流式 2-3 行预览，落定后收成一行 `+ 思考 · Ns`，展开时前置标记变 `-`）/ full（展开到轮末） |
 | btw.contextBudget | `/btw` 追问携带的最近问答总字符预算（默认 24000，范围 1000-200000）；超出时从最旧的整组开始裁剪。立即生效 |
 | btw.contextTurns | `/btw` 追问显式携带的最近完成问答组数（默认 4，范围 1-8）；窗口外的问答不进入请求，线程与面板仍保留全文。立即生效 |
 | jobGroupFold | 连续的后台任务卡：auto（默认，≥2 张成组；整组落定且 ≥3 张时折叠成汇总行）/ always（≥2 张立即折叠，含在跑的任务）/ never（从不自动折叠，每张卡都留着）。组头一行汇总状态与合计时长，点组头或 Ctrl+O 展开 |
 | effortDefault | 默认推理强度：auto / off / low / high / max。新会话的起始档位（细节见下） |
-| smoothStreaming | 流式平滑输出（默认开）：回复/思考/工具卡正文按 ~30fps 匀速揭示；回放/历史完整直出 |
-| toolBackground | 工具卡背景强调：none / subtle / strong |
+| smoothStreaming | 流式平滑输出（默认开）：回复与展开的思考按 ~30fps 匀速揭示；回放/历史完整直出。工具卡默认显示标题和短预览，点击或 Ctrl+O 展开的详情完整直出 |
+| toolBackground | 工具卡背景强调：none（关闭）/ subtle（默认）/ strong；显式选择 none 仍保留无底色 |
 | turnUsageRow | 回合用量行（默认关闭）：在每回合末显示 token、缓存、耗时与重试摘要；`/tokens`、`/status` 和底栏 token 悬停不受此开关影响 |
 | mermaidDiagrams | Mermaid 图表（默认开）：回复中的 ```` ```mermaid ```` 代码块画成字符图，流式期间逐步成形；比终端宽或类型不支持的图保留源码并注明所需列数。立即生效 |
 | mathRendering | LaTeX 公式（默认 `auto`，在 `/settings` 的**公式设置**子页里）：回复中的 `$…$`、`\(…\)` 行内公式，`$$…$$`、`\[…\]` 与单独成行的 `\begin{align}` 等显示环境块级公式的显示方式。`auto` 用当前最好的渲染方式（目前是 Unicode 文本，块级公式里的分数与上下限竖排），`image` 在支持图形的终端里用 MathJax 把公式排版成图片——Kitty 图形协议（Kitty、Ghostty、WezTerm、iTerm2 等）或 Sixel（Windows Terminal 1.22+、xterm、foot、WezTerm）（颜色跟随主题文字色；块级公式最多 16 行，行内公式在能压成一行且不糊时也显示为一行高的图片；流式中的公式、暗色的思考区、不支持图形的终端、压成一行太小以及任何渲染失败都退回 Unicode），`unicode` 固定用 Unicode 文本，`source` 保留原始 TeX。不支持、仍在流式输出或比终端宽的公式保留源码（过宽的块级公式先退成单行）。价格（`$5`）、shell 变量（`$HOME`）与代码里的 `$` 不受影响。旧的 `latexMath: false` 仍等同 `source`。**点击公式图片**打开预览卡：按 2 倍单元格尺寸重排，可 100%–800% 缩放、拖拽平移，`Esc` 或点击卡片外关闭，标题即该公式的 TeX。Sixel 下公式**不带衬底**（只画笔画），终端底色或壁纸会透出来。标题立绘这类自带透明留白的插图同样不带衬底（`whaleGirl` 的真图就是这个行为）；照片、截图与卡片内的图像仍合成到底色上，因为 Sixel 表达不了软 alpha。立即生效 |
 | mathImageScale | 公式图片大小（默认 `auto`，与上一条同在**公式设置**子页）：配合 LaTeX 公式的「图片」使用——`auto` 与正文同尺寸，`large` / `xlarge` 把**块级**公式排得更大；终端图片是按设备像素 1:1 画的，所以"更大"就等于"每个笔画更多像素"，是唯一的清晰度杠杆。行内公式不受影响（只能占一行）。立即生效 |
 | scrollGutter | 转录边栏：timeline（轮次时间线，默认）/ scrollbar（比例滚动条）/ hidden。立即生效 |
 | pageMargin | 页边距：整屏相对终端四边向里缩。预设 none / slim / normal（默认）/ roomy，或自定义 `NxM`（细节见下）。立即生效 |
-| foldTerminalCommand | 折叠终端命令（默认关）：终端卡（Bash/PowerShell）多行命令折成首行 + 计数；`Ctrl+O` 或点击卡片展开 |
+| foldTerminalCommand | 终端命令摘要（默认关）：开启时多行命令取首行 + 行数，关闭时合成单行摘要；两者都按宽度截断，`Ctrl+O` 或点击展开完整命令 |
 | expandEditor | 全屏草稿编辑（默认开）：输入行尾 `⛶` 或 `Ctrl+Shift+E` 展开成整屏编辑器；`Ctrl+Enter` 发送、`Esc` 收起（草稿还在）；关掉后入口不显示 |
 | statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关） |
 
@@ -576,7 +614,7 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 
 **scrollGutter**：scrollbar 轨道可直接拖；`Shift`/`Alt`/`Ctrl`+拖动仍是文字选择。
 
-**pageMargin**：自定义 `NxM` = 左右 `N` 列、上下 `M` 行（上限 8x4）；只填 `N` 则上下 1 行。
+**pageMargin**：默认 `normal` 为左右各 3 列、上下各 1 行。自定义 `NxM` = 左右 `N` 列、上下 `M` 行（上限 8x4）；只填 `N` 则上下 1 行，`2x1` 可保留原边距。
 
 未声明 TUI 区块的命名空间以只读形式列出，需手工编辑 profile 配置（旧版为 `~/.dsh/settings.yaml`）。
 以下设置**不在 /settings 内**，改 `$DSH_HOME/profiles/dsh-tui/cordis.patch.yml`：
@@ -624,7 +662,7 @@ dsh 意外退出时，安全模式给出**只读**的环境诊断、profile 插�
 | 主题 | `/theme` | `auto`（OSC 11 跟随终端背景）/ `light` / `dark` / `dark-ansi`；`/theme <名>` 直接切；`/theme status` 看解析结果 |
 | 自定义主题 | 手动 | `~/.dsh-tui/themes/<名>.json`，`{base, colors}` 格式，选中即热切换；命名为 `auto` 会被内置遮蔽 |
 | 语言 | `/lang` | `en` / `zh` 热切换；优先级 `DSH_TUI_LANG` > profile 配置（旧版 settings.yaml 用户层 > cordis.yml）> 持久化 |
-| 状态行动画 | `/activity` | 选择器或 `/activity frames <名>`；默认 `moon8`，`random` 随机 |
+| 状态行动画 | `/activity` | 选择器或 `/activity frames <名>`；默认 `moon`，`random` 随机 |
 
 **主题优先级**：`DSH_TUI_THEME` > `~/.dsh-tui/theme.json` > OSC 11 终端背景检测 > dark 回退。
 

@@ -35,15 +35,20 @@
  *
  * Run after build: `node scripts/verify-keymap.mjs`
  */
+import './lib/fake-home.mjs'
 import { Writable, PassThrough } from 'node:stream'
+import childProcess from 'node:child_process'
+import { EventEmitter } from 'node:events'
+import { syncBuiltinESMExports } from 'node:module'
 import React from 'react'
 import xtermHeadless from '@xterm/headless'
 const { Terminal: XTerm } = xtermHeadless
 import { render, AlternateScreen } from '../lib/types/ui.js'
 import { Chat } from '../lib/types/screens/Chat.js'
-import { setLang } from '../lib/types/i18n.js'
+import { setLang, t } from '../lib/types/i18n.js'
 import { HelpMenu } from '../lib/types/components/HelpMenu.js'
 import { foldLongLines } from '../lib/types/utils/fold-long-lines.js'
+import { _setWslOverride } from '../lib/types/utils/clipboard.js'
 import {
   actionMatches,
   draftComboConflicts,
@@ -117,6 +122,10 @@ check('other actions keep their defaults reserved', reserved.has('ctrl+o') && re
 check('fixed: ctrl+u kill-line reserved', isFixedReserved('ctrl+u'))
 check('fixed: ctrl+return reserved', isFixedReserved('ctrl+return'))
 check('fixed: ctrl+w reserved', isFixedReserved('ctrl+w'))
+for (const combo of ['alt+left', 'alt+right', 'alt+b', 'alt+f', 'option+left', 'meta+right']) {
+  check(`fixed: ${combo} word editing reserved`, isFixedReserved(combo))
+  check(`conflict: history cannot claim ${combo}`, draftComboConflicts('history', [combo]))
+}
 check('fixed: ctrl+j newline fallback reserved', isFixedReserved('ctrl+j'))
 check('free combo not reserved', !isFixedReserved('ctrl+n'))
 
@@ -199,6 +208,7 @@ function makeStreams(target = term) {
 const listeners = new Set()
 const notifications = []
 const rows = []
+let clearCalls = 0
 const channel = {
   version: 0,
   rows,
@@ -242,7 +252,7 @@ const channel = {
   removePending: () => true,
   cancel() {},
   interruptAndDeliver: () => 0,
-  clear() {},
+  clear() { clearCalls += 1 },
   loadOlder: () => 0,
   listModels: async () => [],
   listFiles: async () => [],
@@ -285,11 +295,12 @@ const promptText = (view = screen()) => {
   // Anchored at line start: the input border rows and hint lines can carry
   // a mid-line '>', but only the prompt row carries the '❯' glyph.
   //
-  // The row now begins with the ⌸ session-entry control, which sits BEFORE the
+  // The row begins with the heavy rail, then the ⌸ session entry BEFORE the
   // ❯ caret, so the anchor has to allow that leading cell or `^[❯]` never
   // matches and every draft reads as empty. The EMPTY prompt renders box-drawing
   // decoration on the same row and the row ends with the ⛶ expand-editor
   // affordance — strip those before comparing content, along with the ⌸ itself.
+  // The composer's heavy accent rail puts a `┃` before the ⌸/❯ anchors.
   //
   // Multi-row drafts (a pasted multi-line block) keep their content on the
   // rows BELOW the ❯ caret row — and the ambient clipboard can even start
@@ -298,17 +309,15 @@ const promptText = (view = screen()) => {
   // wherever its first newline lands (the old single-row regex read the
   // empty ❯ row as "" and the paste checks went red on such clipboards).
   const lines = view.split('\n')
-  const start = lines.findIndex(line => /^\s*⌸?\s*[❯]/.test(line))
+  const start = lines.findIndex(line => /^\s*┃?\s*⌸?\s*[❯]/.test(line))
   if (start === -1) return ''
   const rows = []
   for (let i = start; i < lines.length; i++) {
     if (i > start && /^\s*[╰└]/.test(lines[i])) break
     rows.push(lines[i])
   }
-  return rows.join(' ').replace(/[❯⌸⛶╭╮╰╯─│═║]+/g, ' ').replace(/\s+/g, ' ').trim()
+  return rows.join(' ').replace(/[❯⌸⛶╭╮╰╯─│═║┃]+/g, ' ').replace(/\s+/g, ' ').trim()
 }
-const clipboardNotice = () => notifications.some(n => /clipboard|剪贴板/i.test(String(n.text)))
-
 // Baseline: a plain 'v' types normally.
 stdin.write('v')
 check('plain v types', await settled(() => promptText() === 'v'), JSON.stringify(promptText()))
@@ -316,6 +325,32 @@ check('plain v types', await settled(() => promptText() === 'v'), JSON.stringify
 // Ctrl+C clears the non-empty prompt (idle single press).
 stdin.write('\x03')
 check('ctrl+c clears the prompt', await settled(() => promptText() === ''), JSON.stringify(promptText()))
+
+// Word editing must reach the composer through Chat's global listener, without
+// invoking conversation actions or losing text after the caret.
+const savedRow = { id: 1, kind: 'assistant', text: 'word-editing history', seq: 1, fresh: false }
+rows.push(savedRow)
+channel.emit()
+await settle(() => screen().includes(savedRow.text))
+stdin.write('你好世界')
+await settle(() => promptText() === '你好世界')
+stdin.write('\x17')
+check('Chat: Ctrl+W deletes a Chinese word, not the entire draft',
+  await settled(() => promptText() === '你好'), JSON.stringify(promptText()))
+check('Chat: word deletion leaves the transcript untouched',
+  rows.length === 1 && rows[0] === savedRow && clearCalls === 0 && screen().includes(savedRow.text))
+stdin.write('\x03')
+await settle(() => promptText() === '')
+stdin.write('hello world\x1b[1;3DX')
+check('Chat: Option+Left reaches word movement before single-character movement',
+  await settled(() => promptText() === 'hello Xworld'), JSON.stringify(promptText()))
+stdin.write('\x03')
+await settle(() => promptText() === '')
+stdin.write('hello world\x1bbX')
+check('Chat: legacy Option+B reaches word movement',
+  await settled(() => promptText() === 'hello Xworld'), JSON.stringify(promptText()))
+stdin.write('\x03')
+await settle(() => promptText() === '')
 
 // Listener order (#1155). Nothing has remounted the composer yet, so this
 // is the first-mount order: Chat must still own Ctrl+E / Ctrl+A. The caret
@@ -341,30 +376,70 @@ check('first-mount ctrl+a leaves the caret where it was', await settled(() => pr
 stdin.write('\x03')
 await settle(() => promptText() === '')
 
-// Alt+V arrives as ESC v. Whatever the clipboard holds, the paste branch
-// must consume the key: a prompt change or a clipboard notification are
-// the only possible outcomes (typing 'v' with meta held is impossible).
-const beforeAltV = promptText()
-notifications.length = 0
-stdin.write('\x1bv')
-check(
-  'alt+v reaches the clipboard paste branch',
-  await settled(() => promptText() !== beforeAltV || clipboardNotice()),
-  JSON.stringify({ before: beforeAltV, after: promptText(), notices: notifications.map(n => n.text) }),
-)
-check('alt+v does not type a bare v on an empty clipboard', clipboardNotice() || promptText() !== 'v')
-
-// Ctrl+V (0x16) goes through the same branch.
-stdin.write('\x03')
-await settle(() => promptText() === '')
-const beforeCtrlV = promptText()
-notifications.length = 0
-stdin.write('\x16')
-check(
-  'ctrl+v reaches the clipboard paste branch',
-  await settled(() => promptText() !== beforeCtrlV || clipboardNotice()),
-  JSON.stringify({ before: beforeCtrlV, after: promptText(), notices: notifications.map(n => n.text) }),
-)
+// Keep the real clipboard reader and key-dispatch path, but isolate its OS
+// helpers: an empty/image/busy HOST clipboard cannot prove key consumption.
+const clipboardText = 'KEYMAP_CLIPBOARD_7F31'
+let fixtureClipboard = clipboardText
+let clipboardReads = 0
+const originalSpawn = childProcess.spawn
+const originalExecFile = childProcess.execFile
+const clipboardHelpers = new Set(['osascript', 'pbpaste', 'wl-paste', 'xclip', 'xsel'])
+childProcess.spawn = (file, args = [], options) => {
+  if (!clipboardHelpers.has(file)) return originalSpawn(file, args, options)
+  const child = new EventEmitter()
+  child.stdin = new PassThrough()
+  child.stdout = new PassThrough()
+  child.stderr = new PassThrough()
+  let output = ''
+  if (file !== 'osascript') {
+    if (args.includes('--version') || args.includes('-version')) output = 'fixture clipboard backend\n'
+    else if (args.includes('--list-types') || args.includes('TARGETS')) output = 'text/plain\n'
+    else { output = fixtureClipboard; clipboardReads += 1 }
+  }
+  process.nextTick(() => {
+    child.stdout.end(output)
+    child.stderr.end()
+    child.emit('close', 0)
+  })
+  return child
+}
+childProcess.execFile = (file, args, options, callback) => {
+  if (file !== 'powershell' && file !== 'powershell.exe') return originalExecFile(file, args, options, callback)
+  clipboardReads += 1
+  process.nextTick(() => callback(null, `TEXT64:${Buffer.from(fixtureClipboard).toString('base64')}\n`, ''))
+  return { unref() {} }
+}
+syncBuiltinESMExports()
+// WSL fallback interoperability belongs to verify-clipboard; this fixture
+// exercises one ordinary text backend per key, including an empty result.
+_setWslOverride(false)
+try {
+  // Alt+V (ESC v) and Ctrl+V (0x16) must each reach the reader once and
+  // insert the exact fixture text, never type the literal shortcut letter.
+  stdin.write('\x1bv')
+  check('alt+v reaches the clipboard paste branch',
+    await settled(() => promptText() === clipboardText && clipboardReads === 1),
+    JSON.stringify({ after: promptText(), clipboardReads }))
+  check('alt+v does not type a bare v', promptText() === clipboardText)
+  stdin.write('\x03')
+  await settle(() => promptText() === '')
+  stdin.write('\x16')
+  check('ctrl+v reaches the clipboard paste branch',
+    await settled(() => promptText() === clipboardText && clipboardReads === 2),
+    JSON.stringify({ after: promptText(), clipboardReads }))
+  stdin.write('\x03')
+  await settle(() => promptText() === '')
+  fixtureClipboard = ''
+  stdin.write('\x1bvX')
+  check('empty clipboard still consumes Alt+V without typing v',
+    await settled(() => promptText() === 'X' && clipboardReads === 3),
+    JSON.stringify({ after: promptText(), clipboardReads }))
+} finally {
+  childProcess.spawn = originalSpawn
+  childProcess.execFile = originalExecFile
+  _setWslOverride(undefined)
+  syncBuiltinESMExports()
+}
 
 // Remap the editor action to alt+g and verify the external-editor branch
 // takes the key: with $VISUAL/$EDITOR unset the outcome is the

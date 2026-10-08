@@ -1,4 +1,5 @@
 import { Worker } from 'node:worker_threads'
+import { loadSharpWorkerData } from '../dsh-adapter/sharp.js'
 import type { DOMElement } from './dom.js'
 import type { SixelEncodeRequest, SixelRaster, SixelWorkerRequest, SixelWorkerResponse } from './sixel-codec.js'
 import {
@@ -412,12 +413,15 @@ export class SixelGraphicsManager {
     if (this.desired.has(job.key)) this.onReady()
   }
 
-  private encodeInWorker(job: Variant): Promise<SixelRaster> {
+  private async encodeInWorker(job: Variant): Promise<SixelRaster> {
+    const workerData = await loadSharpWorkerData()
+    if (this.disposed) throw new Error('Sixel worker disposed')
+    if (workerData.dshTuiSharpPath === null) throw new Error('Image decoder unavailable')
     return new Promise((resolve, reject) => {
       if (!this.worker) {
         this.workerKeys.clear()
         this.worker = new Worker(new URL('./sixel-worker.js', import.meta.url), {
-          stdout: true, stderr: true, resourceLimits: { maxOldGenerationSizeMb: 256 },
+          workerData, stdout: true, stderr: true, resourceLimits: { maxOldGenerationSizeMb: 256 },
         })
         const worker = this.worker
         const forget = (): void => {

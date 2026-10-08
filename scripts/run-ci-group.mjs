@@ -97,7 +97,7 @@ const GROUPS = {
     ["verify-code-block-tab-background", ['node', '--import', 'tsx/esm', 'scripts/verify-code-block-tab-background.tsx']],
 // 思考块流式视图回归：preview 固定三行且点击切全文/再点收回，full
 // 默认值反向但仍不进入 0 行正文；增量 Markdown 与整段渲染的块间距
-// 一致（真实段落空行保留，代码块后不凭空多一行）。
+// 一致（段落按源码分段，结构块之间统一一行空白）。
     ["verify-thinking-preview", ['node', '--import', 'tsx/esm', 'scripts/verify-thinking-preview.tsx']],
     ["repro-thinking-stream-fold", ['node', '--import', 'tsx/esm', 'scripts/repro-thinking-stream-fold.tsx']],
     ["verify-streaming-markdown-spacing", ['node', '--import', 'tsx/esm', 'scripts/verify-streaming-markdown-spacing.tsx']],
@@ -113,6 +113,13 @@ const GROUPS = {
 // Markdown 标题层级与间距、分隔线、列表悬挂缩进与嵌套、嵌套引用、图片 alt 与
 // OSC 8 链接（不自动下载）。
     ['verify-markdown-batch-d', ['node', '--import', 'tsx/esm', 'scripts/verify-markdown-batch-d.tsx']],
+// fork 补充回归：Markdown P0（列表标记/缩进、任务、图片、删除线与分隔线边界）、
+// 调色板断言与代码块 caption，以及悬挂缩进（hanging-wrap）两件套。
+    ['verify-markdown-blocks', ['node', 'scripts/verify-markdown-blocks.mjs']],
+    ['verify-markdown-palette', ['node', 'scripts/verify-markdown-palette.mjs']],
+    ['verify-code-block-caption', ['node', 'scripts/verify-code-block-caption.mjs']],
+    ['verify-hanging-wrap', ['node', '--import', 'tsx/esm', 'scripts/verify-hanging-wrap.tsx']],
+    ['verify-markdown-hanging', ['node', '--import', 'tsx/esm', 'scripts/verify-markdown-hanging.tsx']],
     ['verify-text-paint-budget', ['node', '--import', 'tsx/esm', 'scripts/verify-text-paint-budget.tsx']],
 // 流式代码框性能：100 个已封口块加一个持续增长的 fence，跑 100 帧；封口块不重新
 // 格式化/高亮、每帧增量有界、fence 闭合后与整段渲染逐行相同。耗时分位只打印不断言。
@@ -122,16 +129,24 @@ const GROUPS = {
     ['verify-markdown-typed-decoration', ['node', '--import', 'tsx/esm', 'scripts/verify-markdown-typed-decoration.tsx']],
     ['verify-text-viewport-paint', ['node', '--import', 'tsx/esm', 'scripts/verify-text-viewport-paint.ts']],
     ['verify-tool-history-window', ['node', '--import', 'tsx/esm', 'scripts/verify-tool-history-window.tsx']],
+// 转录块层级回归：用户回合的底色 + 左竖条、助手正文贴左无标记、机器活动
+// 带左竖线；工具卡有独立底色/内边距/块间空行，其他机器活动仍紧排。
+    ['verify-transcript-blocks', ['node', 'scripts/verify-transcript-blocks.mjs']],
 // 流式平滑揭示回归（dsh-tui.smoothStreaming）：调度器步进/游标生命周期
 // （追加保游标、替换 snap、追平不再重打）+ MessageList 集成（流式行/
 // 非流式 fresh 行渐进揭示、回放行直出、开关关闭直出）+ 组件契约
-// （thinking ticker 跟随已到达文本而展开体吃切片、工具卡行级揭示、
-// result 落定即全显）。
+// （thinking ticker 跟随已到达文本而展开体吃切片、工具卡短预览且
+// 展开完整直出）+ 长历史工具卡下真实回复/思考动画与订阅预算。
     ["verify-smooth-reveal", ['node', '--import', 'tsx/esm', 'scripts/verify-smooth-reveal.tsx']],
 // 根级页边距（PageMargin）契约：无内缩终端（裸 WSL/tmux/SSH）下文字贴边。
-// 左右 2 列上下 1 行内缩 + TerminalSize 收敛成内容区尺寸 + inset 坐标
+// 左右 3 列上下 1 行内缩 + TerminalSize 收敛成内容区尺寸 + inset 坐标
 // 补偿，对照组保证无 PageMargin 时既有「全宽」契约不变。
     ["verify-page-margin", ['node', '--import', 'tsx/esm', 'scripts/verify-page-margin.tsx']],
+// 会话底色与输入框/工具卡统一边界：暗/亮主题、窄屏、边距、滚动轨与中文草稿。
+    ['verify-session-surfaces', ['node', '--import', 'tsx/esm', 'scripts/verify-session-surfaces.tsx']],
+// User prompt character fidelity: component 80/78 geometry and real Chat with
+// timeline/scrollbar gutters, page margins, wide characters, resize and copy.
+    ['verify-user-prompt-wrap', ['node', '--import', 'tsx/esm', 'scripts/verify-user-prompt-wrap.mjs']],
 // 滚动/pill/内联模式回归：新消息 pill 计数递减、Ctrl+C 交互、
 // 内联 scrollback 第三方终端适配。曾因 mock channel 缺新字段而
 // 静默冻结（render 期 TypeError 被 ink 吞掉），不在 CI 里烂了
@@ -367,6 +382,10 @@ const GROUPS = {
 // 走编译产物——验证陈旧安装清理后重跑成功、瞬时重试升级、真实失败不
 // 触发任何恢复且不破坏 profile，重启尾部向替代进程传递 env 契约。
     ["verify-update-recovery", ['node', 'scripts/verify-update-recovery.mjs']],
+    // /restart 交接不得 stdin.destroy()：libuv 会把父进程保存的 cooked
+    // termios 写回共享终端，替代进程的 raw 模式被静默打掉，鼠标报告和
+    // DECRPM/DA1 回执以 `^[...` 回显进输入框。
+    ["verify-restart-tty-handoff", ['node', 'scripts/verify-restart-tty-handoff.mjs']],
 // /reload 与 /restart 纯函数回归：planReload 五类偏好的应用/跳过/
 // 无变化分支、env 与 cordis.yml 显式配置的优先级守卫、模型路由原子
 // 规则（provider-only pin 不挡偏好）、两命令的注册与解析。
@@ -461,6 +480,10 @@ const GROUPS = {
 // 外部来源浏览层回归（临时目录合成 fixture）：扫描 IO（头尾窗口、异步遍历、
 // 指纹复用）、各源 scan()/load()、来源探测、catalog 快照、单会话导入。
     ["verify-migrate-browse", ['node', '--import', 'tsx/esm', 'scripts/verify-migrate-browse.mjs']],
+// OpenCode SQLite/WAL、有效上下文语义与官方 persistence 往返（仅合成数据）。
+    ["verify-migrate-opencode-parse", ['node', '--import', 'tsx/esm', 'scripts/verify-migrate-opencode-parse.mjs']],
+    ["verify-migrate-opencode-db", ['node', '--import', 'tsx/esm', 'scripts/verify-migrate-opencode-db.mjs']],
+    ["verify-migrate-opencode", ['node', '--import', 'tsx/esm', 'scripts/verify-migrate-opencode.mjs']],
 // /migrate 交互回归（挂真实 Chat）：fresh 会话直接 `/migrate <agent>` 必须
 // 打开确认层（旧实现查 picker 行缓存，缓存为空时一律报未知源）、未知源仍
 // 被拒、`--dry-run` 要源、多源报 usage、重开选择器清空上一轮勾选。
@@ -559,6 +582,7 @@ const GROUPS = {
 // ICU 分词、700ms 空闲切步、粘贴/提交/召回/Esc 清空的栈语义、图片能力保活），
 // 且与 Esc Esc 的会话回溯不是一回事（栈空不触发 rewind）。
     ["verify-prompt-undo", ['node', 'scripts/verify-prompt-undo.mjs']],
+    ['verify-prompt-upgrade', ['node', '--import', 'tsx/esm', 'scripts/verify-prompt-upgrade.mjs']],
 // SIGCONT 恢复 raw mode 回归：Ctrl+Z 不再自停，外部 stop（kill -STOP / shell
 // suspend）后 shell 把 tty 留在自己的 cooked 模式，SIGCONT 必须把 termios 放回，
 // 否则输入框只画帧、按键被行规吃掉。
@@ -1027,6 +1051,7 @@ const GROUPS = {
 // 链式连接线、落定整组折叠、点击/悬停/Ctrl+O 展开、失败数留在折叠行、
 // 非相邻不成组、单卡原样，以及 jobGroupFold=auto/always/never 三档行为。
     ["verify-jobs-transcript-group", ['node', '--import', 'tsx/esm', 'scripts/verify-jobs-transcript-group.tsx']],
+    ['verify-job-title-cache', ['node', '--import', 'tsx/esm', 'scripts/verify-job-title-cache.tsx']],
 // #185 自愈守卫：React nested-update overflow（Minified error #185）抛出时
 // reconciler 已清零计数器，守卫在 clock.tick / reveal.tick / scrollbox.notify /
 // channel.emit(+emitStream) / selection.notify 等高频 enqueue 热点吸收该类
@@ -1269,7 +1294,7 @@ const GROUPS = {
 // 单行超长文本折叠回归（用户反馈：单行超长文本默认整行渲染，铺成上千视觉
 // 行拖慢转录）：折叠阈值常量 1000 字符、行边界不被改写、短文本零分配快路径；
 // 真实 MessageList 下 user 消息 / assistant 正文 / 工具卡标题（单行超长命令）
-// 与正文都出折叠标记且裁掉的尾巴不在屏上；Ctrl+O 逃生门恢复原文；
+// 与正文的超长内容保持有界预览且裁掉的尾巴不在屏上；Ctrl+O 恢复原文；
 // reasoning 行不折叠（自带三行预览）。
     ["verify-long-line-fold", ['node', '--import', 'tsx/esm', 'scripts/verify-long-line-fold.tsx']],
 // btw 面板：侧栏（空态、Markdown、Enter 提交/Esc 保草稿/Tab 切焦点/n 新话题/s 发到聊天）、

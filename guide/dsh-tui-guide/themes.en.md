@@ -104,6 +104,7 @@ Available color keys by purpose:
 - Panels/borders: `permission`, `permissionShimmer`, `promptBorder`, `promptBorderShimmer`, `bashBorder`, `planMode`, `ide`, `background`
 - Body text: `text`, `inverseText`, `inactive`, `inactiveShimmer`, `subtle`
 - Tool names & status dots: `toolNameMutate`, `toolNameExec`, `toolDotExec`, `toolDotRead`, `toolDotWrite`, `toolDotWeb`, `toolDotTask`
+- Session canvas: `sessionBackground` (includes page margins; independent of badge fill `background`)
 - Tool card surfaces: `toolCardBackground`, `toolCardBackgroundDim`
 - Status: `autoAccept`, `success`, `error`, `warning`, `warningShimmer`, `merged`
 - Diff: `diffAdded`, `diffRemoved`, `diffAddedDimmed`, `diffRemovedDimmed`, `diffAddedWord`, `diffRemovedWord`
@@ -112,7 +113,7 @@ Available color keys by purpose:
 - Badges/accents: `mascotBody`, `inputBackground`, `professionalBlue`, `chromeYellow`
 - Animated chrome & caret: `contextBarSystem`, `contextBarPrompt`, `contextBarAssistant`
 - Animated chrome & caret (cont.): `contextBarThinking`, `contextBarTools`, `ignition`, `ignitionDim`, `cursor`
-- Messages & input: `userMessageBackground`, `userMessageBackgroundHover`, `messageActionsBackground`, `selectionBg`, `bashMessageBackgroundColor`
+- Messages & input: `userMessageBackground`, `userMessageBackgroundHover`, `userPromptBackground`, `messageActionsBackground`, `selectionBg`, `bashMessageBackgroundColor`
 - Messages & input (cont.): `memoryBackgroundColor`, `rate_limit_fill`, `rate_limit_empty`, `fastMode`, `fastModeShimmer`, `userPromptLabel`
 - Subagent messages: `subagentBullet`, `subagentDescription`, `subagentModel`, `subagentElapsed`, `subagentToolName`, `subagentStatusRunning`
 - Subagent messages (cont.): `subagentStatusCompleted`, `subagentStatusFailed`
@@ -139,6 +140,26 @@ A few keys carry behavior worth knowing:
   keeps the inverse-video caret for backwards compatibility; declare it only when the caret must
   stop following the body text color.
 - Transcript link text follows `accent`; an empty or unparseable accent keeps the old fixed blue.
+
+## Markdown semantic colors
+
+Nine color keys can be overridden independently of other UI accents:
+
+| Key | Purpose | Missing-key fallback for older palettes |
+| --- | --- | --- |
+| `markdownHeading` | Headings | `accent` |
+| `markdownStrong` | Strong text | `toolNameMutate` |
+| `markdownEmph` | Emphasis/italic text | `warning` |
+| `markdownCode` | Inline code | `permission` |
+| `markdownLink` | Links and visible URLs (underlined) | `ide` |
+| `markdownBlockQuote` | Blockquote body | `warning` |
+| `markdownListItem` | Unordered list markers | `permission` |
+| `markdownListEnumeration` | Ordered list numbering | `ide` |
+| `markdownHorizontalRule` | Horizontal rules | `inactive` |
+
+Built-in `dark` uses soft-purple headings, amber strong text, warm-gold emphasis, green inline code, cyan links/numbering, subdued warm-gray quotes, warm unordered markers and gray rules; brand blue remains the UI focus color. `light` uses matching deep purple, gold, green and cyan; `dark-ansi` uses only the 16 ANSI colors. Ordinary collapsed tool summaries use `inactive`, running/hovered headers use `text`, and failures use `error`; expanded cards retain category-colored tool names.
+
+JSON and `tuiThemes` descriptors still inherit unspecified keys from their declared `base`. When an older plugin or custom resolver returns a palette without the new keys, `normalizeThemePalette` uses that palette's own legacy keys in the table; only a missing legacy fallback uses the corresponding legacy key from `dark`. Explicit new keys win, and palettes with all new keys retain object identity. Normalization of older palettes is cached, but changes to the original object trigger recomputation so hot updates do not retain stale colors.
 
 ## npm plugin themes
 

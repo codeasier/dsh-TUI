@@ -394,29 +394,25 @@ const screen = (app: Harness): string[] => viewportLines(app.term, ROWS)
 
 function inputRange(app: Harness): { top: number; bottom: number } | null {
   const rows = screen(app)
-  let bottom = -1
-  for (let i = rows.length - 1; i >= 0; i -= 1) {
-    if (rows[i].includes('╰')) {
-      bottom = i
-      break
-    }
-  }
-  if (bottom < 0) return null
-  for (let i = bottom - 1; i >= 0; i -= 1) {
-    if (rows[i].includes('╭')) return { top: i, bottom }
-  }
-  return null
+  // Chat always provides the session entry; requiring it excludes the
+  // selected ❯ row inside an open slash-completion card.
+  const first = rows.findIndex(row => /^\s*┃\s*⌸\s*❯/u.test(row))
+  if (first < 1 || !/^\s*┃/u.test(rows[first - 1])) return null
+  let bottom = first
+  while (bottom + 1 < rows.length && /^\s*┃/u.test(rows[bottom + 1])) bottom += 1
+  if (bottom === first || !/^\s*┃\s*$/u.test(rows[bottom])) return null
+  return { top: first - 1, bottom }
 }
 
 /**
- * The composer box: top border, content row(s), bottom border. Comparing this
+ * The composer block: top padding, content row(s), bottom padding. Comparing this
  * slice before/after a round trip is the text + newline-structure assertion
  * (the transcript and hint rows outside it are not part of the draft).
  *
  * Trailing cell padding is stripped: it is a renderer frame artifact (a row
  * can be read while the renderer is still filling its remaining cells), not
- * draft content. The border rows stay full width, so a real box/width change
- * still fails.
+ * draft content. The permanent rail rows remain in the slice so changes to
+ * the draft's line structure still fail.
  */
 function inputBlock(app: Harness): string[] | null {
   const range = inputRange(app)
@@ -434,6 +430,7 @@ function promptRow(app: Harness): string {
  *  ❯ prompt, and a vim badge sits before the text when the mode is on. */
 function draftText(app: Harness): string {
   return promptRow(app)
+    .replace(/^\s*┃\s*/, '')
     .replace(/^[⌸⌂]\s*/, '')
     .replace('❯', '')
     .replace('⛶', '')

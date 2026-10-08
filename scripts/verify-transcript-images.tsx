@@ -344,7 +344,10 @@ async function withTerminal(
   graphics = false,
   terminalImages = true,
 ): Promise<void> {
-  const graphicsEnv = ['TMUX', 'STY', 'DSH_TUI_ACCESSIBILITY', 'DSH_TUI_DISABLE_TERMINAL_IMAGES']
+  // TERM_PROGRAM: the terminal family decides the graphics protocol (see
+  // terminalImagesBindToCells), and this fixture's Kitty replies assume the
+  // spec-conforming family. Pinned so the run does not depend on the machine.
+  const graphicsEnv = ['TMUX', 'STY', 'DSH_TUI_ACCESSIBILITY', 'DSH_TUI_DISABLE_TERMINAL_IMAGES', 'TERM_PROGRAM']
   const previousEnv = graphicsEnv.map(name => process.env[name])
   if (graphics) for (const name of graphicsEnv) delete process.env[name]
   const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
@@ -489,7 +492,10 @@ await withTerminal(
       true,
       'an image-only assistant is not filtered',
     )
-    assert.match(screen(), /[●⏺]/u, 'the isolated image-only assistant keeps its marker')
+    // Assistant prose carries no leading bullet any more (it is the flush-left,
+    // unmarked layer; machine rows take the rail), so an image-only row must
+    // draw the image and nothing else — no orphan `●` above the thumbnail.
+    assert.doesNotMatch(screen(), /[●⏺]/u, 'the image-only assistant adds no prose bullet')
   },
 )
 

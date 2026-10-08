@@ -1,6 +1,6 @@
 import React from 'react'
 import { Box } from '../ui.js'
-import { SurfaceEdgesContext } from './SurfaceEdges.js'
+import { SurfaceEdgesContext, useSurfaceEdges } from './SurfaceEdges.js'
 import {
   TerminalSizeContext,
   type TerminalSize,
@@ -19,7 +19,7 @@ import {
  * （裸 WSL、tmux、SSH、部分嵌入宿主）完全没有——文字直接贴着屏幕四边，
  * 观感压抑。TUI 无法读取终端的 padding，所以在根布局自备一层小"页边距"。
  * 设置（`dsh-tui.pageMargin`）可以是预设名 none / slim / normal（默认，
- * 左右 2 列、上下 1 行）/ roomy，或自定义 `NxM`（左右各 N 列 × 上下各 M
+ * 左右 3 列、上下 1 行）/ roomy，或自定义 `NxM`（左右各 N 列 × 上下各 M
  * 行，如 3x1）——解析与几何见 tuiDisplayPrefs。
  *
  * 实现策略（三层）：
@@ -55,12 +55,21 @@ export const PageInsetContext = React.createContext<PageInset>({ x: 0, y: 0 })
 
 /**
  * 内容区相对屏幕原点的偏移。供"出血"（full-bleed）chrome 使用：页面级
- * 分割线、右侧滚动轨这类结构性元素直通终端边缘，而内容（文本、卡片）
- * 保持页边距内缩——常规排版设计的做法（内容列留边距、横线/滚动轨出血
- * 到版面边缘）。无 PageMargin 时恒为 {x:0, y:0}。
+ * 分割线、右侧滚动轨这类结构性元素直通终端边缘，正文保持页边距内缩；
+ * 转录工具卡片表面可向两侧延伸，但保留底板边缘与滚动轨空间。
+ * 无 PageMargin 时恒为 {x:0, y:0}。
  */
 export function usePageInset(): PageInset {
   return React.useContext(PageInsetContext)
+}
+
+/** Shared composer/card edges: one canvas column left, two gutter columns right. */
+export function usePagePanelBleed(enabled: boolean): { left: number; right: number } {
+  const edges = useSurfaceEdges()
+  return {
+    left: enabled ? Math.max(0, edges.left - 1) : 0,
+    right: enabled ? Math.max(0, edges.right - 2) : 0,
+  }
 }
 
 /**
@@ -103,6 +112,7 @@ export function PageMargin({
           width="100%"
           paddingX={x}
           paddingY={y}
+          backgroundColor="sessionBackground"
         >
           {/* 内容盒：ink 的百分比宽度按父盒「全宽」（含 padding）解析——
               直接 padding 的盒子里 width="100%" 会始终宽出 2·inset×（滚动轨

@@ -26,18 +26,19 @@
 - **像素鲸鱼娘** — 开屏三选一动画，点击唤醒；开始第一个任务后定格。
 - **落地页与首次引导** — 每次启动先落在带**真输入框**的落地页（大字 + 鲸鱼 + 快捷入口，窄/矮终端自动整块降级）；首次运行走四步向导（API Key / 语言主题 / 模型工作区 / 快捷键），`/setup` 随时重跑。
 - **终端原生界面** — 流式 Markdown、工具卡、`/` 与 `@` 补全、`#L12-14` 行区间、历史搜索、中英界面。
+- **转录块层级** — 用户回合是带底色和 `▌` 竖条的锚点；助手正文贴左、无前缀标记；工具调用与思考挂在 dim `│` 竖线下，同一回合内收紧成簇。
 - **图片** — Kitty/Sixel 缩略图，居中大图可缩放平移，粘贴前按限额适配，无图形时文字回退。
 - **Mermaid 图表** — ```` ```mermaid ```` 代码块画成 Unicode 字符图。
 - **LaTeX 公式** — `$…$` 与 `$$…$$` 公式转成 Unicode 文本，块级公式里的分数与上下限竖排；`mathRendering: image` 时在支持图形的终端里把块级公式与能压成一行的行内公式排成终端图片。
 - **时间轴** — 全部回合可点；右栏时间线 / 滚动条 / 隐藏。
 - **侧栏面板** — `Ctrl+B` 在聊天右侧展开面板列，默认启用全部 8 个内置面板；终端够宽才分栏，窄屏与 inline 模式保持整屏面板。
-- **实时状态** — 工作动画、上下文条、TPS、缓存命中率、推理强度、token、本会话费用估算（主会话 + 子代理）、Git 与会话信息。
+- **实时状态** — 主题色文字转轮（默认 `moon`，可用 `/activity` 调整）、简洁的子代理状态符号、工作动画、上下文条、TPS、缓存命中率、推理强度、token、本会话费用估算（主会话 + 子代理）、Git 与会话信息。
   上下文条的填充长度跟随后端占用量，颜色按内容构成估算；压缩后清理过期估算，缺少分类时显示单块已用区域。
 - **唯一的会话管理界面** — `/resume` `/home` `/agentview` `/bg` `⌸`。
 - **会话工作流** — `/new` `/compact` `/export` `/btw`、模型热切换、fork、回溯、vim、全屏草稿编辑器。
 - **IDE 选区通道** — VS Code 里选中的代码进 prompt。
 - **DSH 集成** — presets、技能、MCP、目标、待办、子代理、问卷。
-- **账号登录** — 标准 profile 提供 pi-ai 的 ChatGPT/Codex、Claude、Grok OAuth（可用时还有 OpenAI 直连与 Meta Muse）；DSH 0.2.0-rc.1+ 还通过宿主服务提供 DeepSeek 浏览器登录，路由为 `deepseek-account`。通过 `/provider` 或 `/auth` 使用，无需另装插件。
+- **账号登录** — 标准 profile 提供 pi-ai 的 ChatGPT/Codex、Claude、Grok OAuth（可用时还有 OpenAI 直连与 Meta Muse）；DSH 0.2.0-rc.1+ 还通过宿主服务提供 DeepSeek 浏览器登录，路由为 `deepseek-account`。通过 `/provider` 或 `/auth` 使用，无需另装插件。ChatGPT/Codex fast 可用 [`/fast on|off|status`](docs/configuration.md#内置订阅-oauth) 交互控制（空参或 `toggle` 切换）：从下一次请求起作用于当前 TUI 进程中本插件自注册的所有支持 OAuth 路由，不改变 `effort`。开关不持久化；重启恢复可选的 `config.serviceTier` 启动默认（未配置即关闭/供应商默认）。是否接受及额度由后端决定。
   仅更新 profile 而留下已挂载 `dsh-tui-auth` 的旧全局 TUI 补丁时，本地登录也会按需启动官方 loopback 回调监听器；SSH 固定端口转发仍需对齐全局安装包。
 - **扩展** — 浏览器交互、computer use 等。
 - **为长会话设计** — 事件驱动投影、虚拟化、有界缓存。
@@ -104,6 +105,12 @@ dst
 
 手动安装：跑仓库根目录的 `install.sh`，或 `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`。之后 `dsh-tui` 与 `dsh --profile dsh-tui` 等价。
 
+源码检出可用 `sh scripts/local-install.sh [profile]` 安装本地 tarball。
+脚本在打包前备份 profile 的 `node_modules`、manifest/lock 与旧引用 tarball，
+安装或校验失败时恢复。需预留完整依赖树副本的磁盘空间；外部依赖 symlink 会被拒绝。
+profile 局部锁拒绝本脚本的并行调用；安装期间不要运行其他 `dsh plugin`/pnpm
+命令或编辑该 profile。恢复失败会非零退出，并保留 stderr 所报路径下的备份/锁。
+
 > **新用户提示**：pnpm ≥11 默认拦截带安装脚本的依赖，报 `ERR_PNPM_IGNORED_BUILDS`。更新时还会忽略异平台的 `@img/sharp-*` 原生包，省约 200MB 下载。`/update` 与 `dsh-tui update` 都会自动写好这两份配置，无需手工处理。细节见[安装与快速开始](docs/getting-started.md#pnpm-安装脚本拦截与异平台原生包)。
 
 TUI 启动后会在后台检查新版本，不阻塞首帧。有更新时输入 `/update` 一键升级，自动重启并恢复当前会话。profile 叠加机制、源码构建与常见问题见[安装与快速开始](docs/getting-started.md)。
@@ -129,23 +136,24 @@ TUI 启动后会在后台检查新版本，不阻塞首帧。有更新时输入 
 
 ### 迁移其他编程代理的对话（`dsh-tui migrate`）
 
-把 Claude Code、Codex、OMP、zcode、Grok Build 的本地对话历史导入 DSH 会话库，之后用 `/resume` 按原工作目录浏览与恢复：
+把 Claude Code、Codex、OMP、zcode、Grok Build、OpenCode 的本地对话历史导入 DSH 会话库，之后用 `/resume` 按原工作目录浏览与恢复：
 
 ```sh
 dsh-tui migrate                # 列出各代理可迁移的对话数量（不写入）
-dsh-tui migrate claude-code    # 导入 Claude Code 的全部对话（codex / omp / zcode / grok-build 同理）
+dsh-tui migrate claude-code    # 导入 Claude Code 的全部对话（codex / omp / zcode / grok-build / opencode 同理）
 dsh-tui migrate codex --dry-run  # 只预览将落盘的内容，不写入
 ```
 
 - **只读源**：迁移只读取源代理的本地存储，绝不修改；产物经官方 `JsonlSessionPersistence` 后端写入 `$DSH_HOME/sessions`——导入的会话是一等公民（可打开、可续聊）
 - **幂等**：同一源对话命中同一确定性 UUID——重复导入跳过已存在项，不堆叠重复
-- **保留结构**：按轮次还原用户/助手消息、思考过程（reasoning）、工具调用及其结果，以及源里的上下文压缩（写为原生压缩检查点）；harness 注入的机器文本不开轮。导入的会话可以直接接着做事
+- **保留结构**：按轮次还原用户/助手消息、思考过程（reasoning）、工具调用及其结果，以及源里的上下文压缩（原生压缩检查点，或 OpenCode 的有效上下文快照）；过滤遵循各源的模型上下文规则。导入的会话可以直接接着做事
 TUI 内浏览：会话管理界面（`/resume`）为每个有会话的代理显示一个标签，选中一条即只导入这一条并直接打开。
 TUI 内：`/migrate`（或 `/migrate <agent> [--dry-run]`）以子进程运行同一导入，经通知流汇报，不卡界面。
 CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一套导入。
 完整指南：[会话迁移](docs/migrate.md)。
 
-- pi / opencode 等其他代理经 adapter 注册表逐步扩展；grok-build 支持读 `GROK_HOME` 环境变量
+- **OpenCode**：支持按 1.18.34 核对的 `session/message/part` SQLite 格式，处理 WAL 更新、压缩保留尾部与撤销边界。暂不支持原生 `session_message/session_input` 与旧 JSON 存储，跳过的数据有明确诊断。遵循 `XDG_DATA_HOME` / `OPENCODE_DB`；channel 数据库与限制见指南。
+- pi 等其他代理经 adapter 注册表逐步扩展；grok-build 支持读 `GROK_HOME` 环境变量
 
 **VS Code**：用集成终端，或用 `dsh-tui-vscode` 扩展。见 [VS Code 使用指南](docs/vscode.md)。**Herdr**：在 [Herdr](https://herdr.dev) 窗格运行 `dsh-tui`，经其本地集成 API 报告 `idle` / `working` / `blocked`。
 
@@ -208,11 +216,19 @@ TPS 计入隐藏推理的生成时间，剔除工具执行时间；实时文本�
 自动变化仅 Codex 标识/标题，不改配色与宠物。第三方客户端使用 ChatGPT 订阅令牌受
 OpenAI 条款约束。完整操作与当前边界：[Codex 后端](docs/codex-backend.md)。
 
+**Orca 移动端**：`TERM_PROGRAM=Orca` 的会话跳过全屏状态健康查询，避免共享桌面/移动端终端中的输入显示停滞、必须切换 tab 才刷新。全屏模式与鼠标跟踪仍可使用。
+
+Markdown 的紧凑、松散、有序与嵌套列表保留标记；任务项显示 `[ ]` / `[✓]`，后续段落、代码和软折行对齐列表正文；仅用于显示的折行补齐空格不进入复制文本。图片显示 alt 文本与可见 URL。双波浪 `~~文本~~` 显示终端删除线，`~100` 等单波浪近似值保持字面文本；水平分隔线独占一行，长度为 16 个字符。代码块有语言/信息标签时，标题原样显示标签、不带开围栏 ```` ``` ````；无标签时仍显示 ```` ``` ````，不额外添加代码块底色。标题、列表、引用、代码、表格与分隔线和相邻块之间统一保留一行空行，即使源码没有空行；段落之间仅在源码分段时空一行。流式与落定正文共享这套规则。独立 Markdown 色槽在默认暗色主题中区分紫色标题、琥珀粗体、绿色行内代码与青色下划线链接（见[主题](docs/themes.md)）；思考头与预览使用正常亮度的 warning 色，展开全文保留 Markdown 配色，minimal UI 不强制这些思考颜色。
+
+读取、搜索和普通工具调用默认收起为低对比行内摘要，不加底色或耗时尾标，连续摘要紧密排列；点击或 `Ctrl+O` 可展开完整输出。终端、文件变更和错误卡保留轻微底色（`toolBackground: subtle`）、贯穿左侧的边线及块间空行，显示命令/标题与最多三行文本或八行 diff 预览。终端标题使用 `$ command`；长命令与参数按标题可用宽度截断。已完成的行内摘要使用主题弱化正文色、不加粗；运行、失败与悬停时仍突出显示。思考标题不再带左竖线或斜体；输入区使用有底色的粗黄色左竖条面板，与工具卡的细边线区分，保留会话入口与编辑器按钮；计划模式和显式 `/color` 仍优先覆盖输入框条带颜色。历史用户 prompt 采用与输入框一致的底色、上下留白及贯穿所有行的粗黄色左条带。标题中被截断的内容可悬停查看；正文预览截断没有悬停提示，点击或 `Ctrl+O` 即时展开完整命令与输出。`toolBackground: none` 可关闭底色，`strong` 可增强背景强调。`smoothStreaming` 平滑揭示回复与展开的思考；工具详情与回放历史完整直出。会话画布使用主题的 `sessionBackground`：暗色模式为中性灰（`#191919`），亮色模式为浅灰（`#F2F2F2`），`dark-ansi` 则采用克制的 ANSI 黑色。正文保留页边距，历史用户 prompt、工具卡和输入框使用一致的左右边缘，比正文稍宽；面板底色为中性灰（暗色）或灰白（亮色），不再带蓝色调。默认 `pageMargin: normal` 为左右各三列、上下各一行；自定义 `2x1` 可保留原来的边距。`pageMargin: none` 只移除边距，不关闭主题化的会话背景。
+
 ## 快捷键与鼠标
 
 `Enter` 发送 · `Tab` 补全 · `Ctrl+Enter` 打断并发送 · `Alt+Up` 取回上一条 · `Esc` 逐层关闭，空输入双击回溯 · `Ctrl+B` 侧栏 · `Ctrl+O` 详情 · `Ctrl+R` 搜历史（`↑`/`↓` 与 `Ctrl+R` 按当前项目隔离） · `Ctrl+V` 粘贴 · `Ctrl+Shift+E` 全屏草稿编辑器 · `?` 快捷键 · `←` 打开会话管理（DSH 会先将当前会话转后台）。
 
 模型工作时：`Enter` 加塞、`Tab` 排队、`Ctrl+Enter` 打断并立即发送。输入只要构成命令就仍按命令执行（带不带参数都一样）——`/model`、`/new` 会走到该命令自己的门禁（`/` 浮窗也据此把影响当前对话的命令沉到灰区），不会被当成插话；只有不构成命令的文本和直接调用技能的手势（`/技能名 …`）才加塞。
+
+文本编辑：`Ctrl+←/→` 或 `Alt+←/→`（macOS 为 `Option`，也支持 `Alt+B/F`）按 Unicode 词边界跳转，支持无空格中文。`Ctrl+W` 删除光标前一个词及其尾随空白，有选区时只删除选区，不清除会话历史。标点与 emoji 作为独立编辑单元；草稿只有一个词时仍可能被整段删除。
 
 原生 Windows 下，分片的 Win32 输入记录会跨短暂输入延迟重组，不再作为数字协议串进入输入框。平台检测只能说明这台机器可能运行该私有模式（win32-input-mode）：裸 `ESC[` 分片只有在真正解码到一条记录之后才会被扣住，而自身形状已足够像一条记录的分片可自行挂起（这也是首条记录即使被切分仍可能恢复的原因）。从不进入该模式的 Windows 终端（mintty、GitBash 等）因此保持经典 VT 路径：单独 `Esc` 保持既有响应时间，`ESC[` 超时释放后紧随输入的字母也不会被吞掉。
 
@@ -246,6 +262,8 @@ OpenAI 条款约束。完整操作与当前边界：[Codex 后端](docs/codex-ba
 
 在 `/provider` 模型列表聚焦一项并按 `Tab`，可编辑上下文窗口、最大输出 token、推理档位和图片输入能力。
 
+在 `/model` 补全中，可输入完整路由的前缀（如 `volceapi/glm`）、模型 ID 前缀（如 `glm`），或按序子序列模糊匹配（如 `dsv4.1` 命中 `volceapi/deepseek-v4.1-flash`）；前缀命中排在模糊命中之前，选中后会填入完整的 `provider/model` 路由。
+
 会话管理界面会立即显示上次成功读取的列表，同时核对持久化存储的变化。需要深度扫描日志的标题会先显示回退名称，恢复完成后在原行更新。
 移除工作区登记后，其历史会话仍可从侧栏的「仅历史」目录进入。
 「仅历史」目录只提供编辑和新建会话操作；重命名与移除仅适用于已登记工作区。
@@ -253,6 +271,8 @@ OpenAI 条款约束。完整操作与当前边界：[Codex 后端](docs/codex-ba
 **后台任务**：点击卡片头部可直达该任务详情。点击卡片正文或按 `Ctrl+O`，切换命令首句预览与完整脚本；命令和输出分别使用不同色边，节首标记为 `❯`（Windows 用 `>`）和 `≡`。输出固定显示最新两个可视行。`/jobs` 与侧栏任务面板保留全量输出滚动，按 `e` 切换焦点命令的折/展；脚本连续空行压缩为一行。
 
 **后台会话**：在 DSH 内核，`/bg` 或空输入按 `←` 将当前会话转后台并打开会话管理；按 `Esc` 回到它。后台会话跑在本进程内，TUI 退出即停止，日志保留。在 Claude/Codex 内核，这两个入口直接打开会话管理，不转后台。
+
+**后台任务**：bash/pwsh 前台调用只显示工具卡；显式后台运行或等待超时后转入后台的命令才显示独立任务卡，并进入 `/jobs` 面板。任务卡、`/jobs`、通知和状态栏优先显示持久化 bash/pwsh 调用中的概述（`args.description`），缺失时回退上游 label；回放也使用同一概述，无需模型额外生成摘要。job ID 仍保留用于 `job_output` 和停止任务，`/jobs` 详情保留实际 command。
 
 完整命令：[交互与命令](docs/interaction.md)。
 

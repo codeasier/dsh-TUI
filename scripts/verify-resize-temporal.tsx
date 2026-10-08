@@ -115,7 +115,10 @@ function doResize(app: { stdout: any; term: typeof XTerm.prototype }, w: number,
 
 // ================= 1+2. 时间稳定性 & 往返循环 =================
 const app = await mountChat(makeRows())
-const composerY = (lines: string[]) => lines.findIndex(l => l.includes('╭'))
+const composerY = (lines: string[]) => {
+  const input = lines.findLastIndex(line => /^\s*[│┃]⌸ /.test(line))
+  return input < 0 ? -1 : input - 1
+}
 const sentinelY = (lines: string[]) => lines.findIndex(l => l.includes('SENTINEL-TAIL'))
 // 时间线高亮晚于首帧和行高校正到达；整屏稳定后再取基线，避免把
 // 尚未收敛的高亮拿去与 resize 后的稳定画面对比。
@@ -201,7 +204,11 @@ const app3 = await mountChat(coldRows)
 const coldConverged = await settled(() => screenLines(app3.term).join('\n') === warm.join('\n'))
 // 固定窗:探针 同上：首个相等帧之后仍可能有迟到 repaint，稳定窗后取终态再比对。
 await sleep(250); await app3.flush()
-check('流中 resize 终态 == 冷渲染（live mutation 竞争无残留几何）', coldConverged && screenLines(app3.term).join('\n') === warm.join('\n'))
+const cold = screenLines(app3.term)
+const frameDiff = warm.flatMap((line, row) => line === cold[row]
+  ? []
+  : [`row ${row}: warm=${JSON.stringify(line)} cold=${JSON.stringify(cold[row])}`])
+check('流中 resize 终态 == 冷渲染（live mutation 竞争无残留几何）', coldConverged && frameDiff.length === 0, frameDiff.join('\n'))
 app3.unmount()
 
 console.log(failed === 0 ? '\nALL PASS' : '\n' + failed + ' 项失败')

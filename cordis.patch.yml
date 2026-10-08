@@ -435,7 +435,7 @@
 
     # Built-in subscription OAuth sign-in: mounts available pi-ai routes
     # (ChatGPT/Codex, Claude, Grok; newer pi-ai adds OpenAI direct and Meta)
-    # plus the /auth command. Its facade also delegates DeepSeek sign-in to
+    # plus the /auth and /fast commands. Its facade also delegates DeepSeek sign-in to
     # the Host-owned account service when available. The TUI's /provider
     # wizard gains its OAuth branch from ctx.dshAuth. Entry-level inject only —
     # the internal module's own inject is empty so a stale patch cannot
@@ -443,6 +443,15 @@
     - id: dsh-tui-auth
       name: '@deepseek-harness-tui/dsh-tui/oauth'
       inject: [llm, commands]
+      # Use /fast on|off|status interactively; bare /fast or toggle switches it.
+      # Applies from the next request across this plugin's supported OAuth
+      # routes in the current TUI process; effort and other protocols stay unchanged.
+      # Not persisted: restart restores the optional serviceTier startup default.
+      # config:
+      #   serviceTier: priority # Optional startup default; interactive /fast wins.
+      # Unset means off/provider default. Backend decides acceptance and quota.
+      # Profile overrides replace config: retain existing modelOverrides and
+      # any other fields you need. See docs/configuration.en.md.
 
     # The interactive front door. The plugin creates/resumes its agent at
     # runtime, seeds the startup status line, and disposes the whole app tree
@@ -478,6 +487,7 @@
         # 以下为 /settings 可改的显示设置；每项说明与默认值见应用内 /settings 屏。
         terminalImages: true
         # diffLayout: auto
+        # toolBackground: subtle # none / subtle（默认）/ strong
         # mermaidDiagrams: true
         # 回复中 LaTeX 公式的显示方式：auto（默认，目前为 Unicode）/ image（支持图形的终端里块级公式显示为图片）/ unicode / source（保留源码）。/settings 可实时改。
         # mathRendering: auto

@@ -18,7 +18,7 @@ import stripAnsi from 'strip-ansi'
 import { stringWidth } from '../ink/stringWidth.js'
 import { supportsHyperlinks } from '../ink/supports-hyperlinks.js'
 import { colorize } from '../ink/colorize.js'
-import { getActiveTheme } from '../theme.js'
+import { getActiveTheme, type Theme } from '../theme.js'
 import { buildSyntaxTheme } from './syntaxTheme.js'
 import type { CliHighlight } from './cliHighlight.js'
 import { logForDebugging } from '../utils/debug.js'
@@ -45,8 +45,8 @@ const QUOTE_BAR = '\u258e'
 /** Left one-eighth block (U+258F): quote levels past the second get the thinner bar. */
 const QUOTE_BAR_DEEP = '\u258f'
 
-/** The horizontal-rule divider: three light box-drawing dashes. */
-const HR_DIVIDER = '\u2500\u2500\u2500'
+/** The horizontal-rule divider: sixteen light box-drawing dashes. */
+const HR_DIVIDER = '\u2500'.repeat(16)
 
 /** Tool-analysis tag blocks that carry no user-facing content; dropped before lexing. */
 const TOOL_ANALYSIS_TAG_BLOCKS =
@@ -82,11 +82,12 @@ export function stripPromptXMLTags(content: string): string {
 let markedInitialized = false
 
 /**
- * Configure the shared `marked` instance once. Strikethrough stays on
- * marked's built-in del tokenizer, which only matches double-tilde pairs —
- * single tildes (`~100`, models' "approximate") never pair up and render
- * literally. LaTeX math becomes `math`/`mathBlock` tokens (see math.ts).
- * Every lexer caller — Markdown and StreamingMarkdown's boundary
+ * Configure the shared `marked` instance once. Strikethrough reaches
+ * marked's built-in del tokenizer only for double-tilde pairs; the fork's
+ * tokenizer guard keeps single tildes (`~100`, models' "approximate")
+ * literal even when they pair up. LaTeX math becomes `math`/`mathBlock`
+ * tokens (see math.ts). Every lexer caller — Markdown and
+ * StreamingMarkdown's boundary
  * lex — must run this first so both agree on block boundaries.
  */
 export function configureMarked(): void {
@@ -94,27 +95,32 @@ export function configureMarked(): void {
   markedInitialized = true
 
   marked.use({
+    tokenizer: {
+      del(src) {
+        return src.startsWith('~~') ? false : undefined
+      },
+    },
     extensions: [...MATH_MARKDOWN_EXTENSIONS],
   })
 }
 
-/** Inline code is painted with the active theme's permission accent. */
-function paintInlineCode(text: string): string {
-  return colorize(text, getActiveTheme().permission, 'foreground')
+/** Inline code uses its own semantic slot, not the UI focus accent. */
+function paintInlineCode(text: string, state: RenderState): string {
+  return colorize(text, renderTheme(state).markdownCode, 'foreground')
 }
 
 /**
  * Inline code that reads as a file path becomes a clickable target (the
- * OSC 8 wrap keeps the code's permission color via the identity style —
+ * OSC 8 wrap keeps the code's semantic color via the identity style —
  * createHyperlink's default blue would otherwise override it). Terminals
  * without OSC 8 support keep the plain painted code span.
  */
-function renderCodeSpan(token: Tokens.Codespan): string {
-  // Paint via the style callback so the permission color is applied AFTER
+function renderCodeSpan(token: Tokens.Codespan, state: RenderState): string {
+  // Paint via the style callback so the semantic color is applied AFTER
   // createHyperlink's anti-smuggle content scrub: passing the painted
   // string as content would have its ESC bytes stripped, leaving
   // `[38;2;…m` parameter text on screen.
-  const paint = (text: string): string => paintInlineCode(text)
+  const paint = (text: string): string => paintInlineCode(text, state)
   if (!looksLikeFilePath(token.text)) return paint(token.text)
   if (!supportsHyperlinks()) return paint(token.text)
   return createHyperlink(fileLinkUrl(token.text), token.text, {
@@ -129,13 +135,19 @@ function renderCodeSpan(token: Tokens.Codespan): string {
  * untouched (createHyperlink's URL fallback would show the raw encoded
  * `dsh-file:` payload — worse than plain text).
  */
-function linkifyText(text: string): string {
+function markdownHyperlink(url: string, label: string | undefined, state: RenderState): string {
+  // Paint after the shared link helper sanitizes both OSC targets and labels.
+  // This also colors the visible URL fallback on terminals without OSC 8.
+  return chalk.underline(colorize(createHyperlink(url, label, { style: text => text }), renderTheme(state).markdownLink, 'foreground'))
+}
+
+function linkifyText(text: string, state: RenderState): string {
   const withFiles = supportsHyperlinks()
     ? linkifyFilePaths(text, (path, display) =>
-        createHyperlink(fileLinkUrl(path), display),
+        markdownHyperlink(fileLinkUrl(path), display, state),
       )
     : text
-  return linkifyIssueReferences(withFiles)
+  return linkifyIssueReferences(withFiles, state)
 }
 
 /**
@@ -147,6 +159,8 @@ function linkifyText(text: string): string {
 interface RenderState {
   /** Syntax highlighter for code blocks; null renders them as plain text. */
   readonly highlight: CliHighlight | null
+  readonly palette?: Theme
+  readonly layout?: Map<Token, readonly number[]>
   /** The token whose children are being rendered (link / list_item). */
   readonly parent: Token | null
   /** Nesting depth of the enclosing list; drives indentation and numbering style. */
@@ -166,7 +180,7 @@ interface RenderState {
 
 /** A fresh context for block-level children: list state reset, no parent. */
 function fresh(state: RenderState): RenderState {
-  return { highlight: state.highlight, parent: null, listDepth: 0, ordinal: null, quoteDepth: 0, hang: 0 }
+  return { highlight: state.highlight, palette: state.palette, layout: state.layout, parent: null, listDepth: 0, ordinal: null, quoteDepth: 0, hang: 0 }
 }
 
 /** Same context, different parent token. */
@@ -177,6 +191,95 @@ function withParent(state: RenderState, parent: Token | null): RenderState {
 /** Inline-styled children keep the outer parent but shed list context. */
 function inlineChildren(state: RenderState): RenderState {
   return { ...state, listDepth: 0, ordinal: null, quoteDepth: 0, hang: 0 }
+}
+
+function renderTheme(state: RenderState): Theme {
+  return state.palette ?? getActiveTheme()
+}
+
+export interface FormattedMarkdown {
+  readonly text: string
+  /** Content column of each source logical line; zero means ordinary wrap. */
+  readonly continuationIndent: readonly number[]
+}
+
+/** Whitespace and intentionally invisible top-level tokens do not make nodes. */
+export function isBlankMarkdownToken(type: string): boolean {
+  return type === 'space' || type === 'br' || type === 'def' || type === 'html'
+}
+
+/** Shared settled/streaming policy: structure gets one blank row; adjacent
+ * paragraphs get one only when the source separated them. No outer padding. */
+export function markdownBlockGap(previous: string | undefined, next: string | undefined, separated: boolean): number {
+  if (previous === undefined || next === undefined) return 0
+  return previous === 'paragraph' && next === 'paragraph' ? Number(separated) : 1
+}
+
+export function markdownBlocks(tokens: readonly Token[]): Array<{ token: Token; gap: number }> {
+  const blocks: Array<{ token: Token; gap: number }> = []
+  let previous: Token | undefined
+  let separated = false
+  for (const token of tokens) {
+    if (isBlankMarkdownToken(token.type)) {
+      separated ||= token.type === 'space' || token.type === 'br' || /\n\n$/.test(token.raw)
+      continue
+    }
+    blocks.push({ token, gap: markdownBlockGap(previous?.type, token.type, separated || /\n\n$/.test(previous?.raw ?? '')) })
+    previous = token
+    separated = false
+  }
+  return blocks
+}
+
+/** Top-level blocks end in exactly one LF; inter-block blank rows belong to
+ * markdownBlockGap. Nested list/quote formatting retains its own whitespace. */
+export function formatMarkdownBlockWithLayout(token: Token, highlight: CliHighlight | null = null, palette: Theme = getActiveTheme()): FormattedMarkdown {
+  const part = formatTokenWithLayout(token, highlight, palette)
+  const body = part.text.replace(/\n+$/, '')
+  return body === '' ? { text: '', continuationIndent: [0] } : {
+    text: body + EOL,
+    continuationIndent: [...part.continuationIndent.slice(0, body.split(EOL).length), 0],
+  }
+}
+
+export function joinFormattedMarkdown(parts: readonly FormattedMarkdown[]): FormattedMarkdown {
+  let text = ''
+  const continuationIndent = [0]
+  let tailWidth = 0
+  for (const part of parts) {
+    const last = continuationIndent.length - 1
+    const first = part.continuationIndent[0] ?? 0
+    if (first > 0) continuationIndent[last] = tailWidth + first
+    for (const indent of part.continuationIndent.slice(1)) continuationIndent.push(indent)
+    const newline = part.text.lastIndexOf(EOL)
+    tailWidth = newline >= 0
+      ? stringWidth(stripAnsi(part.text.slice(newline + 1)))
+      : tailWidth + stringWidth(stripAnsi(part.text))
+    text += part.text
+  }
+  return { text, continuationIndent }
+}
+
+export function trimFormattedMarkdown(part: FormattedMarkdown, start: boolean, end: boolean): FormattedMarkdown {
+  const text = end ? (start ? part.text.trim() : part.text.trimEnd()) : (start ? part.text.trimStart() : part.text)
+  const removedStart = start ? part.text.slice(0, part.text.length - part.text.trimStart().length) : ''
+  const skippedLines = removedStart.split(EOL).length - 1
+  const continuationIndent = part.continuationIndent.slice(skippedLines, skippedLines + text.split(EOL).length)
+  if (continuationIndent.length > 0) {
+    continuationIndent[0] = Math.max(0, (continuationIndent[0] ?? 0) - stringWidth(removedStart.slice(removedStart.lastIndexOf(EOL) + 1)))
+  }
+  return { text, continuationIndent }
+}
+
+export function formatTokenWithLayout(token: Token, highlight: CliHighlight | null = null, palette: Theme = getActiveTheme()): FormattedMarkdown {
+  const layout = new Map<Token, readonly number[]>()
+  const text = dispatch(token, { highlight, palette, layout, parent: null, listDepth: 0, ordinal: null, quoteDepth: 0, hang: 0 })
+  return { text, continuationIndent: layout.get(token) ?? [0] }
+}
+
+function formattedChild(token: Token, state: RenderState): FormattedMarkdown {
+  const text = dispatch(token, state)
+  return { text, continuationIndent: state.layout?.get(token) ?? text.split(EOL).map(() => 0) }
 }
 
 /**
@@ -216,17 +319,9 @@ export function applyMarkdown(
   highlight: CliHighlight | null = null,
 ): string {
   configureMarked()
-  const rootState: RenderState = {
-    highlight,
-    parent: null,
-    listDepth: 0,
-    ordinal: null,
-    quoteDepth: 0,
-    hang: 0,
-  }
-  return marked
-    .lexer(stripPromptXMLTags(content))
-    .reduce((out: string, token: Token) => appendBlockText(out, dispatch(token, rootState)), '')
+  return markdownBlocks(marked.lexer(stripPromptXMLTags(content)))
+    .map(({ token, gap }) => EOL.repeat(gap) + formatMarkdownBlockWithLayout(token, highlight).text)
+    .join('')
     // trimEnd only: the input is already trimmed, so leading whitespace in
     // the output is renderer-intended (e.g. the code block's 2-space indent
     // on its first line). A full trim() would eat that first-line indent.
@@ -249,15 +344,21 @@ function isToken<K extends MarkedToken['type']>(
 /** Fan-out point: narrows the token union, then delegates to the per-type render functions. */
 function dispatch(token: Token, state: RenderState): string {
   noteFormatToken(token.raw ?? '')
+  const text = renderToken(token, state)
+  if (state.layout && !state.layout.has(token)) state.layout.set(token, text.split(EOL).map(() => 0))
+  return text
+}
+
+function renderToken(token: Token, state: RenderState): string {
   if (isToken(token, 'blockquote')) return renderBlockquote(token, state)
-  if (isToken(token, 'checkbox')) return renderCheckbox(token)
+  if (isToken(token, 'checkbox')) return renderCheckbox(token, state)
   if (isToken(token, 'code')) return renderCodeBlock(token, state)
-  if (isToken(token, 'codespan')) return renderCodeSpan(token)
+  if (isToken(token, 'codespan')) return renderCodeSpan(token, state)
   if (isToken(token, 'em')) return renderEmphasis(token, state)
   if (isToken(token, 'strong')) return renderStrong(token, state)
   if (isToken(token, 'del')) return renderDel(token, state)
   if (isToken(token, 'heading')) return renderHeading(token, state)
-  if (isToken(token, 'hr')) return renderHr()
+  if (isToken(token, 'hr')) return renderHr(state)
   if (isToken(token, 'image')) return renderImage(token, state)
   if (isToken(token, 'link')) return renderLink(token, state)
   if (isToken(token, 'list')) return renderList(token, state)
@@ -314,41 +415,46 @@ function renderBlockquote(token: Tokens.Blockquote, state: RenderState): string 
   // Children keep the quote context (a nested blockquote increments the
   // depth) but shed list state, exactly like fresh().
   const childState = { ...fresh(state), quoteDepth: depth + 1 }
-  const inner = token.tokens.map(child => dispatch(child, childState)).join('')
+  const formatted = joinFormattedMarkdown(token.tokens.map(child => formattedChild(child, childState)))
+  const inner = formatted.text
+  const innerLines = inner.split(EOL)
+  state.layout?.set(token, formatted.continuationIndent.map((indent, i) => {
+    const plain = stripAnsi(innerLines[i] ?? '')
+    if (!plain.trim()) return 0
+    return 2 + (indent > 0 ? indent : plain.match(/^ */)?.[0].length ?? 0)
+  }))
   // Gutter bar per line; keep the text italic but at normal brightness —
   // chalk.dim is nearly invisible on dark themes. Blank lines inside the
   // quote keep a bare gutter so the quote stays visible across paragraph
   // gaps; only the empty piece after inner's final newline stays empty.
   const gutter = quoteGutter(depth)
-  const lines = inner.split(EOL)
   // An empty quote (`>` on its own line) still shows one rail.
-  if (lines.every(line => line === '')) return gutter + EOL
-  return lines
+  if (innerLines.every(line => line === '')) return gutter + EOL
+  return innerLines
     .map((line, index) => {
       if (line === '' || stripAnsi(line).trim() === '') {
-        return index === lines.length - 1 ? line : gutter
+        return index === innerLines.length - 1 ? line : gutter
       }
-      return `${gutter} ${chalk.italic(line)}`
+      return `${gutter} ${chalk.italic(colorize(line, renderTheme(state).markdownBlockQuote, 'foreground'))}`
     })
     .join(EOL)
 }
 
 function renderCodeBlock(token: Tokens.Code, state: RenderState): string {
-  // Kimi Code style: a muted ```lang opening line (language tag + boundary
-  // for unhighlighted blocks) + 2-space indent; no closing fence (syntax
-  // colors or the indent already mark the end, it only cost vertical space).
+  // Tagged blocks use the original fence info as a muted caption. Untagged
+  // blocks keep a fence cue; neither needs a closing fence or another node.
   // This ANSI form serves nested code (inside lists/quotes) and the narrow
   // fallback of CodeBlockFrame; top-level fences render through the frame
   // component sharing formatCodeBody below.
-  const theme = getActiveTheme()
-  const openFence = colorize('```' + codeLanguageTag(token), theme.subtle, 'foreground')
+  const theme = renderTheme(state)
+  const caption = colorize(token.lang?.trim() ? token.lang : '```', theme.subtle, 'foreground')
   const indent = '  '
   const body = formatCodeBody(token, state.highlight)
   if (body === '') {
-    return `${openFence}${EOL}`
+    return `${caption}${EOL}`
   }
   return (
-    openFence +
+    caption +
     EOL +
     body
       .split(EOL)
@@ -408,12 +514,12 @@ export function formatCodeBody(token: Tokens.Code, highlight: CliHighlight | nul
 
 function renderEmphasis(token: Tokens.Em, state: RenderState): string {
   const inner = token.tokens.map(child => dispatch(child, inlineChildren(state))).join('')
-  return chalk.italic(inner)
+  return chalk.italic(colorize(inner, renderTheme(state).markdownEmph, 'foreground'))
 }
 
 function renderStrong(token: Tokens.Strong, state: RenderState): string {
   const inner = token.tokens.map(child => dispatch(child, inlineChildren(state))).join('')
-  return chalk.bold(inner)
+  return chalk.bold(colorize(inner, renderTheme(state).markdownStrong, 'foreground'))
 }
 
 /** Double-tilde strikethrough; marked's del tokenizer never pairs single
@@ -424,24 +530,22 @@ function renderDel(token: Tokens.Del, state: RenderState): string {
 }
 
 /**
- * The hr divider: three dashes in the theme's muted color.
+ * The hr divider: sixteen light box-drawing dashes in the theme's
+ * dedicated markdown rule color.
  *
- * No trailing newline: the surrounding space tokens already separate the
- * blocks, so the divider costs one row. appendBlockText adds the row
- * break when the next block does not start with one.
+ * The trailing newline ends the divider's row; inter-block blank rows
+ * come from markdownBlockGap, not from here.
  */
-function renderHr(): string {
-  return colorize(HR_DIVIDER, getActiveTheme().subtle, 'foreground')
+function renderHr(state: RenderState): string {
+  return colorize(HR_DIVIDER, renderTheme(state).markdownHorizontalRule, 'foreground') + EOL
 }
 
 /**
- * Append one block token's rendered text to the accumulated run. Every
- * visible block renderer ends its output with a newline except the hr
- * divider; when such an unterminated block is followed directly by
- * content that does not open with its own line break (a rule
- * immediately before a heading, or two adjacent rules), the row break
- * is inserted here so the divider never merges into the next block's
- * first row.
+ * Append one block token's rendered text to the accumulated run. When an
+ * unterminated block (historically the newline-free hr divider) is
+ * followed directly by content that does not open with its own line
+ * break, the row break is inserted here so the two never merge into one
+ * row.
  */
 export function appendBlockText(accumulated: string, block: string): string {
   if (accumulated !== '' && !accumulated.endsWith(EOL) && block !== '' && !block.startsWith(EOL)) {
@@ -452,22 +556,23 @@ export function appendBlockText(accumulated: string, block: string): string {
 
 function renderHeading(token: Tokens.Heading, state: RenderState): string {
   const text = token.tokens.map(child => dispatch(child, fresh(state))).join('')
-  // Blue-primary ladder (kimi-style): H1 gets the mist brand blue +
-  // underline, H2 the lighter border blue, then H3 bold, H4 bold italic,
-  // H5 italic subtle and H6 subtle, so each level reads one step quieter.
-  const theme = getActiveTheme()
+  // Palette color on the ladder's loud end and muted tail (kimi-style):
+  // H1 gets the heading color + underline, H2 bold, H3/H4 stay near-text
+  // (bold, bold italic), H5 italic and H6 upright in the muted heading
+  // color, so each level reads one step quieter.
+  const heading = colorize(text, renderTheme(state).markdownHeading, 'foreground')
   const styled =
     token.depth === 1
-      ? chalk.bold.underline(colorize(text, theme.accent, 'foreground'))
+      ? chalk.bold.underline(heading)
       : token.depth === 2
-        ? chalk.bold(colorize(text, theme.permission, 'foreground'))
+        ? chalk.bold(heading)
         : token.depth === 3
           ? chalk.bold(text)
           : token.depth === 4
             ? chalk.bold.italic(text)
             : token.depth === 5
-              ? chalk.italic(colorize(text, theme.subtle, 'foreground'))
-              : colorize(text, theme.subtle, 'foreground')
+              ? chalk.italic(heading)
+              : heading
   // One trailing newline: blank rows below a heading come from the
   // source's own blank lines (the following space token), not from here.
   return styled + EOL
@@ -503,21 +608,21 @@ function renderLink(token: Tokens.Link, state: RenderState): string {
   // Meaningful display text (different from the URL) becomes a clickable
   // hyperlink; otherwise just show the URL.
   if (plainLabel && plainLabel !== token.href) {
-    return createHyperlink(token.href, label)
+    return markdownHyperlink(token.href, label, state)
   }
-  return createHyperlink(token.href)
+  return markdownHyperlink(token.href, undefined, state)
 }
 
 function renderList(token: Tokens.List, state: RenderState): string {
   // ordered lists always carry a numeric start ("" only occurs for unordered),
   // but the type says otherwise, so coerce defensively.
   const start = typeof token.start === 'number' ? token.start : 1
-  return token.items
-    .map((item, index) => {
-      const ordinal = token.ordered ? start + index : null
-      return dispatch(item, { ...state, ordinal })
-    })
-    .join('')
+  const result = joinFormattedMarkdown(token.items.map((item, index) => {
+    const ordinal = token.ordered ? start + index : null
+    return formattedChild(item, { ...state, ordinal })
+  }))
+  state.layout?.set(token, result.continuationIndent)
+  return result.text
 }
 
 function renderListItem(token: Tokens.ListItem, state: RenderState): string {
@@ -526,59 +631,50 @@ function renderListItem(token: Tokens.ListItem, state: RenderState): string {
   // here so it lands between the marker and the body.
   const isTightTask = token.task === true && token.tokens[0]?.type === 'checkbox'
   const children = isTightTask ? token.tokens.slice(1) : token.tokens
-  const taskMark = isTightTask ? renderCheckbox(token.tokens[0] as Tokens.Checkbox) : ''
-  const indent = ' '.repeat(state.hang)
-  const marker =
-    state.ordinal === null ? '-' : `${formatListMarker(state.listDepth + 1, state.ordinal)}.`
-  // The body column: soft-break continuations, later paragraphs of loose
-  // items, and nested blocks align one marker width (plus checkbox) past
-  // this item's indent. A nested list gets this as its indent, so each
-  // level steps in by one marker width.
-  const bodyHang = state.hang + marker.length + 1 + stripAnsi(taskMark).length
-  const childState = withParent(
-    { ...state, listDepth: state.listDepth + 1, hang: bodyHang },
-    token,
-  )
-  // Text/paragraph/blockquote children render unindented lines and the
-  // assembly below pads their continuations to the body column. A nested
-  // list already carries its absolute indent (its items inherit
-  // bodyHang), so its lines pass through untouched.
-  const segments: Array<{ text: string; preindented: boolean }> = []
-  let raw = ''
-  for (const child of children) {
-    const part = dispatch(child, childState)
-    if (child.type === 'list') {
-      if (raw !== '') {
-        segments.push({ text: raw, preindented: false })
-        raw = ''
-      }
-      segments.push({ text: part, preindented: true })
-    } else {
-      // appendBlockText: a text token does not end its own row, and the
-      // next child must start on a fresh line (a plain join would glue
-      // blocks together, a join(EOL) would double blank rows).
-      raw = appendBlockText(raw, part)
+  const checkbox = isTightTask ? renderCheckbox(token.tokens[0] as Tokens.Checkbox, state) : ''
+  const indent = '  '.repeat(state.listDepth)
+  const depth = state.listDepth + 1
+  const bullet = state.ordinal === null ? '-' : `${formatListMarker(depth, state.ordinal)}.`
+  const theme = renderTheme(state)
+  const marker = colorize(bullet, state.ordinal === null ? theme.markdownListItem : theme.markdownListEnumeration, 'foreground')
+  const prefix = `${indent}${marker} ${checkbox}`
+  const continuation = indent + ' '.repeat(stringWidth(bullet + ' ' + stripAnsi(checkbox)))
+  const childState = withParent({ ...state, listDepth: depth }, token)
+  let first = true
+  const indents: number[] = []
+  const body = children.map(child => {
+    let body = dispatch(child, childState).replace(/\n+$/, '')
+    if (!body) {
+      if (child.type === 'space') indents.push(0)
+      return child.type === 'space' ? EOL : ''
     }
-  }
-  if (raw !== '') segments.push({ text: raw, preindented: false })
-  const tinted = colorize(marker, getActiveTheme().permission, 'foreground')
-  const bodyIndent = ' '.repeat(bodyHang)
-  let out = `${indent}${tinted} ${taskMark}`
-  let firstLine = true
-  for (const segment of segments) {
-    const lines = segment.text.split(EOL)
-    for (const line of lines) {
-      if (firstLine) {
-        out += line
-        firstLine = false
-        continue
-      }
-      out += EOL + (line === '' || segment.preindented ? line : bodyIndent + line)
+    const nestedIndent = child.type === 'list' ? '  '.repeat(depth) : ''
+    const childIndents = state.layout?.get(child)
+    if (nestedIndent) {
+      body = body.split(EOL)
+        .map(line => line.startsWith(nestedIndent) ? line.slice(nestedIndent.length) : line)
+        .join(EOL)
     }
-  }
-  if (out === '') return ''
-  if (!out.endsWith(EOL)) out += EOL
-  return out
+    return body.split(EOL).map((line, index) => {
+      if (!stripAnsi(line).trim()) {
+        indents.push(0)
+        return ''
+      }
+      const lead = first ? prefix : continuation
+      first = false
+      const contentIndent = nestedIndent
+        ? Math.max(0, (childIndents?.[index] ?? 0) - nestedIndent.length)
+        : (childIndents?.[index] ?? 0) > 0
+          ? childIndents![index]!
+          : stripAnsi(line).match(/^ */)?.[0].length ?? 0
+      indents.push(stringWidth(stripAnsi(lead)) + contentIndent)
+      return lead + line
+    }).join(EOL) + EOL
+  }).join('')
+  if (first) indents.unshift(stringWidth(stripAnsi(prefix)))
+  indents.push(0)
+  state.layout?.set(token, indents)
+  return first ? prefix + EOL + body : body
 }
 
 /**
@@ -587,9 +683,9 @@ function renderListItem(token: Tokens.ListItem, state: RenderState): string {
  * glyph pair would not survive every terminal font. The trailing space is
  * the separator to the item text.
  */
-function renderCheckbox(token: Tokens.Checkbox): string {
+function renderCheckbox(token: Tokens.Checkbox, state: RenderState): string {
   const mark = token.checked ? '[x]' : '[ ]'
-  const color = token.checked ? getActiveTheme().success : getActiveTheme().subtle
+  const color = token.checked ? renderTheme(state).success : renderTheme(state).subtle
   return colorize(mark, color, 'foreground') + ' '
 }
 
@@ -610,7 +706,7 @@ function renderText(token: Tokens.Text, state: RenderState): string {
   if (token.tokens) {
     return token.tokens.map(child => dispatch(child, withParent(state, token))).join('')
   }
-  return linkifyText(token.text)
+  return linkifyText(token.text, state)
 }
 
 function renderTable(token: Tokens.Table, state: RenderState): string {
@@ -666,7 +762,7 @@ function renderTableRow(
  * Replace `owner/repo#123` references with clickable GitHub links.
  * No-op when the terminal lacks OSC 8 hyperlink support.
  */
-function linkifyIssueReferences(text: string): string {
+function linkifyIssueReferences(text: string, state: RenderState): string {
   if (!supportsHyperlinks()) {
     return text
   }
@@ -674,9 +770,10 @@ function linkifyIssueReferences(text: string): string {
     ISSUE_REFERENCE_PATTERN,
     (_match, prefix, repo, issueNumber) =>
       prefix +
-      createHyperlink(
+      markdownHyperlink(
         `https://github.com/${repo}/issues/${issueNumber}`,
         `${repo}#${issueNumber}`,
+        state,
       ),
   )
 }

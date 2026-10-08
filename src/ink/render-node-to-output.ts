@@ -1,5 +1,5 @@
 import indentString from 'indent-string'
-import { applyTextStyles } from './colorize.js'
+import { applyTextStyles, backgroundOpenCode } from './colorize.js'
 import type { DOMElement } from './dom.js'
 import { GEOMETRY_TRACE_ENABLED, noteScrollGeometry } from './geometry-trace.js'
 import getMaxWidth from './get-max-width.js'
@@ -35,6 +35,13 @@ import { lineWidth } from './line-width-cache.js'
 import { stringWidth } from './stringWidth.js'
 import { widestLine } from './widest-line.js'
 import wrapText from './wrap-text.js'
+import { addSyntheticIndents, hangingWrap } from './hanging-wrap.js'
+
+const hangingPaintMetadata = new WeakMap<DOMElement, {
+  prepared: object
+  continuationIndent: readonly number[]
+  syntheticIndents: readonly number[]
+}>()
 
 // Matches detectXtermJsWheel() in ScrollKeybindingHandler.tsx — the curve
 // and drain must agree on terminal detection. TERM_PROGRAM check is the sync
@@ -1186,7 +1193,7 @@ function renderNodeToOutput(
       // style re-application — output.write() parses ANSI directly into cells.
       const text = node.attributes['rawText'] as string
       if (text) {
-        output.write(x, y, text)
+        output.write(x, y, text, undefined, undefined, width)
       }
     } else if (node.nodeName === 'ink-text') {
       // A partially visible long block moves on every scroll/stream frame.
@@ -1199,15 +1206,19 @@ function renderNodeToOutput(
       const paddingTop = paddingNode?.getComputedTop() ?? 0
       const decoration = node.style.decoration
       const prepared = textPaintCache.get(node)
+      const continuationIndent = node.attributes['continuationIndent'] as readonly number[] | undefined
+      const hangingPrepared = hangingPaintMetadata.get(node)
       if (
         prepared !== undefined &&
         prepared.maxWidth === maxWidth &&
         prepared.background === inheritedBackgroundColor &&
         prepared.paddingLeft === paddingLeft &&
         prepared.paddingTop === paddingTop &&
-        prepared.decoration === decoration
+        prepared.decoration === decoration &&
+        (continuationIndent === undefined ||
+          (hangingPrepared?.prepared === prepared && hangingPrepared.continuationIndent === continuationIndent))
       ) {
-        output.write(x, y, prepared.text, prepared.softWrap, prepared.lines)
+        output.write(x, y, prepared.text, prepared.softWrap, prepared.lines, width)
         pushNoSelectRuns(output, x, y, prepared.noSelectRuns)
       } else if (decoration !== undefined) {
         paintDecoratedTextNode(
@@ -1242,10 +1253,12 @@ function renderNodeToOutput(
 
           let text: string
           let softWrap: boolean[] | undefined
+          const hanging = continuationIndent === undefined ? undefined
+            : hangingWrap(plainText, maxWidth, textWrap, continuationIndent)
           if (needsWrapping && segments.length === 1) {
             // Single segment: wrap plain text first, then apply styles to each line
             const segment = segments[0]!
-            const w = wrapWithSoftWrap(plainText, maxWidth, textWrap)
+            const w = hanging ?? wrapWithSoftWrap(plainText, maxWidth, textWrap)
             softWrap = w.softWrap
             text = w.wrapped
               .split('\n')
@@ -1265,7 +1278,7 @@ function renderNodeToOutput(
             // Multiple segments with wrapping: wrap plain text first, then re-apply
             // each segment's styles based on character positions. This preserves
             // per-segment styles even when text wraps across lines.
-            const w = wrapWithSoftWrap(plainText, maxWidth, textWrap)
+            const w = hanging ?? wrapWithSoftWrap(plainText, maxWidth, textWrap)
             softWrap = w.softWrap
             const charToSegment = buildCharToSegmentMap(segments)
             text = applyStylesToWrappedText(
@@ -1290,6 +1303,10 @@ function renderNodeToOutput(
               .join('')
           }
 
+          // Restore source-indexed styles before introducing non-source cells.
+          // Each output line starts with default styles. Synthetic spaces must
+          // keep the parent surface instead of punching terminal-default holes.
+          if (hanging) text = addSyntheticIndents(text, hanging.syntheticIndents, backgroundOpenCode(inheritedBackgroundColor))
           text = applyPaddingToText(node, text, softWrap)
 
           const lines = text.split('\n')
@@ -1298,7 +1315,30 @@ function renderNodeToOutput(
             text, lines, softWrap,
             decoration: undefined, noSelectRuns: undefined,
           })
-          output.write(x, y, text, softWrap, lines)
+          if (hanging && continuationIndent) {
+            hangingPaintMetadata.set(node, {
+              prepared: textPaintCache.get(node)!, continuationIndent,
+              syntheticIndents: hanging.syntheticIndents,
+            })
+          } else {
+            hangingPaintMetadata.delete(node)
+          }
+          output.write(x, y, text, softWrap, lines, width)
+        }
+      }
+      const indents = hangingPaintMetadata.get(node)
+      if (continuationIndent && indents && indents.prepared === textPaintCache.get(node)) {
+        const textY = y + paddingTop
+        const visible = output.getVisibleRect(x, textY, width, indents.syntheticIndents.length)
+        // Index directly into the visible window, including ScrollBox's
+        // blit+shift edge clip. Filtering a full scan still costs O(history).
+        const from = visible === undefined ? 0 : Math.max(0, visible.y - textY)
+        const to = visible === undefined ? 0 : Math.min(indents.syntheticIndents.length, visible.y + visible.height - textY)
+        for (let row = from; row < to; row++) {
+          const indent = indents.syntheticIndents[row]!
+          if (indent > 0) output.noSelect({
+            x: x + paddingLeft, y: textY + row, width: indent, height: 1,
+          })
         }
       }
     } else if (
@@ -1366,7 +1406,7 @@ function renderNodeToOutput(
       }
 
       if (node.style.softWrapContinuation !== undefined) {
-        output.softWrapRow(Math.floor(y), Math.floor(x) + node.style.softWrapContinuation)
+        output.softWrapRow(Math.floor(y), Math.floor(x) + node.style.softWrapContinuation, Math.floor(x), Math.floor(width))
       }
 
       const overflowX = node.style.overflowX ?? node.style.overflow

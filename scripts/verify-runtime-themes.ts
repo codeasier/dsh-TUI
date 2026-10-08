@@ -113,6 +113,21 @@ const stablePalette = host.resolve('probe:valid')
 check('host resolver returns a stable palette identity', stablePalette === host.resolve('probe:valid'))
 check('registration emits one host notification', notifications === 1)
 
+for (const base of ['dark', 'light', 'dark-ansi'] as const) {
+  const name = `probe:canvas-${base}`
+  const disposeInherited = pluginContext.tuiThemes.register({ name, base })
+  check(`runtime ${base} inherits the session canvas`,
+    getTheme(name).sessionBackground === getTheme(base).sessionBackground)
+  disposeInherited()
+  const disposeOverride = pluginContext.tuiThemes.register({
+    name, base, colors: { sessionBackground: '#202020' },
+  })
+  check(`runtime ${base} overrides the session canvas independently of badges`,
+    getTheme(name).sessionBackground === '#202020'
+    && getTheme(name).background === getTheme(base).background)
+  disposeOverride()
+}
+
 const legacyDisposer = pluginContext.tuiThemes.register({
   name: 'probe:legacy',
   base: 'dark',

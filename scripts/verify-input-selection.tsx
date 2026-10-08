@@ -328,6 +328,16 @@ function makePromptChannel(): Record<string, unknown> {
       await settled(() => screenHas(' world') && !screenHas('hello')),
     )
 
+    // A4b: Ctrl+W deletes the selection, not the larger word before its end.
+    controllerBox.current?.clear()
+    stdin.write('hello world')
+    await settle(() => screenHas('hello world'))
+    dragRange(c0 + 1, c0 + 4, r0)
+    await settle(() => inverseAt(c0 + 1, r0) && inverseAt(c0 + 3, r0))
+    stdin.write('\x17')
+    check('A4b Ctrl+W 只删除选区，不扩大到整词',
+      await settled(() => controllerBox.current?.text() === 'ho world'))
+
     // A5: Shift+click 扩展 + 控制器复制 + Esc 分层
     stdin.write('\x1b')
     await settle(() => !screenHas(' world'))
@@ -521,14 +531,14 @@ function makePromptChannel(): Record<string, unknown> {
     check('A9 大段粘贴折叠成 chip', await settled(() => screenHas('▸ 12 lines') && screenHas('TAIL')))
     // 奇数（13）次 ↑ 停在 block.start（偶数次回到 block.end），窗口回顶且
     // caret 行稳定在 head——空 tail 行的 caret 消失后该行塌缩、布局下移一行；
-    // 塌缩前/后布局里 chip 都紧贴 PRE，必须等到底边框紧贴 chip（塌缩后布局）
+    // 塌缩前/后布局里 chip 都紧贴 PRE，必须等到底部留白竖条紧贴 chip（塌缩后布局）
     // 再取坐标，否则后续拖拽全部落空一格。
     stdin.write('\x1b[A'.repeat(13))
     await settle(() => {
       const pp = findText('PRE')
       const cc = findText('▸ 12 lines')
       if (pp === null || cc === null || cc.row !== pp.row + 1) return false
-      return (termTest.viewportLines(h.term)[cc.row + 1] ?? '').includes('╰')
+      return /^\s*│\s*$/u.test(termTest.viewportLines(h.term)[cc.row + 1] ?? '')
     })
     const hd = findText('PRE')!
     press(hd.col, hd.row)

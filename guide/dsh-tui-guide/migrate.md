@@ -2,18 +2,18 @@
 
 [文档索引](README.md) · [English](migrate.en.md)
 
-把 Claude Code、Codex、OMP、zcode、Grok Build 的本地对话历史导入 DSH
+把 Claude Code、Codex、OMP、zcode、Grok Build、OpenCode 的本地对话历史导入 DSH
 会话库。迁移后 `/resume` 按原工作目录浏览并恢复这些对话——换代理不丢
 历史上下文。
 
 ```sh
-dsh-tui migrate                # 列出各源可扫描的会话文件数（不写入）
+dsh-tui migrate                # 列出各源候选会话数（不写入）
 dsh-tui migrate claude-code    # 导入 Claude Code 的全部对话
 dsh-tui migrate codex --dry-run  # 只预览将落盘的内容，不写入
 ```
 
 TUI 内等效入口：`/migrate`。裸 `/migrate` 弹出**多选源选择器**——每行一个代理
-（勾选框 + 可扫描文件数 + 「X 分钟前刚活动过」标记，最近活跃排最前）：
+（勾选框 + 候选会话数 + 「X 分钟前刚活动过」标记，最近活跃排最前）：
 空格勾选/取消、`a` 全选/全不选、Enter 进入**二次确认层**（逐行列出将导入
 的源与数量，注明「已存在的自动跳过，可重复执行」；Enter 导入 / `d` 干跑
 预览 / Esc 返回选择）、Esc 关闭。`/migrate <agent>` 同样经过确认层（单源）；
@@ -31,6 +31,42 @@ TUI 内等效入口：`/migrate`。裸 `/migrate` 弹出**多选源选择器**�
 | `omp` | `~/.omp/agent/sessions/` | 与 DSH 同源的近直接映射（文本与思考过程） |
 | `zcode` | `~/.zcode/v2/sessions/` | 单 JSON 对象格式；只映射 user/assistant 文本，`meta.title` 作为标题 |
 | `grok-build` | `~/.grok/sessions/`（可用 `GROK_HOME` 重定位） | reasoning 行附着到其后的 assistant 步；工具调用与结果（图片换占位）、压缩摘要、中断轮、`session_summary` 标题都迁移；`<user_query>` 等包装只留正文；合成注入行与 `<user_info>` 不迁移 |
+| `opencode` | `$XDG_DATA_HOME/opencode/*.db` / `OPENCODE_DB` | 按 1.18.34 核对的 SQLite v1 兼容会话；有效上下文、工具、推理、压缩尾部与撤销边界；限制见下文 |
+
+## OpenCode 支持边界
+
+`dsh-tui migrate opencode`（或 `/migrate opencode`）直接读取本地 SQLite；
+不调用 export 命令、不启动 OpenCode、不读取凭据、不执行源 cleanup。
+首期支持按 **OpenCode 1.18.34**、提交
+[`aec0b9a6`](https://github.com/anomalyco/opencode/blob/aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/core/src/session/sql.ts)
+核对的 v1 兼容 `session`、`message`、`part` schema。未认证其他版本；
+必须符合该 schema，未知 schema 或语义 part 给出诊断而不是猜测。
+同版本还有原生 `session_message` / `session_input` 存储；使用这些表的
+会话**暂不支持**，即使同时存在旧表记录。可浏览其元数据，导入时说明限制。
+旧 JSON `storage/` 不迁移；仅存在旧存储时明确报告，不伪装为空会话。
+
+- 默认发现 `$XDG_DATA_HOME/opencode`（未设则为 `~/.local/share/opencode`）
+  下的 `opencode.db` 与 `opencode-<channel>.db`；`OPENCODE_DB` 改为指定一个
+  数据库，相对路径按 OpenCode 数据目录解析（与源程序一致）。SQLite 优先于残留 JSON。
+- 使用只读 SQLite 事务，包含已提交的 WAL 数据；不要只复制活动存储的 `.db`
+  主文件。计数与近期活动来自会话行而非数据库文件数或 mtime；每次刷新重读
+  元数据，主文件 stat 不变也不会漏掉 WAL 更新。
+- 保留正文、可读推理、模型调用步、工具 callID/参数/结果；pending/running
+  工具补为中断错误结果，不恢复执行。已裁剪输出保留
+  `[Old tool result content cleared]`，不复活磁盘上的原文；不重放提供方推理签名。
+- 导入的是**有效上下文**，不是原始 export 全量：最后一次成功压缩摘要、
+  `tail_start_id` 指定的保留尾部、后续消息。被压缩掉的历史直接省略，不在导入日志
+  中另存档。按 revert 的 `messageID` / `partID` 排除撤销内容；边界无法可靠解析
+  时拒绝该会话。失败压缩不替换可用历史。
+- 会话级 `parentID` 子会话不导入；独立 fork 按自己的复制历史导入。assistant
+  的 `parentID` 仅表示关联 user，不当作子代理标记；subtask 不递归导入子会话。
+- 附件按需换成安全描述，绝不读取附件 URI；不恢复 snapshot/patch/retry/agent
+  元数据，未知 part 安全拒绝。不迁移凭据、审批、MCP/插件实例或文件系统状态。
+  这是一次性快照，不是双向同步。
+- 损坏、不支持、超限会话在 CLI 中跳过并报告诊断、退出码 1，同批其他支持的会话
+  仍可导入；来源标签报告所选会话的错误。上限：32 个数据库、单次扫描 10,000 个
+  候选会话、单会话 64 MiB / 20,000 消息 / 100,000 part、批量发现原始正文共
+  128 MiB。验证只用合成数据，未读取私人 OpenCode 会话、未执行真实模型续聊。
 
 ## 行为契约
 
@@ -45,14 +81,15 @@ TUI 内等效入口：`/migrate`。裸 `/migrate` 弹出**多选源选择器**�
 - **工具调用 wire 合法**：结果按调用 id 挂回发起调用的那一步（不挂最近一步），
   同一步内按调用顺序排列；没有结果的调用补空结果，找不到调用的结果丢弃并
   计数，跨步复用的调用 id 改名。续聊时每个 tool_call 都紧跟它的 tool 消息。
-  单条结果上限 64KB（超出截断并注明），图片一律换成 `[image]` 占位。
+  单条结果上限 64KB（超出截断并注明），图片换成占位或安全描述，不读取附件。
 - **压缩检查点**：源里的上下文压缩边界写为与 `/compact` 同形的原生压缩事务。
   原始事件仍在日志里，模型只看到「摘要 + 之后的对话」，与源代理压缩后实际
-  使用的上下文一致。
+  使用的上下文一致。OpenCode 例外：仅导入上述有效上下文快照。
 - **注入过滤**：harness 写进 user 角色的机器文本（环境块、AGENTS.md 说明、
   system-reminder、本地命令回显等）不开轮、不当标题；`<user_query>` 与粘贴
   信封等包装只保留正文。轮中途模型可见的机器上下文（Claude 的 `isMeta`、
-  Codex 的子代理报告）作为下一步的输入保留。
+  Codex 的子代理报告）作为下一步的输入保留。OpenCode 按自身模型投影，保留
+  未标记 ignored 的 user 文本，包括 synthetic 上下文。
 - **标题**：源自带的标题（`/rename`、生成标题、`session_summary`、
   `meta.title`）写为 `session/title`；没有时以首个真实提问兜底，但不写入
   日志，由 DSH 按首条 user 文本自行回退。标题统一折叠空白、截断到 80 字符。
@@ -84,14 +121,14 @@ TUI 内等效入口：`/migrate`。裸 `/migrate` 弹出**多选源选择器**�
 标题栏右侧为每个有会话的源显示一个标签，选中一条会话即**只导入这一条**并直接打开。
 
 - 解析与 `/migrate` 完全相同，会话 id 同样按源会话确定性生成：两个入口导入同一条会话得到同一个 DSH 会话，已导入的直接打开。
-- 打开会话管理界面只探测各来源是否有会话（每个来源找到第一个候选即停）；列表在点进标签时才读取，来自摘要扫描（只读文件头/尾）。同一次运行里没有变化的会话不重读；不写任何缓存文件。
+- 打开会话管理界面只探测来源是否存在；点进标签才读取列表。文件源扫描头/尾并复用未变摘要；OpenCode 每次刷新从新的 SQLite 快照查询会话元数据，不写缓存文件。
 - 会话原工作目录已不存在时不导入，界面给出提示；这时仍可用 `/migrate` 整批导入。
 - 标签页不改变 `/migrate` 与 `dsh-tui migrate` 的行为。
 
 ## 智能迁移提示
 
-TUI 启动约 12 秒后做一次后台检测：任一源在最近 20 分钟内有文件写入
-（以各源会话文件的最新修改时间为信号）时，弹出一次通知「刚刚从xx过来？
+TUI 启动约 12 秒后做一次后台检测：任一源在最近 20 分钟内有活动
+（文件源取最新 mtime，OpenCode 取会话行活动时间）时，弹出一次通知「刚刚从xx过来？
 /migrate 来快速迁移」。检测在后台运行（亚秒级），每会话只提示一次；
 `grok-build` 数据缺失时静默跳过。提示显示期间按 Enter（输入框为空时）
 直达选择器并自动勾选该源，其他按键照常。
@@ -101,8 +138,8 @@ TUI 启动约 12 秒后做一次后台检测：任一源在最近 20 分钟内�
 - **`unknown agent`**：源名以 `dsh-tui migrate` 无参输出的名单为准。
 - **`needs the profile's compiled copy`**：profile 内编译产物缺失或过旧，
   先运行 `dsh-tui update`。
-- **导入数低于扫描计数**：扫描计数是候选文件数（按文件名匹配），
-  导入会过滤解析失败与空对话，略低属正常。
+- **导入数低于扫描计数**：扫描计数是候选文件数（按文件名匹配）或 OpenCode 会话行数，
+  导入会过滤解析失败、不支持与空对话，低于候选数属正常。
 - **全新 `DSH_HOME` 首跑报 installation rejected**：profile 自举撞上
   npm 上陈旧的 tarball 版本，升级 dsh 后自愈；或先用已有 profile。
 - **一个会话都没找到**：确认源代理的数据目录存在于当前用户家目录；
@@ -112,7 +149,7 @@ TUI 启动约 12 秒后做一次后台检测：任一源在最近 20 分钟内�
 
 - 解析与 IO 分离：`adapters/<源>.parse.ts` 是纯函数（原始文本 → 轮模型），
   共享规则在 `parse/`（jsonl 坏行计数、注入识别与包装剥离、标题归一、
-  工具调用配对）；adapter 只做文件发现。OMP 仍产出角色列表，经
+  工具调用配对）；adapter 负责存储发现与读取。OMP 仍产出角色列表，经
   `fromRoleTurns` 机械折成轮。
 - grok 的 `synthetic_reason` 过滤：只迁缺省与显式 `human` 的用户行；
   `compaction_meta` 中的摘要行转为压缩检查点。
@@ -130,3 +167,6 @@ TUI 启动约 12 秒后做一次后台检测：任一源在最近 20 分钟内�
 `scripts/verify-migrate.mjs`（事件合成与官方读取链往返，含 wire 合法性与
 压缩检查点）与
 `scripts/verify-migrate-command.tsx`（挂真实 Chat 的 `/migrate` 交互回归）。
+OpenCode 专项为 `scripts/verify-migrate-opencode-parse.mjs`、
+`scripts/verify-migrate-opencode-db.mjs` 与 `scripts/verify-migrate-opencode.mjs`，
+分别覆盖合成语义、SQLite/WAL、官方持久化与续聊往返。

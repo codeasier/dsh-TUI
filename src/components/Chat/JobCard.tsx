@@ -1,6 +1,6 @@
 import React from 'react'
 import { Box, Text, useAnimationFrame, useTerminalSize } from '../../ui.js'
-import { formatJobDuration, type BackgroundJobStatus } from '../../dsh-adapter/jobs.js'
+import { formatJobDuration, jobTitleOf, type BackgroundJobStatus } from '../../dsh-adapter/jobs.js'
 import type { JobRow } from '../../dsh-adapter/channel.js'
 import type { BackgroundJobOutputLine } from '../../adapter/ports/channel-view.js'
 import type { Theme } from '../../theme.js'
@@ -138,7 +138,8 @@ export function JobCard({ job, marginTopOnTurn, onClick, onWatchOutput, expanded
   const output = jobOutputRows(job.outputLines, Math.max(1, contentWidth - 1), WATERFALL_ROWS)
   const outputRows = output.map((entry, index) => (index === 0 ? '≡ ' : '') + (entry.gap === true ? t('jobs-output-gap') : entry.text))
   const headerDetail = job.detail !== undefined && job.detail !== '' ? job.detail : undefined
-  const headerName = `${t('jobs-card-prefix')}${job.id}`
+  // The durable call overview outranks the registry id in the header.
+  const headerName = `${t('jobs-card-prefix')}${jobTitleOf(job)}`
   const duration = formatJobDuration(job)
   const liveProgress = settled || job.progress === undefined || job.progress === '' ? undefined : job.progress
   return <Box flexDirection="column" marginTop={marginTopOnTurn ? 1 : 0} ref={viewportRef}
@@ -152,7 +153,9 @@ export function JobCard({ job, marginTopOnTurn, onClick, onWatchOutput, expanded
       <Box flexShrink={0}>
         <Text bold color={hovered ? 'accent' : undefined}>{headerName}</Text>
       </Box>
-      <Box flexShrink={0}><Text dimColor>{job.kind}</Text></Box>
+      {/* The durable call overview is the bold title; the registry id stays
+          visible beside the kind so narrow-column identification survives. */}
+      <Box flexShrink={0}><Text dimColor>{job.id} {job.kind}</Text></Box>
       {liveProgress !== undefined && <Box width={12} flexShrink={0}><JobProgress progress={liveProgress} /></Box>}
       <Box flexShrink={0}><Text dimColor>{duration}</Text></Box>
       {headerDetail !== undefined && <Box flexShrink={0}><Text dimColor wrap="truncate-end">{headerDetail}</Text></Box>}

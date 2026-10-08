@@ -99,6 +99,7 @@ DSH_TUI_THEME
 - 正文：`text`、`inverseText`、`inactive`、`inactiveShimmer`、`subtle`
 - 工具名与状态点：`toolNameMutate`、`toolNameExec`、`toolDotExec`、`toolDotRead`
 - 工具名与状态点（续）：`toolDotWrite`、`toolDotWeb`、`toolDotTask`
+- 会话底板：`sessionBackground`（含页边距；与徽标填色 `background` 独立）
 - 工具卡衬底：`toolCardBackground`、`toolCardBackgroundDim`
 - 状态：`autoAccept`、`success`、`error`、`warning`、`warningShimmer`、`merged`
 - diff：`diffAdded`、`diffRemoved`、`diffAddedDimmed`、`diffRemovedDimmed`
@@ -109,7 +110,7 @@ DSH_TUI_THEME
 - 徽标/强调：`mascotBody`、`inputBackground`、`professionalBlue`、`chromeYellow`
 - 界面动画与光标：`contextBarSystem`、`contextBarPrompt`、`contextBarAssistant`
 - 界面动画与光标（续）：`contextBarThinking`、`contextBarTools`、`ignition`、`ignitionDim`、`cursor`
-- 消息/输入：`userMessageBackground`、`userMessageBackgroundHover`
+- 消息/输入：`userMessageBackground`、`userMessageBackgroundHover`、`userPromptBackground`
 - 消息/输入（续）：`messageActionsBackground`、`selectionBg`、`bashMessageBackgroundColor`
 - 消息/输入（续）：`memoryBackgroundColor`、`rate_limit_fill`、`rate_limit_empty`
 - 消息/输入（续）：`fastMode`、`fastModeShimmer`、`userPromptLabel`
@@ -136,6 +137,26 @@ DSH_TUI_THEME
   都量不出对比度，仍用 `inverseText`），所以浅色光标也能配深墨字形。
   内置主题留空——空值表示沿用原来的反色块光标（向后兼容）；只有需要光标独立于正文色时才声明。
 - 正文链接的文字色跟随 `accent`；accent 为空或解析不出时回落到原来的固定蓝。
+
+## Markdown 语义颜色
+
+九个颜色键可独立覆盖，不改变其他 UI 强调色：
+
+| 键 | 用途 | 旧 palette 缺键时回退 |
+| --- | --- | --- |
+| `markdownHeading` | 标题 | `accent` |
+| `markdownStrong` | 粗体 | `toolNameMutate` |
+| `markdownEmph` | 强调/斜体 | `warning` |
+| `markdownCode` | 行内代码 | `permission` |
+| `markdownLink` | 链接与可见 URL（下划线） | `ide` |
+| `markdownBlockQuote` | 引用正文 | `warning` |
+| `markdownListItem` | 无序列表标记 | `permission` |
+| `markdownListEnumeration` | 有序列表编号 | `ide` |
+| `markdownHorizontalRule` | 水平分隔线 | `inactive` |
+
+内置 `dark` 使用柔紫标题、琥珀粗体、暖金斜体、绿色行内代码、青色链接/编号、低强调暖灰引用、暖色无序标记与灰色分隔线；品牌蓝仍用于界面焦点。`light` 使用对应深紫、深金、深绿与深青，`dark-ansi` 只使用 ANSI 16 色。普通折叠工具摘要使用 `inactive`，运行/悬停时使用 `text`，失败时使用 `error`；展开卡片保留工具名分类色。
+
+JSON 与 `tuiThemes` 描述符仍从声明的 `base` 继承未覆盖键。旧插件或自定义 resolver 返回缺少新键的 palette 时，`normalizeThemePalette` 按上表使用该 palette 自身的旧键；旧回退键也缺失时才使用 `dark` 的对应旧键。显式新键优先，新键齐全的 palette 保持对象 identity。旧 palette 的规范化结果会缓存，但原对象变化时重新计算，避免热更新沿用旧颜色。
 
 ## npm 插件主题
 

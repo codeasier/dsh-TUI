@@ -31,6 +31,7 @@ import { ApprovalStore, bindApprovalStore } from './approvals.js'
 import { PermissionStore } from '../channel/permissions.js'
 import { registerPromptDebug } from './promptDebug.js'
 import { readActivityFrames } from '../activityPrefs.js'
+import { DEFAULT_PRESET } from '../components/activityFrames.js'
 import { commitFullscreenFactoryMigration, planFullscreenFactoryMigration, readAppliedMigrations } from '../migrationPrefs.js'
 import { readModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
@@ -50,6 +51,7 @@ import { KERNEL_IDS, KERNEL_SWITCH_HANDOFF_ENV, kernelDisplayName, readKernelPre
 import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions } from '../update.js'
+import { pokeRawMode } from '../utils/ttyMode.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
 import { applyBtwContextBudget, applyBtwContextTurns, applyCodeFrameStyle, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, applyPageMargin, applySidePanelOpen, applySidePanelPanels, applySidePanelRatio, applySidePanelSplitEnabled, BTW_CONTEXT_BUDGET_MAX, BTW_CONTEXT_BUDGET_MIN, BTW_CONTEXT_TURNS_MAX, BTW_CONTEXT_TURNS_MIN, DEFAULT_PAGE_MARGIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, resolveMathRendering, SIDE_PANEL_ID_PATTERN, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
@@ -225,6 +227,24 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     sampleAt(2000, 'stdin state +2s')
     sampleAt(5000, 'stdin state +5s')
     sampleAt(12000, 'stdin state +12s')
+    // The exiting parent used to stdin.destroy() ~15s after spawn. libuv
+    // then restored cooked echo on this shared tty while isRaw stayed true,
+    // so mouse reports and DECRPM/DA1 replies were painted into the prompt
+    // as `^[...`. A setRawMode(true) while the handle already believes it is
+    // raw is a libuv no-op; repair toggles only after tcgetattr says cooked.
+    // The window covers a slow boot (destroy is spawn+15s, apply may be late).
+    const repairTimer = setInterval(() => {
+      pokeRawMode(probedStdin, () => {
+        logRestartEvent('boot: reasserted raw mode after shared tty reset')
+      })
+    }, 500)
+    repairTimer.unref?.()
+    const stopRepair = setTimeout(() => clearInterval(repairTimer), 22000)
+    stopRepair.unref?.()
+    ctx.effect(() => () => {
+      clearInterval(repairTimer)
+      clearTimeout(stopRepair)
+    })
   }
   const hostMode = resolveTuiHostMode()
   if (hostMode === 'invalid-explicit-launch') {
@@ -710,7 +730,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     activity: config.activity,
     // Explicit cordis.yml value (static deployment choice) wins over the
     // runtime `/activity` preference, which wins over the default.
-    activityFrames: config.activityFrames ?? readActivityFrames() ?? 'moon8',
+    activityFrames: config.activityFrames ?? readActivityFrames() ?? DEFAULT_PRESET,
     // Static footer preference: cordis.yml `contextBar` (schema default on).
     contextBar: config.contextBar,
     // Same precedence for the agent preset: cordis.yml `preset` over the
@@ -867,7 +887,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
         thinkingFold: Schema.union(['preview', 'full']).default('preview'),
         jobGroupFold: Schema.union(['auto', 'always', 'never']).default('auto'),
-        toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
+        // Leave the legacy user layer unset so explicit cordis choices (including
+        // `none`) survive; applyDisplay normalizes an absent value to `subtle`.
+        toolBackground: Schema.union(['none', 'subtle', 'strong']),
         scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
         // Preset names AND custom `NxM` specs (the settings field's parse
         // gate keeps junk out of the user layer; the transform normalizes
@@ -1318,6 +1340,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         },
         {
           ...settingField('toolBackground'),
+          format(value: unknown): string {
+            return normalizeToolBackground(value ?? config.toolBackground)
+          },
         },
         {
           ...settingField('scrollGutter'),

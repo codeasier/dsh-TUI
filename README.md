@@ -27,18 +27,19 @@
 - **Pixel whale pet** — three startup intros, click to wake; freezes after the first task.
 - **Launchpad and first-run guide** — every launch lands on a landing page with a **real input box** (big text + whale + quick actions, dropping whole blocks on short/narrow terminals); the first run walks a four-step wizard (API key / language+theme / model+workspace / shortcuts), re-runnable with `/setup`.
 - **Terminal-native UI** — streaming Markdown, tool cards, `/` and `@` completion, `#L12-14` ranges, history search, zh/en UI.
+- **Transcript hierarchy** — the user turn is a banded anchor with a `▌` bar; assistant prose is flush left and unmarked; tool calls and thinking sit under a dim `│` rail, tight within one step.
 - **Images** — Kitty/Sixel thumbnails, centered preview with zoom and pan, paste-time fitting, text fallback.
 - **Mermaid diagrams** — ````mermaid ```` fences drawn as Unicode diagrams.
 - **LaTeX math** — `$…$` and `$$…$$` formulas as Unicode text, fractions and limits stacked in display blocks; `mathRendering: image` typesets block and one-row inline formulas as terminal images on graphics terminals.
 - **Timeline rail** — every turn clickable; timeline / scrollbar / hidden gutter.
 - **Side panel** — `Ctrl+B` splits the chat with a panel column once the terminal is wide enough; all eight built-in panels are enabled by default. Narrow terminals and inline mode keep full-screen panels.
-- **Live state** — activity animation, context bar, TPS, cache hit rate, effort, tokens, session cost estimate (main + subagents), Git and session metadata.
+- **Live state** — a theme-colored text spinner (`moon` by default, configurable with `/activity`), compact subagent status marks, activity animation, context bar, TPS, cache hit rate, effort, tokens, session cost estimate (main + subagents), Git and session metadata.
   Context-bar fill follows backend occupancy; colors estimate content composition. Compaction clears obsolete estimates, and missing composition displays a single used block.
 - **One session manager** — `/resume` `/home` `/agentview` `/bg` `⌸`.
 - **Session workflow** — `/new` `/compact` `/export` `/btw`, model hot-switch, fork, rewind, vim, fullscreen draft editor.
 - **IDE selection channel** — a VS Code selection lands in the prompt.
 - **DSH integrations** — presets, skills, MCP, goals, todos, subagents, questionnaires.
-- **Account sign-in** — the standard profile offers pi-ai OAuth for ChatGPT/Codex, Claude, and Grok (plus OpenAI direct and Meta Muse when available), and Host-owned DeepSeek browser sign-in as `deepseek-account` on DSH 0.2.0-rc.1+. Use `/provider` or `/auth` without another plugin.
+- **Account sign-in** — the standard profile offers pi-ai OAuth for ChatGPT/Codex, Claude, and Grok (plus OpenAI direct and Meta Muse when available), and Host-owned DeepSeek browser sign-in as `deepseek-account` on DSH 0.2.0-rc.1+. Use `/provider` or `/auth` without another plugin. Use [`/fast on|off|status`](docs/configuration.en.md#built-in-subscription-oauth) for ChatGPT/Codex fast (bare `/fast` or `toggle` switches it): it applies from the next request to all supported OAuth routes owned by this plugin in the current TUI process, without changing `effort`. It is not persisted; restart restores the optional `config.serviceTier` startup default (unset: off/provider default). Acceptance and quota are backend-owned.
   A profile-only update from a global TUI patch that already mounts `dsh-tui-auth` can still start the official loopback callback listener on demand; fixed-port SSH forwarding still requires the global package to be aligned.
 - **Extensions** — browser interaction, computer use and more.
 - **Built for long sessions** — event-driven projection, virtualization, bounded caches.
@@ -117,6 +118,14 @@ Manual alternative: `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-
 The repo's `sh install.sh` runs that step and checks the required commands.
 Afterwards `dsh-tui` and `dsh --profile dsh-tui` are equivalent.
 
+For a source checkout, `sh scripts/local-install.sh [profile]` installs a local
+tarball. It snapshots the profile's `node_modules`, manifest/lock and previously
+referenced tarball before packing, restoring them on install/verification failure.
+Allow disk space for a full dependency-tree copy; external dependency symlinks are
+rejected. The profile-local lock rejects parallel invocations of this script;
+keep other `dsh plugin`/pnpm commands and profile edits idle during installation.
+Recovery failure exits nonzero and retains the backup/lock path printed on stderr.
+
 > **New-user note**: pnpm ≥11 blocks dependencies with install scripts by
 > default and reports `ERR_PNPM_IGNORED_BUILDS`. Updates skip foreign-platform
 > `@img/sharp-*` native packages, saving about 200MB of downloads. `/update`
@@ -152,23 +161,24 @@ Safe mode: [Getting started](docs/getting-started.en.md).
 
 ### Importing conversations from other agents (`dsh-tui migrate`)
 
-Bring Claude Code, Codex, OMP, zcode, or Grok Build conversation histories into the DSH session store, then browse and resume them by their original working directory via `/resume`:
+Bring Claude Code, Codex, OMP, zcode, Grok Build, or OpenCode conversation histories into the DSH session store, then browse and resume them by their original working directory via `/resume`:
 
 ```sh
 dsh-tui migrate                # list importable counts per agent (writes nothing)
-dsh-tui migrate claude-code    # import every Claude Code conversation (likewise codex / omp / zcode / grok-build)
+dsh-tui migrate claude-code    # import every Claude Code conversation (likewise codex / omp / zcode / grok-build / opencode)
 dsh-tui migrate codex --dry-run  # preview what would land, write nothing
 ```
 
 - **Read-only source**: migration only reads the foreign agent's local store; artifacts are written through the official `JsonlSessionPersistence` backend, so imported sessions are first-class (openable, continuable).
 - **Idempotent**: one deterministic UUID per source conversation — re-importing skips what is already present instead of stacking duplicates.
-- **Structure preserved**: user/assistant messages, reasoning traces, tool calls with their results, and the source's context compactions (as native compaction checkpoints) are rebuilt turn by turn; harness-injected machine text opens no turn. An imported session can pick the work straight up.
+- **Structure preserved**: user/assistant messages, reasoning traces, tool calls with their results, and the source's context compactions (native checkpoints, or OpenCode’s effective-context snapshot) are rebuilt turn by turn; filtering follows each source’s model context. An imported session can pick the work straight up.
 In-TUI browsing: the session screen (`/resume`) shows a tab per agent that has conversations; picking one imports just that conversation and opens it.
 In-TUI: `/migrate` (optionally `/migrate <agent> [--dry-run]`) runs the same import in a child process and reports through the notification flow.
 CLI alternative: `dsh-tui migrate ...` from any shell runs the same import.
 Full guide: [Session migration](docs/migrate.en.md).
 
-- More agents (pi, opencode, …) extend the adapter registry as adapters land; grok-build reads `GROK_HOME` when set.
+- **OpenCode**: supports the `session/message/part` SQLite format verified against 1.18.34, including WAL updates, retained compaction tails and revert boundaries. Native `session_message/session_input` and old JSON storage are not supported; diagnostics explain skipped data. Uses `XDG_DATA_HOME` / `OPENCODE_DB`; see the guide for channel databases and limitations.
+- More agents (pi, …) extend the adapter registry as adapters land; grok-build reads `GROK_HOME` when set.
 
 **VS Code**: use the integrated terminal or the `dsh-tui-vscode` extension. See [VS Code guide](docs/vscode.en.md). **Herdr**: run `dsh-tui` in a [Herdr](https://herdr.dev) pane; `idle` / `working` / `blocked` are reported through its local integration API.
 
@@ -247,11 +257,19 @@ Using ChatGPT subscription tokens in third-party clients is subject to
 OpenAI’s terms. Full instructions and current boundaries:
 [Codex backend](docs/codex-backend.en.md).
 
+**Orca mobile**: sessions identified by `TERM_PROGRAM=Orca` skip the fullscreen-state health query, which can stall live input display until a tab switch on the shared desktop/mobile terminal. Fullscreen mode and mouse tracking remain available.
+
+Markdown keeps markers in tight, loose, ordered and nested lists; task items show `[ ]` / `[✓]`, and continuation paragraphs, code, and soft-wrapped lines align with the item body; display-only wrap padding is excluded from copied text. Images show alt text and a visible URL. Double-tilde `~~text~~` uses terminal strikethrough; single-tilde approximations such as `~100` stay literal. Horizontal rules render as a separate 16-cell line. Code-block headers show the original language/info label without ```` ``` ````; unlabeled blocks keep ```` ``` ````, and no code-block background is added. Headings, lists, quotes, code, tables and rules are separated from neighbouring blocks by exactly one blank line, even without a source blank; adjacent paragraphs are separated only when the source is. Settled and streaming replies share this policy. Dedicated Markdown colors distinguish purple headings, amber strong text, green inline code and cyan underlined links in the default dark theme (see [Themes](docs/themes.en.md)); thinking headers and previews use the warning color at normal brightness, while expanded thinking keeps Markdown colors. Minimal UI does not force these thinking colors.
+
+Read, search and ordinary tool calls collapse to quiet inline summaries with no background or elapsed chip; consecutive summaries stay tightly stacked. Click or `Ctrl+O` restores their full output. Terminal, file-change and error cards retain a subtle background (`toolBackground: subtle`), a continuous left border, and blank separators. They show the command/title plus up to three text lines or eight diff rows. Terminal titles use `$ command`; long commands and arguments truncate to the available header width. Settled inline summaries use the theme's muted text color without bold; running, failed and hovered tools remain prominent. Thinking headers are unrailed and non-italic. The composer uses a filled surface with a bold yellow left rail, distinct from the tool cards' thin borders, retaining the session and editor controls. Plan mode and an explicit `/color` still override the composer rail color. Historical user prompts share the composer's fill, top/bottom padding and continuous bold yellow rail. Width-truncated header content is available on hover; truncated output previews have no tooltip—click or `Ctrl+O` opens the complete command and output immediately. Set `toolBackground: none` for no added background, or `strong` for more emphasis. `smoothStreaming` animates replies and expanded thinking; tool details and replayed history paint complete. The session canvas uses the theme's `sessionBackground`: neutral gray in dark mode (`#191919`), light gray in light mode (`#F2F2F2`), and restrained ANSI black in `dark-ansi`. Text retains its page margin, while historical user prompts, tool cards and the composer share aligned edges slightly wider than prose. Panel surfaces use neutral gray in dark mode and gray/white in light mode, without a blue tint. The default `pageMargin: normal` leaves three columns per side and one row top/bottom; a custom `2x1` keeps the previous inset. `pageMargin: none` removes only the margin, not the themed session background.
+
 ## Keybindings & Mouse
 
 `Enter` send · `Tab` complete · `Ctrl+Enter` interrupt and send · `Alt+Up` recall the last message · `Esc` dismiss, double-`Esc` rewinds · `Ctrl+B` side panel · `Ctrl+O` details · `Ctrl+R` history (`↑`/`↓` and `Ctrl+R` are scoped to the current project) · `Ctrl+V` paste · `Ctrl+Shift+E` fullscreen draft editor · `?` shortcuts · `←` open the session manager (DSH backgrounds the current session first).
 
 While the model is working: `Enter` steers, `Tab` queues a follow-up, `Ctrl+Enter` interrupts and sends. Input that names a command is still a command — with or without arguments — so `/model` or `/new` reach their own gate (and the `/` overlay sinks the commands that affect the running conversation) instead of silently becoming an interruption; only text that is not a command — and a direct skill gesture such as `/skill-name …` — steers.
+
+Text editing: `Ctrl+←/→` or `Alt+←/→` (`Option` on macOS; `Alt+B/F` also works) jumps by Unicode word boundaries, including Chinese without spaces. `Ctrl+W` deletes the preceding word and trailing whitespace, or the active selection—not the conversation history. Punctuation and emoji are separate editing units; a draft containing only one word can still be deleted completely.
 
 On native Windows, fragmented Win32 input records are reassembled across short input delays instead of appearing as numeric protocol text. The platform check only reports that this machine might run the private mode (win32-input-mode); a bare `ESC[` fragment is held only after one record has actually been decoded, while a fragment whose own shape is already record-specific holds on its own (which is how even the first record can survive a split). Windows terminals that never enter the mode (mintty, GitBash) therefore keep the classic VT path: a lone `Esc` keeps its normal response time, and a letter typed after a timed-out `ESC[` is not swallowed.
 
@@ -285,6 +303,8 @@ Full reference: [Interaction and commands](docs/interaction.en.md).
 
 In `/provider`'s model list, focus a model and press `Tab` to edit its context window, max output tokens, reasoning efforts, and image input capability.
 
+In `/model` completion, type a provider/model prefix (`volceapi/glm`), a model ID prefix (`glm`), or a fuzzy subsequence (`dsv4.1` → `volceapi/deepseek-v4.1-flash`); prefix hits rank above fuzzy hits, and selecting a result inserts the full provider/model route.
+
 The session manager paints the last successful list immediately while it checks the persistence store for changes. Titles that require a deeper log scan appear first with a fallback name and update in place when recovery finishes.
 Removing a workspace registration keeps its sessions accessible under a "History only" directory in the rail.
 History-only directories offer edit and new-session actions; rename and remove are available for registered workspaces.
@@ -292,6 +312,8 @@ History-only directories offer edit and new-session actions; rename and remove a
 **Background jobs**: card headers open the focused task panel. Click the card body or use `Ctrl+O` to toggle the command between its first statement and full script. Commands and output use separate colored edges with `❯` (`>` on Windows) and `≡` on their first rows; output always stays at the latest two visible rows. `/jobs` and the side panel keep the full output scrollable, while `e` toggles the focused command. Consecutive blank script lines collapse to one.
 
 **Background sessions**: On the DSH backend, `/bg` or `←` on an empty prompt backgrounds the current session and opens the session manager; `Esc` returns to it. Background sessions run in this process and stop when the TUI exits. Logs survive. On Claude/Codex, those entries open the session manager without backgrounding the session.
+
+**Background jobs**: foreground bash/pwsh calls show only their tool card. Commands explicitly started in the background or handed off after a wait timeout also show an independent job card and appear in `/jobs`. Job cards, `/jobs`, notifications and the status bar prefer the persisted bash/pwsh call's description (`args.description`), falling back to the upstream label when absent; replay uses the same description, without extra model-generated summaries. Job IDs remain available for `job_output` and stopping tasks, and `/jobs` details retain the actual command.
 
 Full commands: [Interaction and commands](docs/interaction.en.md).
 

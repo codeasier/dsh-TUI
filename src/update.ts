@@ -1958,9 +1958,8 @@ export async function cliUpdate(profile: string): Promise<number> {
  *
  * Two deliberate trade-offs vs the old destroy():
  * - destroy() doubled as a permanent gate ("a destroyed stream can never be
- *   resumed"). Readers removed + paused already keep this process out of the
- *   console's key path (#284/#307), and after the handoff only the
- *   child-exit listener remains here — nothing re-attaches a reader.
+ *   resumed"). Readers removed + paused + sealed read/resume keep this
+ *   process out of the console's key path (#284/#307), including late pumps.
  * - On exit Node still writes the saved cooked mode back once (atexit
  *   uv_tty_reset_mode). Fine in the normal order — this process outlives the
  *   replacement, and the shell wants cooked back anyway; it only bites if
@@ -1969,12 +1968,22 @@ export async function cliUpdate(profile: string): Promise<number> {
  * @param stdin - Console stream to detach; injectable for the regression.
  */
 export function detachHandoffStdin(
-  stdin: Pick<NodeJS.ReadStream, 'removeAllListeners' | 'pause' | 'unref'> = process.stdin,
+  stdin: Pick<NodeJS.ReadStream, 'removeAllListeners' | 'pause' | 'unref'>
+    & Partial<Pick<NodeJS.ReadStream, 'read' | 'resume'>> = process.stdin,
 ): void {
   stdin.removeAllListeners('readable')
   stdin.removeAllListeners('data')
   stdin.pause()
   stdin.unref()
+  // A delayed readable pump must not reclaim the replacement's console.
+  // Seal without closing the shared fd or changing its termios.
+  if (stdin.read !== undefined) stdin.read = () => null
+  if (stdin.resume !== undefined) {
+    stdin.resume = () => {
+      stdin.pause()
+      return stdin as NodeJS.ReadStream
+    }
+  }
 }
 
 /**
@@ -2210,6 +2219,11 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     //    must never read the shared console again — every keypress belongs to
     //    the replacement, and a resumed pump here is exactly the "restarted
     //    TUI sees dropped or swallowed input" failure (#284/#307).
+    try {
+      detachHandoffStdin(process.stdin)
+    } catch {
+      // Best effort: the child-exit listener still owns the handoff lifetime.
+    }
     let watchdogTicks = 0
     const watchdog = setInterval(() => {
       watchdogTicks += 1

@@ -15,7 +15,6 @@ import { getTheme } from '../theme.js'
 import { t } from '../i18n.js'
 import { useTheme } from './design-system/ThemeProvider.js'
 import type { ToolBackground } from '../tuiDisplayPrefs.js'
-import { revealLinesOf } from './smoothReveal.js'
 import { primaryComboString } from '../utils/keymap.js'
 import { isPatchDiff, parseFilePatch, patchHeader, patchHeaderText, type ParsedPatch, type PatchLine } from './diffPatch.js'
 
@@ -314,6 +313,10 @@ function alignPatchFile(fileIndex: number, parsed: ParsedPatch): { rows: (DiffRo
 
 // --- rendering --------------------------------------------------------------
 
+const MIN_PANE_WIDTH = 20
+/** Smallest content width that can hold both panes and their divider. */
+export const SPLIT_DIFF_MIN_WIDTH = MIN_PANE_WIDTH * 2 + 1
+
 function PaneLine({
   side,
   kind,
@@ -383,8 +386,7 @@ export function SplitDiffView({
   width,
   maxRows,
   verbose,
-  toolBackground = 'none',
-  reveal,
+  toolBackground = 'subtle',
 }: {
   readonly diffs: readonly ToolFileDiff[]
   /** Content width available to the whole two-pane block (divider included). */
@@ -393,14 +395,6 @@ export function SplitDiffView({
   readonly maxRows: number
   readonly verbose: boolean
   readonly toolBackground?: ToolBackground
-  /**
-   * Smooth-streaming participation (the card owning this view computes
-   * eligibility): when present, the capped row list reveals line-by-line at
-   * the shared ~30fps cadence instead of painting as one block. The `+N
-   * lines` fold hint stays rendered throughout — it describes the cap, not
-   * the reveal.
-   */
-  readonly reveal?: { readonly key: string }
 }): React.ReactNode {
   const [hl, setHl] = React.useState<CliHighlight | null>(null)
   React.useEffect(() => {
@@ -448,17 +442,11 @@ export function SplitDiffView({
   })
 
   const totalRows = rows.length
-  const capped = verbose || totalRows <= maxRows || totalRows - maxRows === 1
+  const capped = verbose || totalRows <= maxRows
   const visible = capped ? rows : rows.slice(0, maxRows)
   const hidden = totalRows - visible.length
-  // Smooth reveal reads happen during render (the owning card subscribes to
-  // the scheduler's version, so its re-render drives this view too).
-  const revealedRows = reveal !== undefined
-    ? revealLinesOf(reveal.key, visible.length, { enabled: true, active: true })
-    : visible.length
-  const shown = revealedRows >= visible.length ? visible : visible.slice(0, revealedRows)
 
-  const paneWidth = Math.max(20, Math.floor((width - 1) / 2))
+  const paneWidth = Math.max(MIN_PANE_WIDTH, Math.floor((width - 1) / 2))
 
   // Whole-hunk highlight per file (multi-line lexer state preserved);
   // only the visible rows merge syntax runs with word flags below.
@@ -481,7 +469,7 @@ export function SplitDiffView({
 
   return (
     <Box flexDirection="column" width={paneWidth * 2 + 1}>
-      {shown.map((row, index) => {
+      {visible.map((row, index) => {
         if ('separator' in row) {
           return (
             <Box key={index} width={paneWidth * 2 + 1}>

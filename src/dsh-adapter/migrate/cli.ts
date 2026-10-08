@@ -71,7 +71,7 @@ async function cliMigrateInner(argv: readonly string[]): Promise<number> {
       // scan candidates; import filters unreadable/empty ones, so it may
       // land slightly above the imported total.
       const available = adapter.count !== undefined ? adapter.count() : adapter.discover().sessions.length
-      console.log(`[${adapter.id}] ${available} session file(s) to scan (run \`dsh-tui migrate ${adapter.id}\` to import)`)
+      console.log(`[${adapter.id}] ${available} session candidate(s) to scan (run \`dsh-tui migrate ${adapter.id}\` to import)`)
     }
     return 0
   }
@@ -81,9 +81,12 @@ async function cliMigrateInner(argv: readonly string[]): Promise<number> {
     return MIGRATE_CLI_USAGE_EXIT
   }
   const found = agent.discover()
+  const diagnostics = found.diagnostics ?? []
+  for (const diagnostic of diagnostics.slice(0, 10)) process.stderr.write(`[${agent.id}] ${safe(diagnostic)}\n`)
+  if (diagnostics.length > 10) process.stderr.write(`[${agent.id}] … and ${diagnostics.length - 10} more source diagnostics\n`)
   if (found.sessions.length === 0) {
-    console.log(`[${agent.id}] no conversations found`)
-    return 0
+    console.log(`[${agent.id}] no importable conversations found`)
+    return diagnostics.length > 0 ? 1 : 0
   }
   if (dryRun) {
     console.log(`[${agent.id}] ${found.sessions.length} conversation(s) would be imported into ${defaultSessionRoot()} (dry run)`)
@@ -91,7 +94,7 @@ async function cliMigrateInner(argv: readonly string[]): Promise<number> {
       console.log(`  · ${safe(session.sourceId)}  (${messageCount(session)} messages · cwd ${safe(session.cwd)})`)
     }
     if (found.sessions.length > 5) console.log(`  … and ${found.sessions.length - 5} more`)
-    return 0
+    return diagnostics.length > 0 ? 1 : 0
   }
   console.log(`[${agent.id}] importing ${found.sessions.length} conversation(s) into ${defaultSessionRoot()}`)
   const run = await importSessions(agent, defaultSessionRoot(), found.sessions)
@@ -101,5 +104,5 @@ async function cliMigrateInner(argv: readonly string[]): Promise<number> {
   console.log(`[${agent.id}] ${parts.join(' · ')}`)
   for (const failure of run.failures.slice(0, 10)) console.log(`  ✗ ${safe(failure)}`)
   if (run.failures.length > 10) console.log(`  … and ${run.failures.length - 10} more`)
-  return run.failed > 0 ? 1 : 0
+  return run.failed > 0 || diagnostics.length > 0 ? 1 : 0
 }

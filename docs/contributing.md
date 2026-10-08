@@ -223,6 +223,9 @@ Cordis config
 - 干净编译会先删除整个 `lib/`，源模块重命名或删除后不会留下过期输出。
 - 运行 `pnpm verify:package` 检查 `main`、`types`、`bin` 与 `exports` 的所有目标
   都进入 npm tarball，并 smoke-import 主入口和 invariant 入口。
+  npm 10 的 pack 即使带 `--ignore-scripts` 仍可能执行 prepare；显式关闭
+  foreground scripts 保持 JSON 输出干净。包检查要在编译后、回归组前串行运行，
+  避免 prepare 清理 lib/ 时与读取编译产物的测试竞争。
 - 纯文档、纯 workflow、纯 YAML 改动不需要重建（除非同时改了 TypeScript 输入）。
 - 仅普通注释与空行的改动可免本地重建；行为、类型、配置或构建输入改动不适用。
   该豁免不免除下述按改动面必跑的回归；具体检查见“验证”。
@@ -300,6 +303,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 改动区域 | 聚焦验证 |
 | --- | --- |
 | 通用无头屏幕组装 | `pnpm smoke` |
+| 转录块层级（用户回合底色/左竖条、正文贴左无标记、机器活动竖线与块间距） | `node scripts/verify-transcript-blocks.mjs` |
 | 跨代理会话迁移（src/migrate、adapter 解析或事件合成） | `node --import tsx/esm scripts/verify-migrate.mjs` |
 | 共享投影器、DSH 翻译器 | `pnpm verify:projection-golden`、`node --import tsx/esm scripts/verify-dsh-translate.ts`、`pnpm verify:agent-domain` |
 | Claude 后端 | 对应的 `scripts/verify-claude-*`（假 SDK，不花钱）与 `node --import tsx/esm scripts/verify-backend-channel.ts`；`verify:claude-live`/`verify:claude-headless` 调用真实 CLI，只在有意花费时手动跑（钉在 haiku） |
@@ -322,6 +326,13 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | Hover 事件性能（兴趣边界完整、无兴趣矩形快路径、帧边界/多 root 失效） | `node --import tsx/esm scripts/verify-hover-coalesce.tsx` |
 | 输入框鼠标选区编辑（拖选/Shift+click/双击选词/删除替换/Esc 分层/Ctrl+C 复制、CJK 宽字符与 fold 侧钳制） | `node --import tsx/esm scripts/verify-input-selection.tsx` |
 | Sixel 编码、worker 缓存、缩略图/预览生命周期 | `node --import tsx/esm scripts/verify-terminal-images-sixel.tsx`、`node --import tsx/esm scripts/verify-sixel-transcript.tsx`；耗时对比 `node --import tsx/esm scripts/bench-sixel-encode.tsx` |
+| Markdown 列表标记、任务项、列表内块、图片描述、删除线与分割线 | `node scripts/verify-markdown-blocks.mjs` |
+| Markdown 悬挂缩进、软换行复制与超长列表滚动 | `node --import tsx/esm scripts/verify-hanging-wrap.tsx`、`node --import tsx/esm scripts/verify-markdown-hanging.tsx` |
+| Markdown 语义主题色/链接、旧 palette 回退/缓存、标题间距与思考颜色 | `node scripts/verify-markdown-palette.mjs` |
+| Markdown 块间距、流式/落定与长块分片一致性 | `node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx`、`node --import tsx/esm scripts/verify-streaming-markdown-blocks.tsx` |
+| 工具卡短预览、展开与截断悬停提示 | `node --import tsx/esm scripts/repro-toolcards.tsx`、`node --import tsx/esm scripts/verify-tool-tooltip-gating.tsx` |
+| 默认/自定义页边距、内容宽度与出血边栏 | `node --import tsx/esm scripts/verify-page-margin.tsx` |
+| Markdown 代码块标题（原始 info 标签、无标签围栏提示与复制边界） | `node scripts/verify-code-block-caption.mjs` |
 | Markdown 独立节点（表格、mermaid 图、公式块）、LaTeX 公式与流式分块间距 | `pnpm verify:table-layout`、`pnpm verify:mermaid-diagram`、`pnpm verify:latex-math`、`node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx` |
 | 跨进程会话占用账本（失败行为、严格读、锁回收、预约） | `pnpm verify:session-mounts` |
 | 未发送草稿的跨屏交接（快照、光标、图片绑定、归属） | `pnpm verify:composer-draft-handoff`；端到端换屏另见 `node scripts/verify-session-browser.mjs` |

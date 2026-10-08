@@ -301,6 +301,10 @@ Rules for generated output:
 - Run `pnpm verify:package` to ensure every `main`, `types`, `bin`, and `exports`
   target is present in the npm tarball and to smoke-import the main and
   invariant entries.
+  npm 10 may still run prepare during pack despite `--ignore-scripts`; explicitly
+  disabling foreground scripts keeps the JSON output clean. Run package checks
+  serially after compilation and before regression groups, so prepare cannot
+  remove lib/ while tests are importing compiled output.
 - Documentation-only, workflow-only, and YAML-only changes do not require a
   rebuild unless they also alter TypeScript inputs.
 - Changes limited to ordinary comments and blank lines may skip the local rebuild;
@@ -406,10 +410,8 @@ change, also run the closest focused script:
 | Change area | Focused verification |
 | --- | --- |
 | General headless screen composition | `pnpm smoke` |
-| Shared projector, DSH translator | `pnpm verify:projection-golden`, `node --import tsx/esm scripts/verify-dsh-translate.ts`, `pnpm verify:agent-domain` |
-| Claude backend | The matching `scripts/verify-claude-*` (fake SDK, no cost) and `node --import tsx/esm scripts/verify-backend-channel.ts`; `verify:claude-live`/`verify:claude-headless` drive the real CLI, so run them by hand only when you mean to spend (pinned to haiku) |
-| Archive semantics and backend OAuth logout | `node --import tsx/esm scripts/verify-session-archive.tsx` (real headless browser, fake catalog), `node --import tsx/esm scripts/verify-backend-logout.ts` (real channel/UI facade, fake OAuth host); no native-login/real-credential mutation, preserving DSH/Claude default deletion |
 | Native Codex backend | `pnpm verify:codex-contract`, matching fake-app-server/fixture `scripts/verify-codex-*`, `node --import tsx/esm scripts/verify-backend-channel.ts`; neutral-layer changes also need DSH goldens, Claude comparisons and `verify-agent-event-invariants.ts`. Real `verify-codex-live.ts` / probes must use `codex-cheap-only.mjs`; explicitly list unavailable real ChatGPT login/TTY checks |
+| Transcript block hierarchy (user-turn band/bar, flush-left unmarked prose, machine rail and block gaps) | `node scripts/verify-transcript-blocks.mjs` |
 | Channel submit/steer/pending behavior | `node scripts/verify-submit.mjs` |
 | Rewind/edit/resend and historical inbox cancellation | `pnpm verify:rewind-edit` |
 | Prompt queue behavior | `node scripts/verify-queue.mjs` |
@@ -427,6 +429,13 @@ change, also run the closest focused script:
 | Hover event performance (complete interest boundaries, no-interest rect fast path, frame/multi-root invalidation) | `node --import tsx/esm scripts/verify-hover-coalesce.tsx` |
 | Prompt-input mouse selection editing (drag/Shift+click/double-click word select, delete/replace, layered Esc, Ctrl+C copy, CJK wide cells, fold-side clamping) | `node --import tsx/esm scripts/verify-input-selection.tsx` |
 | Sixel encoding, worker cache, thumbnail/preview lifecycle | `node --import tsx/esm scripts/verify-terminal-images-sixel.tsx`, `node --import tsx/esm scripts/verify-sixel-transcript.tsx`; timing comparison `node --import tsx/esm scripts/bench-sixel-encode.tsx` |
+| Markdown list markers, task items, nested blocks, image descriptions, strikethrough and rules | `node scripts/verify-markdown-blocks.mjs` |
+| Markdown hanging indentation, soft-wrap copying and long-list scrolling | `node --import tsx/esm scripts/verify-hanging-wrap.tsx`, `node --import tsx/esm scripts/verify-markdown-hanging.tsx` |
+| Markdown semantic colors/links, legacy palette fallback/cache, heading spacing and thinking colors | `node scripts/verify-markdown-palette.mjs` |
+| Markdown block spacing, settled/streaming parity and long-block splitting | `node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx`, `node --import tsx/esm scripts/verify-streaming-markdown-blocks.tsx` |
+| Tool-card short previews, expansion and truncated-header tooltips | `node --import tsx/esm scripts/repro-toolcards.tsx`, `node --import tsx/esm scripts/verify-tool-tooltip-gating.tsx` |
+| Default/custom page insets, content width and full-bleed gutters | `node --import tsx/esm scripts/verify-page-margin.tsx` |
+| Markdown code-block captions (original info labels, untagged fence cues and copy boundaries) | `node scripts/verify-code-block-caption.mjs` |
 | Standalone Markdown nodes (tables, mermaid diagrams) and streaming block spacing | `pnpm verify:table-layout`, `pnpm verify:mermaid-diagram`, `node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx` |
 | Cross-process session mount ledger (failure behavior, strict reads, lock recovery, reservations) | `pnpm verify:session-mounts` |
 | Unsent-draft handoff across screens (snapshot, cursor, image bindings, ownership) | `pnpm verify:composer-draft-handoff`; end-to-end screen switching also `node scripts/verify-session-browser.mjs` |

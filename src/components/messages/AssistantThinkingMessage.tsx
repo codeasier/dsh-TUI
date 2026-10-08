@@ -8,12 +8,12 @@ import {
   THINKING_SPINNER_FRAMES,
   THINKING_SPINNER_INTERVAL_MS,
   THINKING_SETTLED_MARKER,
+  THINKING_EXPANDED_MARKER,
 } from '../../terminal-utils/figures.js'
 import { BRAND, ICE } from '../shimmer.js'
 import { interpolateColor } from '../Spinner/spinnerUtils.js'
 import { isMinimalUiMode } from '../../minimalUiMode.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
-import { primaryComboString } from '../../utils/keymap.js'
 
 /** Preview body rows — a FIXED row count (kimicode-style constant-height
  *  ticker). Ink's truncate slices the whole string across newlines as one
@@ -55,14 +55,14 @@ type Props = {
 }
 
 /**
- * Thinking block: settled rows fold to `⚓ Thinking` plus the localized
- * ctrl+o expand hint (hint-expand-ctrl-o);
- * streaming rows switch between a three-line preview and the full reasoning
- * text on click. The live leading mark is a rotating braille spinner
- * (`⠋⠙⠹…`, Kimi Code style), settling back to the static anchor (`⚓`). When
- * the channel records the reasoning duration, the label carries it
- * (`⚓ Thinking · 12s …`) — dsh-tui's take on making thinking time visible in
- * the transcript.
+ * Thinking block: settled rows collapse to a single line — `+ Thinking · 12s`
+ * — and the leading mark flips to `-` while the block is open (click the row
+ * or Ctrl+O), the pair reading like a disclosure triangle. Streaming rows
+ * switch between a three-line preview and the full reasoning text on click;
+ * their leading mark is a rotating braille spinner (`⠋⠙⠹…`, Kimi Code
+ * style), settling back to `+`. When the channel records the reasoning
+ * duration, the label carries it — dsh-tui's take on making thinking time
+ * visible in the transcript.
  */
 export function AssistantThinkingMessage({
   thinking,
@@ -110,14 +110,23 @@ export function AssistantThinkingMessage({
 
   // Kimi Code style blue pulse: the streaming glyph breathes along the
   // header's brand→ice ladder, one sine period per ~7 frames (≈0.56s) —
-  // lively without strobing. The minimal UI drops the color (plain glyph);
-  // settled always keeps the plain dim anchor.
-  const label = `${t('thinking-label')}${duration}${streaming ? '…' : ` ${t('hint-expand-ctrl-o', { key: primaryComboString('transcript') })}`}`
+  // lively without strobing. Minimal mode drops the color (plain glyph);
+  // settled labels use the theme's warning accent.
+  //
+  // No expand hint on the settled label: it rode every single thinking step,
+  // so a long turn stacked a dozen identical `hint-expand-ctrl-o` tails —
+  // `+ Thinking · 12s` plus the same words again, once per step — and spent
+  // half the width repeating itself. The `+`/`-` disclosure and the `?`
+  // shortcut menu carry the affordance instead. (Upstream 0.11.2 made that
+  // hint keymap-aware via `primaryComboString('transcript')`; the removal
+  // stands either way — the cost was the repetition, not the key name. That
+  // is why the import is gone with it.)
+  const label = `${t('thinking-label')}${duration}${streaming ? '…' : ''}`
   const minimalUi = isMinimalUiMode()
   const pulse = (Math.sin(frame * 0.9) + 1) / 2
   const pulseColor = interpolateColor(BRAND, ICE, pulse)
   const frameText = THINKING_SPINNER_FRAMES[frame % THINKING_SPINNER_FRAMES.length]!
-  // Hover 轻指示：可点击折叠时折叠头从 dim 提亮为正常色（不刷整行背景，
+  // Hover 轻指示：可点击折叠时折叠头从琥珀色切到正文色（不刷整行背景，
   // 转录视觉保持安静）。
   const [hovered, setHovered] = React.useState(false)
   const hoverProps = onClick !== undefined
@@ -128,14 +137,14 @@ export function AssistantThinkingMessage({
       <Box flexDirection="row">
         <Text>{minimalUi ? frameText : chalk.rgb(pulseColor.r, pulseColor.g, pulseColor.b).bold(frameText)}</Text>
         {/* 流式行同样可点击折叠（hover 提亮标签给出指示，与落定态一致） */}
-        <Text dimColor={!hovered} color={hovered ? 'text' : undefined} italic>{` ${label}`}</Text>
+        <Text color={minimalUi ? undefined : hovered ? 'text' : 'warning'}>{` ${label}`}</Text>
       </Box>
     ) : (
-      <Text italic dimColor={!hovered} color={hovered ? 'text' : undefined}>{`${minimalUi ? '*' : THINKING_SETTLED_MARKER} ${label}`}</Text>
+      <Text color={minimalUi ? undefined : hovered ? 'text' : 'warning'}>{`${minimalUi ? '*' : verbose ? THINKING_EXPANDED_MARKER : THINKING_SETTLED_MARKER} ${label}`}</Text>
     )
 
   if (preview) {
-    // Live ticker: the model's last few reasoning lines, dimmed, one Text
+    // Live ticker: the model's last few reasoning lines, accented, one Text
     // per row so each truncates to the width independently, padded to a
     // constant PREVIEW_ROWS-tall block that follows the stream. The folded
     // summary takes over when the step settles. The LAST row truncates
@@ -152,12 +161,11 @@ export function AssistantThinkingMessage({
       (_, i) => visible[i] ?? ' ',
     )
     return (
-      <Box
-        flexDirection="column"
+      <ThinkingRow
         marginTop={marginTopOnTurn ? 1 : 0}
-        backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
+        isSelected={isSelected}
         onClick={onClick}
-        {...hoverProps}
+        hoverProps={hoverProps}
       >
         {header}
         <Box
@@ -175,7 +183,7 @@ export function AssistantThinkingMessage({
               <Text dimColor italic>{'│ '}</Text>
               <Box flexDirection="row" flexGrow={1}>
                 <Text
-                  dimColor
+                  color={minimalUi ? undefined : 'warning'}
                   italic
                   wrap={i === rows.length - 1 ? 'truncate-start' : 'truncate'}
                 >
@@ -185,39 +193,69 @@ export function AssistantThinkingMessage({
             </Box>
           ))}
         </Box>
-      </Box>
+      </ThinkingRow>
     )
   }
 
   if (!verbose) {
     return (
-      <Box
+      <ThinkingRow
         marginTop={marginTopOnTurn ? 1 : 0}
-        backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
+        isSelected={isSelected}
         onClick={onClick}
-        {...hoverProps}
+        hoverProps={hoverProps}
       >
         {header}
-      </Box>
+      </ThinkingRow>
     )
   }
 
   return (
-    <Box
-      flexDirection="column"
-      gap={1}
+    <ThinkingRow
       marginTop={marginTopOnTurn ? 1 : 0}
-      width="100%"
-      backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
+      isSelected={isSelected}
       onClick={onClick}
-      {...hoverProps}
+      hoverProps={hoverProps}
+      gap={1}
     >
       {header}
       <Box paddingLeft={2}>
         {/* StreamingMarkdown: the live thinking text grows per token — the
           incremental stable-prefix + tail budget keeps the per-frame layout
           cost at O(new content) instead of re-laying out the whole block. */}
-        <StreamingMarkdown dimColor>{thinking}</StreamingMarkdown>
+        <StreamingMarkdown>{thinking}</StreamingMarkdown>
+      </Box>
+    </ThinkingRow>
+  )
+}
+
+/** Shared unrailed shell for collapsed, preview and expanded reasoning. */
+function ThinkingRow({
+  marginTop,
+  isSelected,
+  onClick,
+  hoverProps,
+  gap = 0,
+  children,
+}: {
+  marginTop: number
+  isSelected: boolean
+  onClick?: ((event: ClickEvent) => void) | undefined
+  hoverProps: { onMouseEnter?: () => void; onMouseLeave?: () => void }
+  /** Blank rows between the header and the body (verbose view). */
+  gap?: number
+  children: React.ReactNode
+}): React.ReactNode {
+  return (
+    <Box
+      flexDirection="row"
+      marginTop={marginTop}
+      backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
+      onClick={onClick}
+      {...hoverProps}
+    >
+      <Box flexDirection="column" flexGrow={1} flexShrink={1} gap={gap}>
+        {children}
       </Box>
     </Box>
   )

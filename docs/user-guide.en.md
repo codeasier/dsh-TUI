@@ -85,6 +85,14 @@ dsh-tui
   type `/命令 ` first, then Tab).
 - Non-command input is a normal message. **Unknown commands are sent to the model as plain messages**.
 
+### 1.4 Reading Markdown and thinking
+
+Headings leave one blank line before the next block. Headings, strong text, emphasis, inline code, quotes, list markers/numbering and rules have dedicated [theme colors](themes.en.md). Soft-wrapped list lines align with the body; display-only padding is excluded from copied text. Thinking headers and streaming previews use the warning color at normal brightness. `Ctrl+O` expands the full text with Markdown colors rather than dimming the whole block. Minimal UI does not force these thinking colors.
+
+Code blocks with language/info text show that text verbatim as the header (for example, `ts title=demo`), without the opening ```` ``` ````. Untagged blocks keep the ```` ``` ```` cue. Existing syntax highlighting and indentation are unchanged; no code-block background is added. Selecting the header also copies its label. Soft-wrapped rows still join into logical lines, but display indentation and expanded tabs can differ from the original source; copying is not guaranteed to round-trip the original code or Markdown fences.
+
+Areas too narrow for both the marker and body fall back to ordinary wrapping. If the performance budget clips an exceptionally long streaming tail past its list context, that tail temporarily renders as ordinary text; the settled message restores the complete list layout.
+
 ## 2. Keymap quick reference
 
 > In the tables, `Ctrl` on macOS can usually be swapped for `⌘` (`⌘V` `⌘O` `⌘R` `⌘T` `⌘L` `⌘Enter`);
@@ -376,7 +384,7 @@ The command menu = built-in commands (58, aliases included) + DSH registry comma
 | `/effort` | `status` / `<id>` | reasoning effort: no-arg slider (`←/→` adjust); `status` current level; `<id>` set directly. Persisted to `~/.dsh-tui/effort.json`; new-session start level follows /settings `effortDefault` (§5.3) |
 | `/thinking` | none | extended-thinking display toggle (thinking expands item by item while streaming) |
 | `/tokens` | none | three separate figures, never two different quantities side by side: **this request**'s upload (input + cache read + cache write — the harness's four buckets are disjoint), the **session totals** (uncached input / output / cache read / cache write), and **context occupancy** |
-| `/activity` | `frames <名>` / `status` | working-status animation: no-arg selector, `frames <名>` sets directly (includes `random`), default `moon8`. Persisted to `~/.dsh-tui/working-activity.json` |
+| `/activity` | `frames <名>` / `status` | working-status animation: no-arg selector, `frames <名>` sets directly (includes `random`), default `moon` (text semicircles); existing saved selections stay unchanged. Persisted to `~/.dsh-tui/working-activity.json` |
 | `/preset` | `<id>` / `status` | agent preset: `standard` / `ptc` (old 0.1.1 name `code`) / `minimal` / `cordis` / **Liangshen mode `liangshen`**; **cannot switch an already-started session**. Persisted to `~/.dsh-tui/agent-preset.json` |
 | `/theme` | `<名字>` / `status` | theme: no-arg selector; `<名字>` switch directly; `status` current theme (auto appends the OSC 11 result). Persisted to `~/.dsh-tui/theme.json` |
 | `/color` | no-arg / `<名>` / `status` / `reset` | session accent color: no-arg opens the palette (`↑/↓` pick, `Enter` apply); `<名>` set directly; `reset` back to default. Colors `red/orange/yellow/green/blue/purple/pink/cyan`, saved per session |
@@ -390,6 +398,7 @@ The command menu = built-in commands (58, aliases included) + DSH registry comma
 |---|---|---|
 | `/provider` | none | interactive model-provider wizard (add / edit / delete; standard-profile account sign-in includes DeepSeek on DSH 0.2.0-rc.1+, plus ChatGPT/Codex / Claude / Grok and, when supported by host pi-ai, OpenAI direct / Meta Muse) |
 | `/auth` | `status` / `login [provider]` / `logout <provider>` | inspect account status, sign in, or sign out (`deepseek-account` for DeepSeek; `openai-codex` / `anthropic` / `xai` for pi-ai subscriptions; newer pi-ai also `openai` / `meta`) |
+| `/fast` | none / `toggle` / `on` / `off` / `status` | fast switch registered by the OAuth plugin: bare/`toggle` switches, `on` sets `priority`, `off` sets `default`, `status` reports; applies from the next model request, leaving `effort` unchanged |
 | `/login` | none | credential status (source, store writability, base URL; account states are listed when the OAuth module is mounted) |
 | `/logout` | none | logout notes (env source: delete the variable and restart) |
 | `/permission` | none / `<preset>` / `status` | view/switch permission preset and policy (no arg opens the selector) |
@@ -400,6 +409,15 @@ The command menu = built-in commands (58, aliases included) + DSH registry comma
 | `/plugins` | `check <dsh-plugin.json 路径>` | plugin diagnostics: trust banner + host descriptor + authorization matrix + ledger; `check` validates a manifest and reports compatibility |
 | `/update` | none | update the TUI and auto-restart to resume the session (only via `dsh --profile`; rejected mid-turn) |
 | `/terminal-setup` | none | terminal setup advice (Windows Terminal ≥110 columns, paste keys) |
+
+`/fast` covers all supported OAuth routes registered by this plugin in the
+current TUI process (`openai-codex-responses` / `openai-responses`), not just
+the current model or session; other protocols and other plugins' routes stay
+unchanged. It is not persisted: restarting restores the optional
+`config.serviceTier` startup default; unset means off/provider default. An
+unmounted OAuth entry does not provide the command; a mounted entry with no
+successfully registered supported route reports a clear unavailable error.
+The backend owns tier acceptance and quota. See [built-in subscription OAuth](configuration.en.md#built-in-subscription-oauth).
 
 ### 3.5 Skills
 
@@ -540,6 +558,36 @@ An empty session shows the whale logo area at the top (scrolls away with the con
 - Pixel whale art and idle behavior ported from [dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale) (author
   [@lhh010](https://github.com/lhh010)), with thanks.
 
+**Transcript block hierarchy**
+
+- **User turn**: a full-width band (`userPromptBackground`) with a `▌` bar on the left and the prompt in
+  bold gold after `❯` — the anchor your eye lands on first when scrolling back through a long session.
+- **Assistant prose**: column 0, normal brightness, **no prefix marker at all**.
+- **Machine activity** (tool cards / thinking / subagents / background jobs / `!` shell rows) is
+  distinguished from prose by a left rail. Tool cards have their own background and a continuous left
+  border through the title, preview and expanded body. Cards are separated by one blank line;
+  spacing from prose and user turns is preserved too.
+- **Background jobs**: foreground bash/pwsh calls show only their tool card. Commands explicitly started
+  in the background or handed off after a wait timeout also show an independent job card and appear in
+  `/jobs`. Job cards, `/jobs`, notifications and the status bar prefer the persisted call's description
+  (`args.description`), falling back to the upstream label when absent; replay uses the same description,
+  without extra model-generated summaries. Job IDs remain available for `job_output` and stopping tasks,
+  and `/jobs` details retain the actual command.
+
+**Tool previews and thinking summaries** (default on)
+
+- Settled thinking still folds to one line, `│ + 思考 · 7s`. Tool cards show the command/title plus a
+  short output preview: up to **3 text lines** or **8 diff rows**. Terminal titles use `$ command`;
+  other tools show their name and arguments or path.
+- Very narrow terminals fall back to unified diffs even with `split` selected; large-diff previews
+  also use unified layout. Expanding still shows the complete diff, with side-by-side layout when
+  the available width and layout setting allow it.
+- Settled tool summaries use the theme text color without bold. Long commands and arguments truncate to the available width without continuation rows; hover reveals truncated header content only. Truncated output previews have no tooltip—click or `Ctrl+O` opens the full text. Running, failed and hovered states remain distinct, and expanded cards retain category colors.
+- Open/close: **click the tool card or thinking summary**, or press `Ctrl+O` to toggle detail for the
+  whole transcript. A thinking block's `+` becomes `-` while it is open.
+- Expanded, thinking shows its full text and a tool card its complete command and output (uncapped).
+  Failed cards retain the `✗` marker and failure hint.
+
 **Long single-line fold** (default on)
 
 - Text with **a single line over 1000 chars** folds into
@@ -601,20 +649,20 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | splashFont | big-text face on the header splash: Daily rotation (default, changes with the local date) / bold / square / bevel / wide / dot matrix / stencil / thin (classic) / slab. Picking a face pins it; picking Daily rotation restores the rotation. Applies immediately |
 | whaleGirl | maid portrait (default off): swaps the header's pixel whale for the author-drawn maid as a **real raster** (Kitty/Sixel); falls back to the pixel whale without graphics support |
 | diffLayout | Edit/Write diff layout: auto (two columns ≥110 cols) / split / unified |
-| thinkingFold | thinking block: preview (2-3 line preview + folded when settled) / full (expanded to end of turn) |
+| thinkingFold | thinking block: preview (2-3 line live preview, folded to a single `+ 思考 · Ns` row when settled, the mark flipping to `-` while open) / full (expanded to end of turn) |
 | btw.contextBudget | Total character budget of recent Q/A pairs carried into a `/btw` follow-up (default 24000, range 1000-200000); oldest whole pairs are dropped first. Applies immediately |
 | btw.contextTurns | Number of most recent completed Q/A pairs explicitly carried into a `/btw` follow-up (default 4, range 1-8); older pairs stay in the thread and panel but are omitted from the request. Applies immediately |
 | jobGroupFold | consecutive background-job cards: auto (default — runs of 2+ group, a settled run of 3+ folds into its summary line) / always (any run of 2+ folds right away, live jobs included) / never (never folds on its own, every card stays). The group header summarizes status and total time; click it or press Ctrl+O to expand |
 | effortDefault | default reasoning effort: auto / off / low / high / max. Start level for new sessions (details below) |
-| smoothStreaming | smooth streaming output (default on): replies/thinking/tool-card text reveal at ~30fps; replay/history always direct |
-| toolBackground | tool-card background emphasis: none / subtle / strong |
+| smoothStreaming | smooth streaming output (default on): replies and expanded thinking reveal at ~30fps; replay/history always direct. Tool cards show titles and short previews by default; details opened by click or Ctrl+O paint complete |
+| toolBackground | tool-card background emphasis: none (off) / subtle (default) / strong; an explicit none remains unfilled |
 | turnUsageRow | Turn-usage row (default off): show a per-turn summary of tokens, cache, duration and retries; `/tokens`, `/status` and the footer token hover are unaffected |
 | mermaidDiagrams | Mermaid diagrams (default on): ```` ```mermaid ```` blocks render as character diagrams, forming while streaming; too-wide or unsupported types keep source with the required columns. Applies immediately |
 | mathRendering | LaTeX math (default `auto`; lives on the **Formula** subpage of `/settings`): how `$…$` / `\(…\)` inline and `$$…$$` / `\[…\]` / bare display-environment (`\begin{align}` …) block formulas in replies show. `auto` uses the best available renderer (today Unicode text, with fractions and limits stacked in blocks), `image` typesets formulas with MathJax as terminal images when the terminal has graphics — the Kitty graphics protocol (Kitty, Ghostty, WezTerm, iTerm2…) or Sixel (Windows Terminal 1.22+, xterm, foot, WezTerm) — in the theme's text color (block formulas up to 16 rows; inline formulas as one-row images when a single row can hold them legibly; still-streaming formulas, dimmed thinking, terminals without graphics, formulas too small on one row, and any render failure fall back to Unicode), `unicode` pins Unicode text, `source` keeps the TeX. Unsupported, still-streaming, or too-wide formulas keep their source (a too-wide block first falls back to one line). Prices (`$5`), shell variables (`$HOME`), and `$` in code are left alone. The older `latexMath: false` still means `source`. **Click a formula image** to open the preview card: it re-typesets at twice the cell size, zooms 100–800%, pans, closes on `Esc` or a click outside, and titles itself with the formula's TeX. On Sixel the formulas carry **no backing** (only their strokes), so the terminal background or wallpaper shows through. Illustrations that ship with their own transparent margins — the `whaleGirl` raster — float the same way; photographs, screenshots, and images inside cards still composite onto a colour, because Sixel cannot express soft alpha. Applies immediately |
 | mathImageScale | formula image size (default `auto`; same **Formula** subpage), used with LaTeX math → Image: `auto` matches the body text, `large` / `xlarge` set **display** formulas bigger. Terminal images are drawn one device pixel per pixel, so "bigger" literally means more pixels per stroke — the only sharpness lever there is. Inline formulas are unaffected (they must fit one row). Applies immediately |
 | scrollGutter | transcript gutter: timeline (turn timeline, default) / scrollbar (proportional) / hidden. Applies immediately |
 | pageMargin | page margin: inset from all four terminal edges. Presets none / slim / normal (default) / roomy, or custom `NxM` (details below). Applies immediately |
-| foldTerminalCommand | fold terminal commands (default off): multi-line commands on terminal cards (Bash/PowerShell) fold to first line + count; `Ctrl+O` or click to expand |
+| foldTerminalCommand | terminal command summary (default off): on keeps the first source line + count; off flattens multi-line commands into one summary row. Both truncate to width; `Ctrl+O` or click opens the complete command |
 | expandEditor | full-screen draft editor (default on): `⛶` at the input line end or `Ctrl+Shift+E` expands to a full-screen editor; `Ctrl+Enter` send, `Esc` collapse (draft kept); off hides both entries |
 | statusBar.* | all status-bar toggles above (compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory; statusBar.sessionId is the bottom-bar display toggle, unrelated to cordis startup sessionId) |
 
@@ -623,7 +671,7 @@ last `/effort` (effort.json) > model default.
 
 **scrollGutter**: the scrollbar track can be dragged directly; `Shift`/`Alt`/`Ctrl`+drag is still text selection.
 
-**pageMargin**: custom `NxM` = `N` columns left/right, `M` rows top/bottom (cap 8x4); only `N` means 1 row top/bottom.
+**pageMargin**: default `normal` is 3 columns per side and 1 row top/bottom. Custom `NxM` = `N` columns left/right, `M` rows top/bottom (cap 8x4); only `N` means 1 row top/bottom; `2x1` retains the previous inset.
 
 Namespaces not declared as TUI blocks are listed read-only; edit the profile config by hand (`~/.dsh/settings.yaml` on older hosts).
 These settings are **not in /settings**, edit `$DSH_HOME/profiles/dsh-tui/cordis.patch.yml`:
@@ -672,7 +720,7 @@ When dsh exits unexpectedly, safe mode gives a **read-only** environment diagnos
 | Theme | `/theme` | `auto` (OSC 11 follows terminal background) / `light` / `dark` / `dark-ansi`; `/theme <名>` direct; `/theme status` for the result |
 | Custom theme | manual | `~/.dsh-tui/themes/<名>.json`, `{base, colors}` format, hot-swap on select; naming it `auto` gets shadowed by the built-in |
 | Language | `/lang` | `en` / `zh` hot switch; priority `DSH_TUI_LANG` > profile config (legacy: settings.yaml user layer > cordis.yml) > persisted |
-| Status animation | `/activity` | selector or `/activity frames <名>`; default `moon8`, `random` randomizes |
+| Status animation | `/activity` | selector or `/activity frames <名>`; default `moon`, `random` randomizes |
 
 **Theme priority**: `DSH_TUI_THEME` > `~/.dsh-tui/theme.json` > OSC 11 terminal-background detection > dark fallback.
 

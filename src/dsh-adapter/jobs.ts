@@ -149,10 +149,10 @@ export class BackgroundJobStore {
   private readonly jobs = new Map<string, BackgroundJobState>()
   /** Kernel-ring read state per job id (own cursor — never the model's). */
   private readonly kernelReads = new Map<string, KernelReadState>()
-  /** Commands captured from start acks that arrived before the registry
-   *  registered the job (the tool/result stream and the registry commit can
-   *  race); consumed on registration. */
-  private readonly pendingCommands = new Map<string, string>()
+  /** Durable hand-offs prove a shell job actually left the foreground. Keep
+   *  call metadata separately from registry facts, including a bounded set of
+   *  acks arriving before the roster (replay and live delivery can race). */
+  private readonly backgroundStarts = new Map<string, { command?: string; description?: string }>()
 
   constructor(private readonly events: BackgroundJobEvents = {}) {}
 
@@ -172,13 +172,13 @@ export class BackgroundJobStore {
       seen.add(snap.id)
       const prev = this.jobs.get(snap.id)
       if (prev === undefined) {
-        const command = this.pendingCommands.get(snap.id)
-        if (command !== undefined) this.pendingCommands.delete(snap.id)
+        const start = this.backgroundStarts.get(snap.id)
         this.jobs.set(snap.id, {
           id: snap.id,
           kind: snap.kind,
           label: snap.label,
-          ...(command === undefined ? {} : { command }),
+          ...(start?.command === undefined ? {} : { command: start.command }),
+          ...(start?.description === undefined ? {} : { description: start.description }),
           status: snap.status,
           ...(snap.detail === undefined ? {} : { detail: snap.detail }),
           ...(snap.progress === undefined ? {} : { progress: snap.progress }),
@@ -256,6 +256,8 @@ export class BackgroundJobStore {
         if (this.jobs.size <= JOBS_MAX_TRACKED) break
         if (isTerminal(job.status)) {
           this.jobs.delete(id)
+          this.backgroundStarts.delete(id)
+          this.kernelReads.delete(id)
           changed = true
         }
       }
@@ -264,21 +266,36 @@ export class BackgroundJobStore {
   }
 
   /**
-   * Record the full command that started a job, captured from its tool
-   * call's args via the `started background job <id>` ack. May arrive
-   * before the registry registers the job — the command is parked and
-   * consumed by the next replace().
+   * Confirm a background hand-off (explicit start, timeout promotion, or
+   * job_output), optionally recording its command and single-line overview.
+   * Later output-only proofs never erase metadata from the originating call.
+   * Registry membership alone is not evidence: modern bash/pwsh also register
+   * foreground calls.
    */
-  onStarted(id: string, command: string): void {
+  onStarted(id: string, command?: string, description?: string): void {
     const job = this.jobs.get(id)
-    if (job === undefined) {
-      this.pendingCommands.set(id, command)
-      return
+    const previous = this.backgroundStarts.get(id)
+    const start = {
+      command: command ?? previous?.command,
+      description: description ?? previous?.description,
     }
-    if (job.command !== command) {
-      job.command = command
+    this.backgroundStarts.set(id, start)
+    // A replay can contain many already-expired jobs absent from the roster.
+    // Bound those pending proofs without evicting a tracked live job's proof.
+    const pending = [...this.backgroundStarts.keys()].filter(key => !this.jobs.has(key))
+    for (const key of pending.slice(0, Math.max(0, pending.length - JOBS_MAX_TRACKED))) this.backgroundStarts.delete(key)
+    if (job !== undefined && (previous === undefined || job.command !== start.command || job.description !== start.description)) {
+      if (start.command !== undefined) job.command = start.command
+      if (start.description !== undefined) job.description = start.description
       this.events.onChanged?.()
     }
+  }
+
+  /** Shell records become independent UI jobs only after a durable hand-off.
+   *  Other producers already represent independent work at registration. */
+  isBackground(id: string): boolean {
+    const job = this.jobs.get(id)
+    return job !== undefined && ((job.kind !== 'bash' && job.kind !== 'pwsh') || this.backgroundStarts.has(id))
   }
 
   /**
@@ -408,15 +425,25 @@ export class BackgroundJobStore {
     return count
   }
 
-  /** Drop everything (session swap / transcript wipe). */
-  reset(): void {
-    if (this.jobs.size === 0) return
+  /** Drop session state. Reanchoring after replay preserves only hand-offs
+   *  waiting for the new roster, never proofs belonging to the old roster. */
+  reset(options: { preservePendingStarts?: boolean } = {}): void {
+    const changed = this.jobs.size > 0
+    if (options.preservePendingStarts) {
+      for (const id of this.jobs.keys()) this.backgroundStarts.delete(id)
+    } else this.backgroundStarts.clear()
     this.jobs.clear()
     this.kernelReads.clear()
-    this.events.onChanged?.()
+    if (changed) this.events.onChanged?.()
   }
 }
 
 // The formatter is backend-neutral (src/channel/job-format.ts); re-exported
 // here for the existing importers.
 export { formatJobDuration } from '../channel/job-format.js'
+
+/** All job surfaces prefer the durable call overview over the registry label. */
+export function jobTitleOf(job: Pick<BackgroundJobState, 'label' | 'description'>): string {
+  return job.description || job.label
+}
+

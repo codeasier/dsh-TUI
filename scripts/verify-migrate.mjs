@@ -462,6 +462,7 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
   const prevProfile = process.env.USERPROFILE
   const prevDsh = process.env.DSH_HOME
   const prevGrok = process.env.GROK_HOME
+  const prevOpenCode = process.env.OPENCODE_DB
   const prevStdoutWrite = process.stdout.write.bind(process.stdout)
   const sink = []
   process.stdout.write = (chunk) => { sink.push(String(chunk)); return true }
@@ -473,6 +474,7 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
   process.env.HOME = home
   process.env.USERPROFILE = home
   process.env.GROK_HOME = join(home, '.grok')
+  process.env.OPENCODE_DB = join(home, 'opencode.db')
   process.env.DSH_HOME = dshHome
   // This section swaps process.stdout.write to measure the CLI's own output,
   // and check() logs through console.log — straight into the sink. Report
@@ -513,6 +515,8 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
     else process.env.USERPROFILE = prevProfile
     if (prevGrok === undefined) delete process.env.GROK_HOME
     else process.env.GROK_HOME = prevGrok
+    if (prevOpenCode === undefined) delete process.env.OPENCODE_DB
+    else process.env.OPENCODE_DB = prevOpenCode
     if (prevDsh === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = prevDsh
     rmSync(home, { recursive: true, force: true })

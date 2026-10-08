@@ -11,7 +11,9 @@
  * - SurfaceEdgesContext re-provided per column: chat bleeds left into the
  *   page margin but stops at the divider, the panel bleeds right;
  * - a numeric-width box with overflow="hidden" (never "%": ink resolves
- *   percentages against the padding-inclusive parent).
+ *   percentages against the padding-inclusive parent). The chat box also
+ *   includes the left canvas margin, keeping card bleed visible without
+ *   letting it cross the divider; its content origin stays unchanged.
  *
  * PageInsetContext is deliberately NOT overridden: the chat column's
  * origin is still the content-area origin, so screen-coordinate overlays
@@ -117,13 +119,14 @@ export function SidePanelLayout({
     [panelColumns, rows, screenRows],
   )
   return (
-    <Box flexDirection="row" flexGrow={1} flexShrink={1} overflow={split ? 'hidden' : undefined}>
+    <Box flexDirection="row" flexGrow={1} flexShrink={1} marginLeft={split ? -outerEdges.left : undefined} overflow={split ? 'hidden' : undefined}>
       <SurfaceEdgesContext.Provider value={split ? chatEdges : outerEdges}>
         <TerminalSizeContext.Provider value={chatSize}>
           <Box
             flexDirection="column"
             flexGrow={split ? 0 : 1}
-            width={geometry === null ? undefined : geometry.chat}
+            width={geometry === null ? undefined : geometry.chat + outerEdges.left}
+            paddingLeft={split ? outerEdges.left : undefined}
             flexShrink={0}
             overflow={split ? 'hidden' : undefined}
             onClick={split ? onActivateChat : undefined}

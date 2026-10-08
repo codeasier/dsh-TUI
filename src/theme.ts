@@ -51,13 +51,26 @@ export type Theme = {
   subtle: string
   suggestion: string
   remember: string
+  /** Badge fill, distinct from the overall session surface. */
   background: string
+  /** Overall session canvas, including the PageMargin surface. */
+  sessionBackground: string
   // Semantic colors
   success: string
   error: string
   warning: string
   merged: string
   warningShimmer: string
+  // Markdown semantics, independently overridable from UI accents.
+  markdownHeading: string
+  markdownStrong: string
+  markdownEmph: string
+  markdownCode: string
+  markdownLink: string
+  markdownBlockQuote: string
+  markdownListItem: string
+  markdownListEnumeration: string
+  markdownHorizontalRule: string
   // Diff colors
   diffAdded: string
   diffRemoved: string
@@ -116,6 +129,11 @@ export type Theme = {
   inputBackground: string
   userMessageBackground: string
   userMessageBackgroundHover: string
+  /** User-turn band fill in the transcript — the anchor the eye lands on when
+   *  scanning back through turns. `''` = no fill (the `▌` bar and the gold
+   *  label carry the turn alone). Distinct from `userMessageBackground`,
+   *  which the trajectory scene pairs with assistant rows. */
+  userPromptBackground: string
   messageActionsBackground: string
   selectionBg: string
   bashMessageBackgroundColor: string
@@ -317,19 +335,29 @@ const darkTheme: Theme = {
   suggestion: rgb('#ABC2EC'), // Border Blue — focus/selection
   remember: rgb('#ABC2EC'),
   background: rgb('#5E88CC'), // Accent Blue — badge fill
+  sessionBackground: rgb('#191919'), // Neutral gray session canvas
   success: rgb('#82B89D'), // Mist green (from #4E9675)
   error: rgb('#DA8A93'), // Soft rose
   warning: rgb('#D8B270'), // Soft amber
   merged: rgb('#B3A0D4'), // Soft violet (matches autoAccept)
   warningShimmer: rgb('#E4C78E'),
+  markdownHeading: rgb('#B3A0D4'),
+  markdownStrong: rgb('#F5B35D'),
+  markdownEmph: rgb('#D8B270'),
+  markdownCode: rgb('#8DCB9A'),
+  markdownLink: rgb('#68C6CF'),
+  markdownBlockQuote: rgb('#B8B1A6'),
+  markdownListItem: rgb('#C7AA85'),
+  markdownListEnumeration: rgb('#68C6CF'),
+  markdownHorizontalRule: rgb('#74808D'),
   diffAdded: rgb('#27392C'),
   diffRemoved: rgb('#3E2A2C'),
   diffAddedDimmed: rgb('#2B352C'),
   diffRemovedDimmed: rgb('#362B2C'),
   diffAddedWord: rgb('#57956B'),
   diffRemovedWord: rgb('#B26671'),
-  toolCardBackground: rgb('#242B3A'), // lighter blue-grey card surface
-  toolCardBackgroundDim: rgb('#1C2330'), // deeper blue substrate
+  toolCardBackground: rgb('#383838'), // neutral gray hover/strong surface
+  toolCardBackgroundDim: rgb('#2A2A2A'), // neutral gray card substrate
   toolDotExec: rgb('#7FAE99'), // sage green — bash/pwsh
   toolDotRead: rgb('#82B8C7'), // cyan blue — read/grep/glob
   toolDotWrite: rgb('#B3A0D4'), // soft violet — edit/write
@@ -358,10 +386,11 @@ const darkTheme: Theme = {
   // coloured block by naming a fill.
   cursor: '',
   mascotBody: rgb('#D98A63'), // Warm mascot orange
-  inputBackground: rgb('#000000'),
+  inputBackground: rgb('#303030'),
   userMessageBackground: '', // user turn: no fill, gold bold text only (Kimi style)
-  userMessageBackgroundHover: rgb('#3B5BDB'), // hover/expand: blue block with gold text
-  messageActionsBackground: rgb('#2E333D'),
+  userMessageBackgroundHover: rgb('#404040'), // neutral hover/expand surface
+  userPromptBackground: rgb('#303030'), // neutral user-turn/composer surface
+  messageActionsBackground: rgb('#404040'),
   selectionBg: rgb('#3B4A66'), // Mist-blue tint on dark
   bashMessageBackgroundColor: rgb('#2C3038'),
   memoryBackgroundColor: rgb('#30353D'),
@@ -501,11 +530,21 @@ const lightTheme: Theme = {
   suggestion: rgb('#3F6CC4'), // Primary Blue — focus/selection
   remember: rgb('#27478C'), // Deep Outline — picker titles
   background: rgb('#3F6CC4'), // Primary Blue — badge fill
+  sessionBackground: rgb('#F2F2F2'), // Light gray session canvas
   success: rgb('#4E9675'),
   error: rgb('#C65D6B'), // Muted rose-red
   warning: rgb('#C08A3E'), // Muted amber
   merged: rgb('#9B86B8'), // Muted violet (matches autoAccept)
   warningShimmer: rgb('#D0A050'),
+  markdownHeading: rgb('#7953AA'),
+  markdownStrong: rgb('#8A6A00'),
+  markdownEmph: rgb('#8A6A00'),
+  markdownCode: rgb('#276941'),
+  markdownLink: rgb('#087C8A'),
+  markdownBlockQuote: rgb('#766A55'),
+  markdownListItem: rgb('#85613B'),
+  markdownListEnumeration: rgb('#087C8A'),
+  markdownHorizontalRule: rgb('#8991A0'),
   diffAdded: rgb('#DCEBDD'),
   diffRemoved: rgb('#F2DEDE'),
   diffAddedDimmed: rgb('#E4EFE5'),
@@ -538,9 +577,10 @@ const lightTheme: Theme = {
   ignitionDim: rgb('#F0F0F2'),
   cursor: '',
   mascotBody: rgb('#D98A63'), // Warm mascot orange
-  inputBackground: rgb('#F6F3ED'),
+  inputBackground: rgb('#FFFFFF'),
   userMessageBackground: '', // user turn: no fill in light mode, gold text only
-  userMessageBackgroundHover: rgb('#DCE4FB'), // subtle blue tint on hover/expand
+  userMessageBackgroundHover: rgb('#E8E8E8'), // neutral gray hover/expand surface
+  userPromptBackground: rgb('#FFFFFF'), // white user-turn/composer surface
   messageActionsBackground: rgb('#E4D9E5'),
   selectionBg: rgb('#D5DEF2'), // Mist-blue tint on warm white
   bashMessageBackgroundColor: rgb('#EAE1D3'),
@@ -866,11 +906,21 @@ const darkAnsiTheme: Theme = {
   suggestion: 'ansi:blueBright',
   remember: 'ansi:blueBright',
   background: 'ansi:cyanBright',
+  sessionBackground: 'ansi:black', // Restrained 16-color compatibility surface
   success: 'ansi:greenBright',
   error: 'ansi:redBright',
   warning: 'ansi:yellowBright',
   merged: 'ansi:magentaBright',
   warningShimmer: 'ansi:yellowBright',
+  markdownHeading: 'ansi:magentaBright',
+  markdownStrong: 'ansi:yellowBright',
+  markdownEmph: 'ansi:yellowBright',
+  markdownCode: 'ansi:greenBright',
+  markdownLink: 'ansi:cyanBright',
+  markdownBlockQuote: 'ansi:white',
+  markdownListItem: 'ansi:yellow',
+  markdownListEnumeration: 'ansi:cyanBright',
+  markdownHorizontalRule: 'ansi:white',
   diffAdded: 'ansi:green',
   diffRemoved: 'ansi:red',
   diffAddedDimmed: 'ansi:green',
@@ -912,6 +962,9 @@ const darkAnsiTheme: Theme = {
   inputBackground: 'ansi:black',
   userMessageBackground: '',
   userMessageBackgroundHover: 'ansi:blue',
+  // 16-color terminals have no subtle band: the `▌` bar and the gold label
+  // carry the turn, exactly like `bashMessageBackgroundColor`.
+  userPromptBackground: '',
   messageActionsBackground: 'ansi:blackBright',
   selectionBg: 'ansi:blue',
   bashMessageBackgroundColor: 'ansi:black',
@@ -930,6 +983,18 @@ const darkAnsiTheme: Theme = {
   subagentStatusCompleted: 'ansi:greenBright',
   subagentStatusFailed: 'ansi:redBright',
 }
+
+export const MARKDOWN_THEME_FALLBACKS = Object.freeze({
+  markdownHeading: 'accent',
+  markdownStrong: 'toolNameMutate',
+  markdownEmph: 'warning',
+  markdownCode: 'permission',
+  markdownLink: 'ide',
+  markdownBlockQuote: 'warning',
+  markdownListItem: 'permission',
+  markdownListEnumeration: 'ide',
+  markdownHorizontalRule: 'inactive',
+} as const satisfies Partial<Record<keyof Theme, keyof Theme>>)
 
 interface NormalizedThemeCacheEntry {
   readonly signature: string
@@ -958,7 +1023,8 @@ export function normalizeThemePalette(value: unknown): Theme | undefined {
   const raw = value as Record<string, unknown>
   const hasDeprecatedKey = (Object.keys(DEPRECATED_THEME_KEY_ALIASES) as DeprecatedThemeKey[])
     .some(key => Object.prototype.hasOwnProperty.call(raw, key))
-  if (!hasDeprecatedKey && !Object.keys(raw).some(isRetiredThemeKey)) return value as Theme
+  const missingMarkdown = Object.keys(MARKDOWN_THEME_FALLBACKS).some(key => typeof raw[key] !== 'string')
+  if (!hasDeprecatedKey && !missingMarkdown && !Object.keys(raw).some(isRetiredThemeKey)) return value as Theme
   const signature = themeObjectSignature(raw)
   const cached = normalizedThemeCache.get(raw)
   if (cached?.signature === signature) return cached.palette
@@ -969,6 +1035,11 @@ export function normalizeThemePalette(value: unknown): Theme | undefined {
       normalized[canonical] = normalized[deprecated]
     }
     delete normalized[deprecated]
+  }
+  for (const [key, fallback] of Object.entries(MARKDOWN_THEME_FALLBACKS)) {
+    if (typeof normalized[key] !== 'string') {
+      normalized[key] = typeof normalized[fallback] === 'string' ? normalized[fallback] : darkTheme[fallback]
+    }
   }
   const palette = Object.freeze(normalized as Theme)
   normalizedThemeCache.set(raw, { signature, palette })

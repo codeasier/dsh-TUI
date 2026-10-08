@@ -113,6 +113,10 @@ Channel 只保留适合当前 TUI 的投影。长会话超过窗口后，旧行�
   开屏动画直落内容。
 - **显示宽度**：ANSI、组合字符、emoji 和东亚宽字符都按 terminal cell width 处理，
   不能用普通 JavaScript `string.length` 代替。
+- **分列复制溯源**：部分列绘制需要时，Screen 启用按显示单元保存的换行元数据，
+  随对应单元一起绘制、blit、滚动与清理。滚动轨和 `NoSelect` 侧栏不能覆盖聊天的
+  软换行；选区按实际包含的列读取信息，面板内起始的选区保留自身边界。行级
+  `softWrap` 只是兼容投影，不再充当分列复制的唯一真源。
 
 改动 `src/ink/` 或 Yoga 时，至少运行 CI 的问卷/工具卡回归，并按影响范围运行
 scroll、resize、copy-on-select 或 PTY 脚本。不要用普通 `console.log` 向活动 TUI 的

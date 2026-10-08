@@ -148,7 +148,7 @@ interface FakeJob {
 function makeJob(id: string, status: JobStatus, extra: Partial<FakeJob> = {}): FakeJob {
   const live = status === 'running' || status === 'stopping'
   const base: FakeJob = {
-    id, kind: 'pwsh', label: 'run ' + id, status,
+    id, kind: 'pwsh', label: id, status,
     startedAt: NOW - 4000, outputLines: [],
     ...(live ? {} : { finishedAt: NOW - 1000, detail: 'exit code: 0' }),
   }
@@ -392,7 +392,7 @@ console.log('--- G10: a lone card keeps the original rhythm ---')
     const iNote = idxOf(lines, 'note one')
     const iCard = idxOf(lines, 'job: pwsh-1')
     check('G10 单卡不成组（无组头/连接线）',
-      !frame.screen().includes('background jobs ×') && !(lines[iCard] ?? '').startsWith('│ ') && !(lines[iCard] ?? '').startsWith('└ '),
+      !frame.screen().includes('background jobs ×') && !(lines[iCard] ?? '').startsWith('╭ ') && !(lines[iCard] ?? '').startsWith('╰ '),
       JSON.stringify(lines[iCard]))
     check('G10 单卡保留块间空行', iCard === iNote + 2, 'iNote=' + iNote + ' iCard=' + iCard)
   })
@@ -515,7 +515,7 @@ console.log('--- G13: a long command label wraps in full ---')
     frame.rerender(renderList(rows, { expanded: true }))
     check('G13 长命令尾部可见（换行而非截断）', await settled(() => frame.screen().includes(TAIL)),
       frame.lines().filter(l => l.trim() !== '').slice(0, 5).join('|'))
-    const cardLines = frame.lines().filter(l => l.includes('job: pwsh-1') || l.includes('Get-ChildItem'))
+    const cardLines = frame.lines().filter(l => l.includes('job: ') || l.includes('Get-ChildItem'))
     check('G13 长命令占多行', cardLines.length >= 2, JSON.stringify(cardLines).slice(0, 300))
     check('G13 每个命令正文行都有节色边且没有词标签或树标', frame.lines().filter(line => line.includes('Get-ChildItem')).every(line => line.startsWith('│ ')) && !frame.screen().includes('⎿') && !frame.screen().includes('▾ script'), frame.lines().slice(0, 6).join('|'))
     frame.rerender(renderList(rows))

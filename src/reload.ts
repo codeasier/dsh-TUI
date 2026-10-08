@@ -29,6 +29,7 @@ import type { Lang } from './i18n.js'
 import type { ModelPref } from './modelPrefs.js'
 import type { ModelRoute } from './modelRoute.js'
 import { explicitModelRoute } from './modelRoute.js'
+import { DEFAULT_PRESET } from './components/activityFrames.js'
 
 /** The five boot-only preference surfaces /reload re-reads. */
 export type ReloadKind = 'theme' | 'lang' | 'preset' | 'model' | 'activity'
@@ -184,7 +185,7 @@ export function planReload(input: ReloadInput): ReloadPlan {
   } else if (input.activityPref === input.currentActivity) {
     unchanged.push('activity')
   } else {
-    apply.push({ kind: 'activity', from: input.currentActivity ?? 'moon8', to: input.activityPref })
+    apply.push({ kind: 'activity', from: input.currentActivity ?? DEFAULT_PRESET, to: input.activityPref })
   }
 
   return { apply, unchanged, skipped }

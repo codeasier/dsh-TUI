@@ -1,7 +1,8 @@
 /**
  * Provider routes this plugin owns: the pi-ai catalog providers that ship an
  * OAuth flow, mounted with their catalog models, wire implementations, and
- * OAuth flow objects untouched. Credential resolution is not wrapped at all —
+ * OAuth flow objects intact; an optional service tier wraps request shaping.
+ * Credential resolution is not wrapped at all —
  * the adapter's collection carries this plugin's `CredentialStore`
  * (`PiAiAuthInjection`), so requests resolve the stored OAuth credential
  * through the provider's own auth and refresh tokens under the store's lock.
@@ -105,6 +106,71 @@ function withModelOverrides(
   }
 }
 
+/** Wire protocols whose request body carries `service_tier`. */
+export const SERVICE_TIER_APIS: ReadonlySet<string> = new Set([
+  'openai-codex-responses',
+  'openai-responses',
+])
+
+/** One model row as the mounted catalog serves it. */
+type PiAiModel = ReturnType<PiAiProvider['getModels']>[number]
+
+type PiAiPayloadOptions = Pick<NonNullable<Parameters<PiAiProvider['streamSimple']>[2]>, 'onPayload'>
+
+/** A fixed startup tier or a runtime switch sampled once per request. */
+export type ServiceTierSource = string | (() => string | undefined)
+
+/**
+ * pi-ai 0.87.1's streamSimple drops provider-specific options while
+ * normalizing reasoning. Its common onPayload hook survives that conversion,
+ * so inject the body field there as well as the full-stream option. Preserve
+ * the caller's hook and never mutate its input or replacement payload.
+ */
+function withServiceTierOptions<TOptions extends PiAiPayloadOptions>(
+  model: PiAiModel,
+  options: TOptions | undefined,
+  serviceTier: ServiceTierSource,
+): TOptions | undefined {
+  if (!SERVICE_TIER_APIS.has(model.api)) return options
+  // Snapshot before awaiting caller hooks: toggles affect subsequent requests,
+  // never the payload of one already in progress.
+  const tier = typeof serviceTier === 'function' ? serviceTier() : serviceTier
+  if (tier === undefined) return options
+  const inject = (payload: unknown): Record<string, unknown> => {
+    if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+      throw new Error('dsh-auth: serviceTier requires an object request payload')
+    }
+    return { ...payload, service_tier: tier }
+  }
+  return Object.assign({}, options, {
+    serviceTier: tier,
+    onPayload: async (payload: unknown, requestModel: PiAiModel) => {
+      const body = inject(payload)
+      const replacement = await options?.onPayload?.(body, requestModel)
+      return replacement === undefined ? body : inject(replacement)
+    },
+  })
+}
+
+/**
+ * Wrap one catalog provider so every request for a `service_tier`-capable
+ * model carries the configured tier. The common payload hook runs before
+ * SSE/WebSocket dispatch and survives streamSimple option normalization.
+ * The native full-stream option is also retained. Models on
+ * any other protocol keep their options untouched, and the installed catalog
+ * object is never mutated — the clone mirrors {@link withModelOverrides}.
+ * Exported as the request-shaping seam beside {@link buildOAuthProfile}.
+ */
+export function withServiceTier(catalog: PiAiProvider, serviceTier: ServiceTierSource): PiAiProvider {
+  return {
+    ...catalog,
+    stream: (model, context, options) =>
+      catalog.stream(model, context, withServiceTierOptions(model, options, serviceTier)),
+    streamSimple: (model, context, options) =>
+      catalog.streamSimple(model, context, withServiceTierOptions(model, options, serviceTier)),
+  }
+}
+
 /**
  * Build the resolved profile one route registers under. Mirrors the fields
  * `PiAiAdapter` reads: identity for selectors, the idle timeout, retry
@@ -114,25 +180,30 @@ function withModelOverrides(
  * @param id - the OAuth provider route to mount.
  * @param modelOverrides - optional per-model catalog overrides (see
  *   {@link ModelOverride}); `undefined` serves the installed catalog unchanged.
+ * @param serviceTier - optional request-body `service_tier` carried by every
+ *   stream call on a capable model (see {@link withServiceTier}); `undefined`
+ *   mounts the catalog's stream behavior untouched.
  */
 export function buildOAuthProfile(
   id: string,
   modelOverrides?: Readonly<Record<string, ModelOverride>>,
+  serviceTier?: ServiceTierSource,
 ): ResolvedPiAiProviderProfile {
   if (!(OAUTH_PROVIDER_IDS as readonly string[]).includes(id)) {
     throw new Error(`dsh-auth: "${id}" is not an OAuth provider this build mounts (${OAUTH_PROVIDER_IDS.join(', ')})`)
   }
   const catalog = withModelOverrides(catalogProviderOf(id), modelOverrides)
+  const provider = serviceTier === undefined ? catalog : withServiceTier(catalog, serviceTier)
   // An older pi-ai catalog can know the route but not its newer OAuth flow
   // (notably `openai`). Explicit requests must fail at boot, not at /auth.
-  oauthOf(catalog)
+  oauthOf(provider)
   return {
     provider: id,
     displayName: catalog.name,
     streamIdleTimeoutMs: STREAM_IDLE_TIMEOUT_MS,
     retryPolicy: resolveRetryPolicy(undefined, `dsh-auth: provider "${id}" retryPolicy`),
     configuredMaxTokens: new Map(),
-    piProvider: catalog,
+    piProvider: provider,
     // Required since 0.1.5 (per-model pre-request diagnostics); this build
     // reports none. Older adapters never read the field, so carrying it is
     // harmless on a pre-0.1.5 host.

@@ -5,7 +5,7 @@ import { stringWidth } from '../../ink/stringWidth.js'
 import { useAnimationFrame } from '../../ink/hooks/use-animation-frame.js'
 import type { ToolCallView, ToolFileDiff, ToolResultView, ToolRow } from '../../dsh-adapter/channel.js'
 import { ToolUseLoader } from '../ToolUseLoader.js'
-import { SplitDiffView } from '../SplitDiffView.js'
+import { SplitDiffView, SPLIT_DIFF_MIN_WIDTH } from '../SplitDiffView.js'
 import { SyntaxText } from '../SyntaxText.js'
 import { useTooltip } from '../Tooltip.js'
 import { formatDuration } from '../../terminal-utils/format.js'
@@ -15,13 +15,17 @@ import { getLang, t, tOr, type I18nKey } from '../../i18n.js'
 import type { ToolBackground } from '../../tuiDisplayPrefs.js'
 import type { Theme } from '../../theme.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
+import { primaryComboString } from '../../utils/keymap.js'
 import { revealLinesOf, snapReveal } from '../smoothReveal.js'
 import { useRevealVersion } from '../../hooks/useRevealVersion.js'
-import { primaryComboString } from '../../utils/keymap.js'
 import { agentMessageStateColor, agentMessageStateText } from './TranscriptLeaves.js'
 import type { AgentMessageState } from './agentTeam.js'
 import { liveOutputMaxLines, liveOutputView } from './liveOutputLines.js'
 import { isPatchDiff, parseFilePatch, patchHeader, type ToolPatchDiff } from '../diffPatch.js'
+import { usePagePanelBleed } from '../PageMargin.js'
+// Left border + horizontal padding; kept in sync with the card Box below.
+const CARD_CHROME_WIDTH = 3
+const BODY_INDENT = 2
 
 type Props = {
   tool: ToolRow
@@ -31,7 +35,7 @@ type Props = {
   verbose: boolean
   /** Message-selection mode highlight. */
   isSelected?: boolean
-  /** Row expanded on its own (persistent hover-grey background). */
+  /** Row expanded on its own (disclosure indicator state). */
   isExpanded?: boolean
   /**
    * Mouse click (fullscreen): toggles the row's expansion — same action as
@@ -40,7 +44,7 @@ type Props = {
    */
   onClick?(event: ClickEvent): void
   /**
-   * Trajectory pointer, rendered as one more `⎿` line under a failed call.
+   * Trajectory pointer, rendered after the failed call's output preview.
    *
    * It appears on the NEWEST unseen failure only, so a session with a dozen
    * failed calls still shows exactly one pointer — the moment of failure is
@@ -52,6 +56,8 @@ type Props = {
   diffLayout?: 'auto' | 'split' | 'unified'
   /** Background treatment for the ordinary, unselected tool card surface. */
   toolBackground?: ToolBackground
+  /** Transcript surfaces extend into page margins, but never into the gutter. */
+  bleed?: boolean
   /**
    * Click-to-act (fullscreen): opens the file-action menu for the tool's
    * file path. When provided, the path in the card header (and diff path
@@ -225,10 +231,8 @@ function languageFromPath(path: string | undefined): string | undefined {
 }
 
 // --- structured body lines --------------------------------------------------
-// The tool's presentation view (dsh-tools presentCall/presentResult, captured
-// by the channel) becomes per-line render intents here. The convention is:
-// body hangs under a `  ⎿  ` gutter (first line) / blank continuation, so
-// tool output is visually nested under its header instead of flush-left.
+// The tool's presentation view (captured by the channel) becomes per-line
+// render intents. Output aligns with the title inside an independent card.
 
 /** `hint` is the trajectory pointer: recessive, never competing with output.
  *  `live` is a running call's live output line: dim, one row (truncated). */
@@ -261,8 +265,24 @@ const SPLIT_DIFF_MIN_COLS = 110
  *  it is showing — the source itself keeps every line. */
 const VERBOSE_BODY_WINDOW = 400
 
-const GUTTER_FIRST = ' ⎿ '
-const GUTTER_REST = '   '
+/** Split alignment can be quadratic for unequal replacements. Default
+ * previews must not pay that cost for a large hunk just to paint eight rows. */
+function canPreviewSplitDiff(diffs: readonly ToolFileDiff[]): boolean {
+  let remaining = 200
+  let remainingChars = 8_000
+  for (const diff of diffs) {
+    // Structured hunks cost by both texts; a unified-patch diff by its patch.
+    for (const text of 'oldText' in diff ? [diff.oldText, diff.newText] : [diff.patch]) {
+      if (!text) continue
+      remainingChars -= text.length
+      if (remainingChars < 0 || --remaining < 0) return false
+      for (let at = text.indexOf('\n'); at !== -1; at = text.indexOf('\n', at + 1)) {
+        if (--remaining < 0) return false
+      }
+    }
+  }
+  return true
+}
 
 const add = (text: string): BodyLine => ({ text, tone: 'add' })
 const del = (text: string): BodyLine => ({ text, tone: 'del' })
@@ -388,7 +408,7 @@ function viewLines(view: ToolCallView | ToolResultView): BodyLine[] {
           lines.push(plain(`${match.lineNumber}: ${match.line}`))
         }
       }
-      if (view.truncated) lines.push(dim(`… (${view.total} total)`))
+      if (view.truncated) lines.push(dim(t('search-results-total', { n: view.total })))
       return lines
     }
     default:
@@ -458,21 +478,25 @@ function foldBodyLines(lines: BodyLine[]): { lines: BodyLine[]; hiddenChars: num
   return out === undefined ? { lines, hiddenChars: 0 } : { lines: out, hiddenChars }
 }
 
-/** Header title from the presentation view: terminal cards keep the
- *  `Name(command)` shape; everything else renders the tool's own title
- *  (`Edit /path`, `Read /path (1 - 100)`) with the first word bold. The
- *  result view's title replaces the call view's only when present — a
- *  settled terminal card carries output but no title of its own. */
 /** Header args display budget: the parenthesized summary is a pointer, not
  * the payload — full args live in the verbose/expanded body. A streaming
  * tool call's args can grow to hundreds of KB, and wrapping that in the
  * header Text every frame was the dominant long-output stall (string-width
  * via wrap-ansi, 60%+ of CPU in profiles). */
 const HEADER_ARGS_BUDGET = 480
+const headerGraphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 
 function clipHeaderArgs(args: string): string {
   if (args.length <= HEADER_ARGS_BUDGET) return args
-  return `${args.slice(0, HEADER_ARGS_BUDGET)}…`
+  // A little lookahead identifies the last complete grapheme without walking
+  // a potentially huge streamed argument. An unfinished cluster is omitted.
+  let end = 0
+  for (const part of headerGraphemes.segment(args.slice(0, HEADER_ARGS_BUDGET + 64))) {
+    const next = part.index + part.segment.length
+    if (next > HEADER_ARGS_BUDGET) break
+    end = next
+  }
+  return `${args.slice(0, end)}…`
 }
 
 /** Terminal-card header folding shape: the line actually rendered, the source
@@ -492,9 +516,8 @@ type FoldedTitle = { first: string; hiddenLines: number; hiddenChars: number }
  *     script collapses to its first source line, reported as `+N lines`.
  *   - The long-line clip (always on — utils/fold-long-lines.ts): a command is
  *     frequently ONE enormous line (`python -c …`, a minified blob, a pasted
- *     `curl` body). This header Text WRAPS, so an unclipped 200k-char command
- *     lays out thousands of rows on the card header itself — the same stall
- *     HEADER_ARGS_BUDGET keeps out of the args half of the line.
+ *     `curl` body). Bound the preview before the header's width truncation;
+ *     full text stays available through expansion and the tooltip.
  *
  *  Single short titles return undefined: nothing to fold, rendering stays
  *  byte-identical to the unfolded card (and the header stays tooltip-silent). */
@@ -547,7 +570,7 @@ function toolCardMetaTooltip(tool: ToolRow, isRunning: boolean, isError: boolean
   return parts.join(' · ')
 }
 
-function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguage, nameColor, filePath, onOpenFile, metaTooltip, headerTextBudget }: {
+function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguage, nameColor, filePath, onOpenFile, metaTooltip, headerTextBudget, compact, headerColor }: {
   name: string
   title: string | undefined
   isTerminal: boolean
@@ -568,16 +591,29 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
    *  nothing. A fully visible header pops no tooltip at all. */
   metaTooltip: () => string
   /**
-   * Column budget for the NON-terminal one-line title on the header line —
+   * Column budget for the header's title/summary —
    * `useTerminalSize().columns` (already margin-adjusted) minus the fixed
    * chrome of the row: loader dot 2 + hover ▾ indicator 2 (present while
    * the pointer dwells) + the settled elapsed chip + slack for the
-   * transcript gutter. Only this title renders in a truncate-end Text, so
-   * only it can be cut by layout width (terminal titles wrap; args are
-   * clipped by the 480-char budget) — this budget gates just that cut.
+   * transcript gutter. Every compact summary truncates to this row; expanded
+   * terminal titles wrap while expanded non-terminal titles still truncate.
    */
   headerTextBudget: number
+  compact: boolean
+  headerColor: keyof Theme
 }): React.ReactNode {
+  const compactTitle = React.useMemo(() => {
+    const source = title === undefined ? displayArgs : folded?.first ?? title.trim()
+    const clipped = clipHeaderArgs(source)
+    const text = clipped.replace(/[\r\n]+/g, ' ')
+    const label = title === undefined
+      ? `${name}${text ? `(${text})` : ''}`
+      : isTerminal ? `$ ${text}` : text || name
+    const hint = folded && folded.hiddenLines > 0
+      ? ` ${t('lines-folded-expand', { n: folded.hiddenLines, key: primaryComboString('transcript') })}`
+      : ''
+    return { text: label + hint, hidden: clipped !== source || /[\r\n]/.test(clipped) || folded !== undefined }
+  }, [name, title, isTerminal, folded, displayArgs])
   // Hover tooltip rule: pop ONLY when the header genuinely hides content —
   // a folded terminal script, args clipped past the 480-char budget, or a
   // non-terminal one-line title cut by layout width (truncate-end). A header
@@ -587,9 +623,14 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
   const headerTooltip = useTooltip(() => {
     const meta = metaTooltip()
     const withMeta = (full: string): string => (meta === '' ? full : `${full}\n${meta}`)
+    if (compact) {
+      return compactTitle.hidden || stringWidth(compactTitle.text) > headerTextBudget
+        ? withMeta(title ?? displayArgs)
+        : ''
+    }
     if (folded !== undefined) return withMeta(title ?? '')
     if (title === undefined && clipHeaderArgs(displayArgs) !== displayArgs) return withMeta(displayArgs)
-    // Width truncation: only the non-terminal title Text is truncate-end —
+    // Expanded width truncation: the non-terminal title Text is truncate-end —
     // a long one-line title is really cut by layout when it overflows the
     // row. Terminal titles WRAP instead (default Text wrap, nothing hidden)
     // and args within the 480 budget wrap too; they never reach this gate.
@@ -599,6 +640,29 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
     // Header fully visible: nothing hidden, nothing to add — stay silent.
     return ''
   })
+  if (compact) {
+    const trimmed = title?.trim() ?? ''
+    const at = filePath && !isTerminal ? trimmed.indexOf(filePath) : -1
+    const clickable = onOpenFile !== undefined && filePath !== undefined && filePath !== '' && at >= 0
+    return (
+      <Box flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0} {...headerTooltip}>
+        {clickable ? (
+          <>
+            <Text color={headerColor} wrap="truncate-end">{clipHeaderArgs(trimmed.slice(0, at)).replace(/[\r\n]+/g, ' ')}</Text>
+            <Box flexGrow={1} flexShrink={1} minWidth={0} onClick={(event: ClickEvent) => {
+              event.stopImmediatePropagation()
+              onOpenFile(filePath)
+            }}>
+              <Text color={headerColor} underline wrap="truncate-end">{clipHeaderArgs(filePath).replace(/[\r\n]+/g, ' ')}</Text>
+            </Box>
+            <Text color={headerColor} wrap="truncate-end">{clipHeaderArgs(trimmed.slice(at + filePath.length)).replace(/[\r\n]+/g, ' ')}</Text>
+          </>
+        ) : (
+          <Text color={headerColor} wrap="truncate-end">{compactTitle.text}</Text>
+        )}
+      </Box>
+    )
+  }
   if (title === undefined) {
     return (
       <>
@@ -617,23 +681,9 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
   }
   if (isTerminal) {
     return (
-      <>
-        <Box flexShrink={0}>
-          <Text bold color={nameColor} wrap="truncate-end">{name}</Text>
-        </Box>
-        <Box flexWrap="nowrap" {...headerTooltip}>
-          {folded === undefined ? (
-            <Text>({title})</Text>
-          ) : (
-            <>
-              <Text>({folded.first})</Text>
-              {folded.hiddenLines > 0 && (
-                <Text dimColor>{` ${t('lines-folded-expand', { n: folded.hiddenLines, key: primaryComboString('transcript') })}`}</Text>
-              )}
-            </>
-          )}
-        </Box>
-      </>
+      <Box flexGrow={1} flexShrink={1} minWidth={0} {...headerTooltip}>
+        <Text>{`$ ${title}`}</Text>
+      </Box>
     )
   }
   const trimmed = title.trim()
@@ -683,12 +733,16 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
   )
 }
 
-/**
- * Tool-call card: `● Edit /path` header with a blinking status dot, then the
- * structured body under a `  ⎿  ` gutter — diff hunks in red/green, terminal
- * output, read content — instead of the raw result dump. The channel captures
- * the structured views per call.
- */
+/** Ordinary calls collapse to quiet inline summaries; output-heavy and failed
+ * calls retain their cards. Shared with the transcript's spacing pre-pass. */
+export function isInlineToolSummary(tool: ToolRow): boolean {
+  const card = (tool.resultView ?? tool.callView)?.card
+  return tool.status !== 'error' && !tool.errorText && card !== 'terminal' && card !== 'diff'
+    && !TOOL_NAME_EXEC.has(tool.name.toLowerCase()) && tool.name !== 'powershell'
+    && !TOOL_NAME_MUTATE.has(tool.name.toLowerCase())
+}
+
+/** Structured views remain channel-owned; expansion only changes presentation. */
 export function AssistantToolUseMessage({
   tool,
   marginTopOnTurn,
@@ -698,7 +752,8 @@ export function AssistantToolUseMessage({
   onClick,
   footnote,
   diffLayout = 'auto',
-  toolBackground = 'none',
+  toolBackground = 'subtle',
+  bleed = false,
   onOpenFile,
   foldTerminalCommand = false,
   smoothReveal = false,
@@ -720,6 +775,9 @@ export function AssistantToolUseMessage({
   // The send-message card's raw layer (args/result JSON) shows on verbose OR
   // a row click — the click is the mouse user's only「看全量」path.
   const sendMessageRawOpen = sendMessage !== undefined && (verbose || isExpanded)
+  // The SendMessage card is a first-class card surface: it never collapses
+  // to the quiet inline summary the ordinary tools use.
+  const inlineSummary = !verbose && sendMessage === undefined && isInlineToolSummary(tool)
   const displayArgs = verbose ? tool.argsFull ?? tool.argsText : tool.argsText
   const result = tool.resultFull ?? tool.resultText
   // The settled view carries the applied diff / actual output; while running,
@@ -770,24 +828,25 @@ export function AssistantToolUseMessage({
   // source line per terminal row (truncate) keeps the panes row-aligned,
   // which the flat add/del line model cannot express.
   const { columns } = useTerminalSize()
+  // Inline summaries remain prose-sized; standalone cards do not bleed.
+  const { left: bleedLeft, right: bleedRight } = usePagePanelBleed(bleed && !inlineSummary)
+  const cardColumns = columns + bleedLeft + bleedRight
   // Interactive rows grow a ▾/▴ disclose column while the pointer dwells
   // (fixed, no layout shift elsewhere). The tooltip resolves at show time —
   // i.e. exactly while that column is present — so the budget must reserve
   // it for clickable cards only; non-interactive rows never render it.
   const interactive = onClick !== undefined
-  // Header-row budget for the title Text. useTerminalSize() already reports
-  // the margin-adjusted content width, so this is the fixed chrome of the
-  // line only: loader dot 2 + hover ▾ indicator 2 (interactive rows, present
-  // while the pointer dwells) + the settled elapsed chip. Calibrated against
-  // the renderer (probe-tooltip-truncation): a truncate-end title whose
-  // width exceeds columns − loader − ▾ − chip is really cut on screen at
-  // tooltip time; anything at or under the budget fits fully and must NOT
-  // pop a tooltip. No extra slack, and the tool name is NOT deducted — a
-  // non-terminal title carries its own first word, so double-counting name
-  // pushed the gate ~10 cols too tight and floated fully visible titles.
-  const headerTextBudget = Math.max(0, columns - 2 - (interactive ? 2 : 0)
-    - (!isRunning && elapsedText !== '' ? stringWidth(elapsedText) : 0))
-  const useSplitDiff = !isError && view?.card === 'diff' &&
+  // TerminalSize is already page-margin adjusted. Reserve the card border,
+  // padding, status dot, hover indicator and settled elapsed chip.
+  const headerTextBudget = Math.max(0, cardColumns - (inlineSummary ? 0 : CARD_CHROME_WIDTH) - 2 - (interactive ? 2 : 0)
+    - (!inlineSummary && !isRunning && elapsedText !== '' ? stringWidth(elapsedText) : 0))
+  const bodyWidth = Math.max(1, cardColumns - CARD_CHROME_WIDTH - BODY_INDENT)
+  const splitPreviewSafe = React.useMemo(
+    () => view?.card === 'diff' && canPreviewSplitDiff(view.diffs),
+    [view],
+  )
+  const useSplitDiff = !isError && view?.card === 'diff' && bodyWidth >= SPLIT_DIFF_MIN_WIDTH &&
+    (verbose || splitPreviewSafe) &&
     (diffLayout === 'split' || (diffLayout !== 'unified' && columns >= SPLIT_DIFF_MIN_COLS))
   // Live output of the running call: the newest lines of the bounded tail,
   // sanitized and cut to the body width in cells (liveOutputLines.ts).
@@ -823,13 +882,13 @@ export function AssistantToolUseMessage({
         body.push(...rawResult.split('\n').map(dim))
       }
     }
-  } else if (isError) {
+  } else if (isError && tool.errorText) {
     // Line-aware like every other body: a multi-line error (a stack trace)
     // goes through the SAME line budget and fold hint as tool output — the
     // verdict visibility problem the exit lines solve does not excuse an
     // unbounded error body in a collapsed card.
-    if (tool.errorText) body = tool.errorText.split('\n').map((text): BodyLine => ({ text, tone: 'error' }))
-  } else if (!useSplitDiff) {
+    body = tool.errorText.trimEnd().split('\n').map((text): BodyLine => ({ text, tone: 'error' }))
+  } else if (!useSplitDiff && !inlineSummary) {
     if (view !== undefined) body = viewLines(view)
     if (body.length === 0 && result) {
       body = result.trimEnd().split('\n').map(plain)
@@ -918,9 +977,9 @@ export function AssistantToolUseMessage({
   const shownLines: BodyLine[] = liveLines.length === 0 || revealedLines.length < rendered.length
     ? revealedLines
     : [...lines, ...liveLines, ...rendered.slice(lines.length)]
-  // Nested split-diff context panes must also yield to interaction highlights.
-  // `none` leaves them transparent so the selected/expanded root shows through.
-  const ordinaryToolBackground = isSelected || isExpanded ? 'none' : toolBackground
+  // Expanded cards keep their surface; selected cards let the highlight show
+  // through the split diff's unchanged context panes.
+  const ordinaryToolBackground = isSelected ? 'none' : toolBackground
   const ordinaryBackground = ordinaryToolBackground === 'subtle'
     ? 'toolCardBackgroundDim'
     : ordinaryToolBackground === 'strong'
@@ -943,29 +1002,45 @@ export function AssistantToolUseMessage({
   return (
     <Box
       ref={viewportRef}
-      flexDirection="row"
-      justifyContent="space-between"
+      flexDirection="column"
+      borderStyle={inlineSummary ? undefined : 'single'}
+      borderTop={false}
+      borderBottom={false}
+      borderRight={false}
+      borderColor={isError ? 'error' : isRunning ? 'accent' : 'subtle'}
+      paddingX={inlineSummary ? 0 : 1}
+      paddingY={inlineSummary ? 0 : 1}
       marginTop={marginTopOnTurn ? 1 : 0}
-      width="100%"
+      width={bleedLeft > 0 || bleedRight > 0 ? cardColumns : '100%'}
+      marginLeft={-bleedLeft}
+      marginRight={-bleedRight}
       onClick={onClick}
       // Only selection paints a highlight; the configured treatment applies
       // to an ordinary card. Diff line tints stay - they are content, not chrome.
-      backgroundColor={isSelected ? 'messageActionsBackground' : hoverTint ? 'toolCardBackground' : ordinaryBackground}
+      backgroundColor={isSelected ? 'messageActionsBackground' : inlineSummary ? undefined : hoverTint ? 'toolCardBackground' : ordinaryBackground}
       onMouseEnter={interactive ? () => setHovered(true) : undefined}
       onMouseLeave={interactive ? () => setHovered(false) : undefined}
     >
-      <Box flexDirection="column" flexGrow={1}>
-        <Box flexDirection="row" flexWrap="nowrap" minWidth={minWidth}>
-          <ToolUseLoader
-            shouldAnimate={isRunning}
-            isUnresolved={isRunning}
-            isError={isError}
-            toolName={tool.name}
-          />
-          <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} folded={foldedHeader} displayArgs={displayArgs} argsLanguage={argsLanguage} nameColor={toolNameColor(tool.name, view?.category ?? tool.callView?.category)} filePath={filePath} onOpenFile={onOpenFile} metaTooltip={() => toolCardMetaTooltip(tool, isRunning, isError)} headerTextBudget={headerTextBudget} />
-          {!isRunning && (
-            <Box flexWrap="nowrap">
-              <Text dimColor={!hovered}>{elapsedText}</Text>
+      <Box flexDirection="column" flexGrow={1} minWidth={0}>
+        <Box flexDirection="row" flexWrap="nowrap" minWidth={verbose ? minWidth : 0}>
+          {inlineSummary && !isRunning ? (
+            <Text color={hovered ? 'text' : 'inactive'}>{view?.card === 'search' || tool.name === 'grep' || tool.name === 'glob' ? '* ' : '→ '}</Text>
+          ) : (
+            <ToolUseLoader
+              shouldAnimate={isRunning}
+              isUnresolved={isRunning}
+              isError={isError}
+              toolName={tool.name}
+            />
+          )}
+          <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} folded={foldedHeader} displayArgs={displayArgs} argsLanguage={argsLanguage} nameColor={toolNameColor(tool.name, view?.category ?? tool.callView?.category)} filePath={filePath} onOpenFile={onOpenFile} metaTooltip={() => toolCardMetaTooltip(tool, isRunning, isError)} headerTextBudget={headerTextBudget} compact={!verbose} headerColor={isError ? 'error' : inlineSummary && !hovered && !isRunning ? 'inactive' : 'text'} />
+          {!isRunning && !inlineSummary && (
+            // flexShrink={0}: the elapsed chip is two cells of chrome and must
+            // never be the thing that yields. Without it a long title pushed
+            // the chip past the row and `· 0s` wrapped onto a second line,
+            // orphaning a bare `·` at the right edge.
+            <Box flexWrap="nowrap" flexShrink={0}>
+              <Text dimColor={!hovered} wrap="truncate">{elapsedText}</Text>
             </Box>
           )}
           {hovered && (
@@ -974,40 +1049,21 @@ export function AssistantToolUseMessage({
             </Box>
           )}
         </Box>
+        {(rendered.length > 0 || useSplitDiff) && <Box height={1} />}
         {useSplitDiff && view?.card === 'diff' ? (
-          <Box flexDirection="row">
-            <Box width={3} flexShrink={0}>
-              <Text dimColor>{GUTTER_FIRST}</Text>
-            </Box>
+          <Box flexDirection="row" paddingLeft={BODY_INDENT}>
             <SplitDiffView
               diffs={view.diffs}
-              width={columns - 4}
+              width={bodyWidth}
               maxRows={DIFF_BODY_MAX_LINES}
               verbose={verbose}
               toolBackground={ordinaryToolBackground}
-              reveal={revealable ? { key: `${revealKey}:split` } : undefined}
             />
           </Box>
         ) : (
           shownLines.map((line, index) => (
-            <Box key={index} flexDirection="row">
-              <Box width={3} flexShrink={0}>
-                <Text
-                  color={
-                    line.tone === 'add'
-                      ? 'diffAddedWord'
-                      : line.tone === 'del'
-                        ? 'diffRemovedWord'
-                        : line.tone === 'path'
-                          ? 'ide'
-                          : undefined
-                  }
-                  dimColor={line.tone !== 'add' && line.tone !== 'del' && line.tone !== 'path'}
-                >
-                  {index === 0 ? GUTTER_FIRST : GUTTER_REST}
-                </Text>
-              </Box>
-              <Box flexGrow={1}>
+            <Box key={index} flexDirection="row" paddingLeft={BODY_INDENT}>
+              <Box flexGrow={1} flexShrink={1} minWidth={0}>
                 {line.tone === 'path' && onOpenFile !== undefined ? (
                   <Box
                     onClick={(event: ClickEvent) => {
@@ -1017,7 +1073,7 @@ export function AssistantToolUseMessage({
                       onOpenFile(line.target ?? line.text)
                     }}
                   >
-                    <Text color="ide" underline>{line.text}</Text>
+                    <Text color="ide" underline wrap={verbose ? 'wrap' : 'truncate-end'}>{line.text}</Text>
                     {line.suffix !== undefined && <Text dimColor>{line.suffix}</Text>}
                   </Box>
                 ) : (
@@ -1036,7 +1092,7 @@ export function AssistantToolUseMessage({
                                 : undefined
                     }
                     dimColor={(line.tone === 'dim' && !(line.revealOnHover === true && hovered)) || line.tone === 'live'}
-                    wrap={line.tone === 'live' ? 'truncate-end' : 'wrap'}
+                    wrap={line.tone === 'live' ? 'truncate-end' : verbose || line.tone === 'hint' || line.revealOnHover ? 'wrap' : 'truncate-end'}
                   >
                     {line.tone === 'plain' && syntaxLanguage !== undefined ? (
                       <SyntaxText text={line.text} sourceText={bodySource} lineIndex={index} language={syntaxLanguage} />
@@ -1051,10 +1107,7 @@ export function AssistantToolUseMessage({
           ))
         )}
         {sendMessage !== undefined && sendMessageState !== undefined && (
-          <Box flexDirection="row">
-            <Box width={3} flexShrink={0}>
-              <Text dimColor>{GUTTER_REST}</Text>
-            </Box>
+          <Box flexDirection="row" paddingLeft={BODY_INDENT}>
             <Text color={agentMessageStateColor(sendMessageState)}>{agentMessageStateText(sendMessageState)}</Text>
             {sendMessageResumed !== undefined && (
               <Text dimColor>{` · ${t('send-message-card-resumed', { id: sendMessageResumed })}`}</Text>
@@ -1065,18 +1118,12 @@ export function AssistantToolUseMessage({
           </Box>
         )}
         {useSplitDiff && disclosure.length > 0 && disclosure.map((line, index) => (
-          <Box key={`disclosure-${index}`} flexDirection="row">
-            <Box width={3} flexShrink={0}>
-              <Text dimColor>{GUTTER_REST}</Text>
-            </Box>
+          <Box key={`disclosure-${index}`} flexDirection="row" paddingLeft={BODY_INDENT}>
             <Text dimColor>{line.text}</Text>
           </Box>
         ))}
         {useSplitDiff && footnote !== undefined && (
-          <Box flexDirection="row">
-            <Box width={3} flexShrink={0}>
-              <Text dimColor>{GUTTER_REST}</Text>
-            </Box>
+          <Box flexDirection="row" paddingLeft={BODY_INDENT}>
             <Text color="subtle">{footnote}</Text>
           </Box>
         )}

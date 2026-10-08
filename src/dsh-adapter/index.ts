@@ -89,7 +89,7 @@ export interface Config {
   /** Working-activity indicator preset (`moon8`/`moon`/`comet`/`dots`/…
    *  or `random`; see activityFrames.ts). When absent, the `/activity`
    *  choice persisted in `~/.dsh-tui/working-activity.json` wins, then the
-   *  `moon8` default. */
+   *  `moon` default. */
   activityFrames?: string
   /** Show the segmented context bar (the band under the input with the
    *  `ctx used/window` readout) in the status footer; off hides that row
@@ -127,7 +127,7 @@ export interface Config {
    *  immediately; `never` never folds on its own (a click on the group
    *  header still folds one run). Editable live from `/settings`. */
   jobGroupFold?: 'auto' | 'always' | 'never'
-  /** Tool-card background strength; defaults to no added background. */
+  /** Tool-card background strength; defaults to a subtle card surface. */
   toolBackground?: ToolBackground
   /** What the fullscreen transcript's right gutter shows (settings
    *  `dsh-tui.scrollGutter`): `timeline` turn rail (default), `scrollbar`
@@ -158,7 +158,7 @@ export interface Config {
    *  default; off removes both entry points. */
   expandEditor?: boolean
   /** Smooth streaming reveal (settings `dsh-tui.smoothStreaming`): live
-   *  assistant text, expanded thinking, and tool call bodies paint through
+   *  assistant text and expanded thinking paint through
    *  a ~30fps reveal instead of jumping per provider burst — bursty or
    *  one-shot deliveries read as an even flow. On by default. */
   smoothStreaming?: boolean
@@ -309,7 +309,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
   thinkingFold: Schema.union(['preview', 'full']).default('preview'),
   jobGroupFold: Schema.union(['auto', 'always', 'never']).default('auto'),
-  toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
+  toolBackground: Schema.union(['none', 'subtle', 'strong']).default('subtle'),
   scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
   // Preset names AND custom `NxM` specs must survive validation (a custom
   // spec is not a fixed union member); junk is normalized to `normal` by

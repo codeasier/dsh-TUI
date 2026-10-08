@@ -151,19 +151,15 @@ function headerVisible(): boolean {
 /**
  * rail 区域：置顶头之下、prompt 输入框 margin 之上。返回 [top, bottom)。
  *
- * The bottom anchor is the prompt BOX's top border (`╭`), not a `❯` row: the
- * input row now leads with the session-entry affordance (`⌸ ❯ …`), and the
- * transcript's own user rows (`❯ 问题 11`) match the caret glyph too, so a
- * `❯` search finds the wrong row at both ends. The border is unambiguous and
- * content-independent. Search from the END so the transcript's own top border,
- * if the user pasted one, cannot win.
+ * Anchor at the composer rail's top padding row, one row above its
+ * session-entry control. Search backwards so transcript text cannot win.
  */
 function railRange(): [number, number] {
   const lines = screenLines()
   const top = headerVisible() ? 1 : 0
   let boxTop = -1
   for (let y = ROWS - 1; y >= 0; y--) {
-    if (lines[y]!.trimEnd().endsWith('╭') || lines[y]!.trimStart().startsWith('╭')) { boxTop = y; break }
+    if (/^\s*┃⌸ /.test(lines[y]!)) { boxTop = y - 1; break }
   }
   return [top, boxTop >= 0 ? boxTop - 2 : ROWS - 4]
 }

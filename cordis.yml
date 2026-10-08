@@ -1,6 +1,14 @@
 # dsh-tui interactive front door over the agent-spine bundle.
 # Run with: dsh --config cordis.yml (或 npm 安装后走 dsh plugin 机制)
 # Requires DEEPSEEK_API_KEY; a terminal TTY is mandatory.
+# Subscription OAuth uses the standard profile's dsh-tui-auth row instead:
+# Use /fast on|off|status (bare or toggle switches) from the next request;
+# it wins over the optional config.serviceTier startup default, without changing effort.
+# The switch covers this plugin's supported OAuth routes in the current TUI process,
+# is not persisted, and restart restores serviceTier (unset: off/provider default).
+# Acceptance and quota are backend-owned. See docs/configuration.en.md
+# (Built-in subscription OAuth); this bare example does not mount OAuth and
+# does not provide /fast. A mounted OAuth entry with no supported route reports an error.
 
 # The user-interaction service: hosts `ctx.userQuestions`, the seam behind
 # the model-facing ask_user_question tool. dsh-tui uses the legacy provider
@@ -63,6 +71,7 @@
     fullscreen: true
     # 以下为 /settings 可改的显示设置；每项说明与默认值见应用内 /settings 屏。
     terminalImages: true
+    # toolBackground: subtle # none / subtle（默认）/ strong
     # mermaidDiagrams: true
     # 回复中 LaTeX 公式的显示方式：auto（默认，目前为 Unicode）/ image（支持图形的终端里块级公式显示为图片）/ unicode / source（保留源码）。/settings 可实时改。
     # mathRendering: auto

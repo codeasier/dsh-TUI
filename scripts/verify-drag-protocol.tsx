@@ -34,6 +34,9 @@
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
+// The synthetic terminal implements DECRQM. Do not inherit an Orca/Terminal.app
+// exclusion from the real shell and accidentally disable the positive oracle.
+process.env.TERM_PROGRAM = 'xterm'
 
 const [
   { PassThrough, Writable },

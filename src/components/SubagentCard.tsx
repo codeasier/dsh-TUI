@@ -35,10 +35,10 @@ export function SubagentCard({ subagent, focused, onClick, variant = 'default' }
   const [hovered, setHovered] = useState(false)
   const liveLine = running ? subagent.output[subagent.output.length - 1] : undefined
   const minimalUi = isMinimalUiMode()
-  const glyph = running ? (minimalUi ? '·' : '🟡')
-    : subagent.status === 'unknown' ? (minimalUi ? '·' : '⚪')
-    : subagent.status === 'failed' || subagent.status === 'cancelled' ? (minimalUi ? '×' : '🔴')
-    : (minimalUi ? '✓' : '🟢')
+  const glyph = running ? (minimalUi ? '·' : '◐')
+    : subagent.status === 'unknown' ? (minimalUi ? '·' : '○')
+    : subagent.status === 'failed' || subagent.status === 'cancelled' ? '×'
+    : '✓'
   const glyphColor = minimalUi ? undefined
     : running ? 'warning' as const
     : subagent.status === 'unknown' ? 'subtle' as const

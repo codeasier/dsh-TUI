@@ -17,7 +17,7 @@ import { configValues, createSettingsScope, editableConfig, resolveSettingsNames
 import { createSettingsHosts } from '../src/dsh-adapter/channel/settings-host.ts'
 import { SettingsForm } from '../src/dsh-adapter/settingsEditor.ts'
 import TuiSettingsSectionsRuntime, { getHostSettingsSections, getLocalSettingsSectionsHost } from '../src/dsh-adapter/settings-sections.ts'
-import { DEFAULT_PAGE_MARGIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, SIDE_PANEL_ID_PATTERN, isPageMarginMode, normalizePageMargin, normalizeSidePanelPanels, parsePageMarginSpec } from '../src/tuiDisplayPrefs.ts'
+import { DEFAULT_PAGE_MARGIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, SIDE_PANEL_ID_PATTERN, isPageMarginMode, normalizePageMargin, normalizeSidePanelPanels, normalizeToolBackground, parsePageMarginSpec } from '../src/tuiDisplayPrefs.ts'
 import { SPLASH_FONTS, SPLASH_FONT_OPTIONS, normalizeSplashFont } from '../src/components/splashFonts.ts'
 import { normalizeBrandSetting } from '../src/branding.ts'
 import { getLang, isLang } from '../src/i18n.ts'
@@ -31,6 +31,10 @@ assert.equal(plain.fullscreen, false)
 assert.equal(plain.whale, false)
 assert.equal(plain.effortDefault, 'high')
 assert.equal(plain.statusBar.model, false)
+assert.equal(normalizeToolBackground(configValues(Config({})).toolBackground), 'subtle', 'unset Config uses subtle after runtime normalization')
+for (const mode of ['none', 'subtle', 'strong']) {
+  assert.equal(configValues(Config({ toolBackground: mode })).toolBackground, mode, `Config preserves explicit ${mode}`)
+}
 assert.equal(Config.dict.fullscreen.meta.volatile === true, modernSchema)
 for (const field of ['sessionId', 'model', 'provider', 'cwd', 'preset']) {
   assert.notEqual(Config.dict[field].meta.volatile, true, `${field} cannot change without agent lifecycle handling`)
@@ -151,6 +155,20 @@ function visit(node) {
 }
 visit(source)
 assert.ok(settingsBody && ts.isBlock(settingsBody))
+let legacyToolBackgroundSchema
+function visitToolBackground(node) {
+  if (ts.isPropertyAssignment(node) && node.name.getText(source) === 'toolBackground') {
+    assert.equal(legacyToolBackgroundSchema, undefined, 'one legacy tool background schema')
+    legacyToolBackgroundSchema = new Function('Schema', `return ${node.initializer.getText(source)}`)(Schema)
+  }
+  ts.forEachChild(node, visitToolBackground)
+}
+visitToolBackground(settingsBody)
+assert.ok(legacyToolBackgroundSchema)
+assert.equal(legacyToolBackgroundSchema(undefined), undefined, 'unset legacy user layer must not shadow cordis none')
+for (const mode of ['none', 'subtle', 'strong']) {
+  assert.equal(legacyToolBackgroundSchema(mode), mode, `legacy settings preserve explicit ${mode}`)
+}
 assert.ok(namespaceDeclaration)
 assert.ok(sectionRegistration)
 assert.equal(sectionDeclarations.size, 2)
@@ -240,7 +258,7 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
     const unregister = registerSection({
       configOwner: owner, Config, resolveSettingsNamespace, settingsSections: sections,
       config: configValues(runtime), SHORTCUT_ACTIONS, SHORTCUT_FIELD_META, SETTING_GROUPS, settingField, effectiveComboString, parseComboDraft, draftComboConflicts,
-      getLang, DEFAULT_PAGE_MARGIN, isPageMarginMode, parsePageMarginSpec, SPLASH_FONT_OPTIONS, normalizeSplashFont, normalizeBrandSetting,
+      getLang, DEFAULT_PAGE_MARGIN, isPageMarginMode, parsePageMarginSpec, SPLASH_FONT_OPTIONS, normalizeSplashFont, normalizeBrandSetting, normalizeToolBackground,
       // Side-panel fields (sidePanel.panels) validate their draft against the
       // production id grammar, so the eval scope mirrors those helpers too.
       DEFAULT_SIDE_PANEL_IDS, SIDE_PANEL_ID_PATTERN, normalizeSidePanelPanels,
@@ -264,6 +282,10 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
     const form = new SettingsForm(host, view, section.fields)
     assert.equal(form.available, true, 'real describe() supplies the editable TUI section')
     assert.equal(form.field(diffField).text, 'split', 'the settings page shows the effective value')
+    const toolBackgroundField = section.fields.find(field => field.path.length === 1 && field.path[0] === 'toolBackground')
+    assert.ok(toolBackgroundField, 'the production section exposes toolBackground')
+    assert.equal(form.field(toolBackgroundField).text, 'subtle', 'unset tool background displays the effective default')
+    assert.equal(toolBackgroundField.format('none'), 'none', 'the settings formatter preserves an explicit transparent surface')
     // 开屏大字字体（splashFont）：面板选项直接由字体注册表推，所以这里同时钉住
     // 「选项覆盖全部合法取值」「未设置时显示生效值（daily）」与「每一位都能被选中
     // 并真的存进 profile」——select 的 parse 只认 options 里的值，写不进别的。

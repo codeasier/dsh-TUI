@@ -19,6 +19,17 @@ const PLACEMENT_ID_MAX_EXCLUSIVE = 0x40000000
 // Keep raster content behind terminal text and explicit panel backgrounds.
 const IMAGE_Z_INDEX = -0x80000000
 /**
+ * Default placement z base: behind text and behind explicit panel
+ * backgrounds, so anything painted later covers the raster.
+ */
+export const IMAGE_BACKGROUND_Z_INDEX = IMAGE_Z_INDEX
+/**
+ * z base for terminals whose Kitty layer only paints non-negative placements
+ * (see `terminalImagesBindToCells`). Zero keeps placements above the cells,
+ * which is what those terminals actually draw.
+ */
+export const IMAGE_FOREGROUND_Z_INDEX = 0
+/**
  * Retention for uploaded images that no node places this frame. Leaving the
  * viewport deletes only the placement (`d=i`), so scrolling back re-places
  * the terminal-side data with one `a=p` instead of re-fitting, re-compressing
@@ -65,7 +76,6 @@ type ImageState = {
 
 type PlacementState = {
   readonly placementId: number
-  readonly zIndex: number
   image: ImageState
   placed: boolean
   x: number
@@ -116,6 +126,7 @@ export class KittyGraphicsManager {
   private readonly contentHashes = new WeakMap<Uint8Array, string>()
   private nextImageId: number
   private nextPlacementId = 1
+  private backgroundZIndex = IMAGE_BACKGROUND_Z_INDEX
   private cellSize: TerminalCellSize
   private pass = 0
   private readonly now: () => number
@@ -150,6 +161,32 @@ export class KittyGraphicsManager {
     return true
   }
 
+  /**
+   * Move the base z-index every placement is emitted with. The renderer calls
+   * this once per painted frame while the Kitty path is active, so an
+   * XTVERSION reply that lands after the graphics probe still corrects an
+   * already running session; an unchanged base is a no-op.
+   *
+   * Every live placement is marked for re-emission on a change: a terminal
+   * keeps the z-index it was handed until the placement is replaced, so a
+   * lifted base must be re-sent, not just applied to new placements.
+   * @param value - the base z-index for placement 1 (later placements follow).
+   * @returns whether the base changed.
+   */
+  setBackgroundZIndex(value: number): boolean {
+    if (!Number.isSafeInteger(value) || value === this.backgroundZIndex) {
+      return false
+    }
+    this.backgroundZIndex = value
+    for (const state of this.placements.values()) state.placed = false
+    return true
+  }
+
+  /** z-index for one placement, ordered by allocation after the base. */
+  private zIndexFor(placementId: number): number {
+    return this.backgroundZIndex + placementId - 1
+  }
+
   reconcile(placements: readonly TerminalImagePlacement[]): string {
     this.pass += 1
     const desiredNodes = new Set<DOMElement>()
@@ -181,7 +218,6 @@ export class KittyGraphicsManager {
         state = {
           image,
           placementId,
-          zIndex: IMAGE_Z_INDEX + placementId - 1,
           placed: false,
           x: -1,
           y: -1,
@@ -225,7 +261,7 @@ export class KittyGraphicsManager {
             visible.y,
             visible.columns,
             visible.rows,
-            state.zIndex,
+            this.zIndexFor(state.placementId),
             visible.source,
           ),
         )
@@ -515,7 +551,7 @@ export function kittyPlacement(
   y: number,
   columns: number,
   rows: number,
-  zIndex = IMAGE_Z_INDEX,
+  zIndex = IMAGE_BACKGROUND_Z_INDEX,
   source?: KittySourceRect,
 ): string {
   const crop = source === undefined

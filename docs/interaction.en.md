@@ -151,12 +151,12 @@ results back to the chat screen and add no new behavior.
 | Key | Behavior |
 | --- | --- |
 | `Left/Right` | Move by character; **with a selection, collapse to the corresponding edge** |
-| `Ctrl+Left/Right` | Move by word |
+| `Ctrl+Left/Right` / `Alt+Left/Right` / `Alt+B/F` | Move by Unicode word boundaries, including Chinese without spaces; macOS `Option` is `Alt`; with a selection, collapse to the corresponding edge first |
 | `Home/End` | Move to the start/end of the current logical line |
 | `Ctrl+A` / `Ctrl+E` | `Ctrl+A` opens the subagent dashboard (`Mod+A` in the editor still moves to line start); `Ctrl+E` moves to line end and also expands or folds hidden older rows in long transcripts |
 | `Ctrl+U` | Delete before the caret |
 | `Ctrl+K` | Delete after the caret |
-| `Ctrl+W` | Delete the preceding word |
+| `Ctrl+W` | Delete the preceding Unicode word segment and trailing whitespace; supports Chinese without spaces, with punctuation and emoji as separate units; with a selection, delete only that selection |
 | `Backspace` / `Delete` | Delete the character before / after the caret; **with a selection, delete the whole selection** |
 | Typing | **Replaces an active selection** (standard editor semantics), caret after the inserted text |
 
@@ -271,6 +271,7 @@ Click a staged `[Image #N]` token or a transcript thumbnail to open one shared, 
 - The prompt, status rows and sticky header stay visible.
 - Open original opens the unchanged bytes in the system viewer and preserves colors and animation.
 - Without Kitty/Sixel graphics, the preview falls back to a metadata-only card; narrow terminals get the same.
+- A few clients paint images as cell content (the xterm.js family, e.g. Orca Remote): **Sixel wins there whenever it is available**, because their Kitty layer never paints a negative placement, adds a placement per `a=p` instead of replacing the one with the same id, and frees the raster when a placement is deleted — an image could neither move nor be parked. Without Sixel they fall back to Kitty with placements at `z >= 0`, where a panel covering part of an image lets it show through.
 
 ### Zoom, pan, and switching
 
@@ -614,8 +615,9 @@ In inline mode, the terminal emulator owns native scrollback and selection.
 - **`Esc`** — Cancel an active drag (or an existing selection) without copying.
 - **Single-click a message row** — Plain text rows (user/assistant) do nothing — the
   transcript is a reading surface, selection is the mouse's job there.
-- **Single-click a tool card / thinking / compact summary** — Expand / collapse (header
-  brightens on hover; trailing blank cells do not trigger).
+- **Single-click a tool card surface** — Expand / collapse the full command and output. The title,
+  preview and padding are clickable; file-path links still open the file separately.
+- **Single-click a thinking / compact summary** — Expand / collapse; the header brightens on hover.
 - **Single-click a subagent card** — Open that subagent's detail scene (status glyph
   brightens on hover).
 - **Single-click the input box** — Place the text caret at the click (multi-line, wrapped
@@ -781,6 +783,7 @@ The command menu merges local commands with the DSH command registry. Type `/` t
   in `/settings`.
 - `/panel` — side panel: toggle / focus / zoom / switch panels (subcommands in the user guide §2.8).
 - `/lang`.
+- `/fast` — interactive fast switch registered by this plugin's OAuth entry; forms and scope below.
 
 **Account and policy**
 
@@ -821,11 +824,25 @@ Additional forms:
   `triangle`, `box`, `box2`, `corners`, `point`, `layer`, `flip`, `aesthetic`,
   `hamburger`, `moon`, `moon8`, `whale-spout`, `whale-spin`, `whale-bubbles`, `clock`,
   `traffic_lights`, `comet`, `breathe`, `dots`, `arrow`, `spark`, `bar`, `braille`, `arc`,
-  `circle`, `grow`, `noise`, `bounce`, `rainbow`, `bar2`, `dqpb`, `toggle`; default `moon8`.
+  `circle`, `grow`, `noise`, `bounce`, `rainbow`, `bar2`, `dqpb`, `toggle`; default `moon`.
 - A legacy local `claude` setting is read as `moon8`, and the picker does not show that legacy preset.
 - `/activity status` reports the current choice.
 - `/preset <id>` and `/preset status` are described in the configuration guide.
 - `/effort` opens the reasoning-effort slider (←/→ adjusts live); `/effort <id>` sets a level directly; `/effort status` reports the current one.
+- Bare `/fast` or `/fast toggle` switches fast; `/fast on` sets `priority`,
+  `/fast off` sets `default`, and `/fast status` only reports the current state.
+  - Applies from the next model request, without changing already-sent requests
+    or reasoning `effort`; no restart needed.
+  - Covers all supported OAuth routes registered by this plugin in the current
+    TUI process (`openai-codex-responses` / `openai-responses`), not just the
+    current session or model; other protocols and other plugins' routes are unaffected.
+  - Writes neither config nor persistent files; restart restores the optional
+    `config.serviceTier` startup default (unset: off/provider default).
+    Interactive `/fast` takes precedence over that startup default.
+  - An unmounted OAuth entry does not provide the command; a mounted entry
+    with no successfully registered supported route gives a clear unavailable
+    error. The backend owns tier acceptance and quota; the TUI guarantees
+    neither approval nor additional quota. See [built-in subscription OAuth](configuration.en.md#built-in-subscription-oauth).
 - `/model` opens a two-level picker:
   - A pinned **Recently used** group first — the last 10 switched models, persisted at `~/.dsh-tui/model-recents.json` — then provider groups.
   - `Enter` drills into a group's models, and a single provider with no recents skips straight to the list.

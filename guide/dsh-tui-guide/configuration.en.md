@@ -46,7 +46,7 @@ A complete common override looks like this:
     # (that pins the workspace to the launch subdirectory, issue #96).
     effort: max
     activity: true
-    activityFrames: moon8
+    activityFrames: moon
     contextBar: true
     fullscreen: false
     terminalImages: true
@@ -78,7 +78,7 @@ A complete common override looks like this:
 | `turnUsageRow` | `false` (boolean) | Show a right-aligned usage row at the end of each turn (tokens in/out, cache, duration, retries); `/tokens`, `/status` and the footer hover report the same numbers either way |
 | `modes` | built-in trio | Shift+Tab session-mode cycle (plan/sandbox/approval atom bundles); defaults to default → plan → full-access |
 | `activity` | `true` | Show the live activity row |
-| `activityFrames` | `moon8` | Activity animation preset; `/activity` changes it at runtime. A legacy saved value of `claude` is read as `moon8`, and the picker no longer offers that legacy preset |
+| `activityFrames` | `moon` | Activity animation preset; an explicit setting or a saved `/activity` choice takes precedence. A legacy saved value of `claude` still reads as `moon8`, and the picker no longer offers that legacy preset |
 | `contextBar` | `true` | Segmented context-usage bar below the input box; `false` hides the row. Both this and `/settings → statusBar.contextBar` (also on by default) must be on for it to render |
 | `fullscreen` | `true` (factory default since 0.9.0) | `true` uses the alternate screen, app scrolling, and mouse selection; `false` uses inline mode |
 | `terminalImages` | `true` | Allow previews in supported terminals; `false` keeps text metadata and skips image probing and preview decoding. Restart to apply changes |
@@ -336,12 +336,56 @@ interactive question surface refuses sign-in explicitly.
 
 The `dsh-tui-auth` row accepts `providers` (default: all supported flows present
 in the installed pi-ai catalog; an explicit non-empty subset must exist in
-that catalog), `credentialsFile` (custom file path), and
+that catalog), `credentialsFile` (custom file path), `serviceTier` (optional
+startup default for the request body `service_tier`, see below), and
 `modelOverrides.<provider>.<model>` (optional `contextWindow` and `maxTokens`).
 A profile override replaces the whole `config` block, so retain every field
-you need. The flow implementation comes from the host's `dsh-llm-pi-ai` / pi-ai
+you need, especially existing `modelOverrides` (and any custom `providers` or
+`credentialsFile`). The flow implementation comes from the host's `dsh-llm-pi-ai` / pi-ai
 installation. Subscription authentication uses its subscription backend; it
 is not a general-purpose API key.
+
+**Prefer the interactive `/fast` command for the fast service tier**, without
+editing YAML or restarting. This plugin's OAuth entry registers the command:
+bare `/fast` or `/fast toggle` switches it, `/fast on` sets `priority`,
+`/fast off` sets `default`, and `/fast status` only reports the current state.
+Changes apply from the **next model request**, leaving already-sent requests
+and reasoning `effort` unchanged. The switch covers **all supported OAuth
+routes registered by this plugin in the current TUI process**, not just the
+current session or model. Supported wire protocols are `openai-codex-responses`
+and `openai-responses` (the `openai-codex` ChatGPT/Codex backend and, when
+available, the OpenAI direct `openai` route), over both SSE and WebSocket.
+Other protocols (`anthropic`, `xai`, `meta`) and routes registered by other
+plugins are unaffected. An unmounted OAuth entry does not provide `/fast`.
+When the entry is mounted but has no successfully registered supported route,
+`/fast` gives a clear unavailable error rather than silently changing unrelated routes. The backend decides acceptance of `priority`, quota, and
+limits; the TUI does not guarantee approval or additional quota.
+
+`config.serviceTier` is only an **optional startup default**; interactive
+`/fast` takes precedence. The switch writes neither config nor other persistent
+files; restarting restores the configured startup value. With no configuration,
+fast starts off and `service_tier` is omitted, leaving the provider's default
+(whereas `/fast off` explicitly sends `default`). `serviceTier: priority` can
+request fast at startup without reducing or overriding `effort`.
+The configured value passes through after trimming surrounding whitespace,
+without enum mapping: OpenAI documents `auto` / `default` / `flex` / `scale` /
+`priority`, and the backend decides what any other value means. Setting
+`serviceTier` while no mounted route has a supported model fails at boot rather
+than being silently ignored; a whitespace-only value also fails. This example
+chooses the optional `priority` startup default and retains a `modelOverrides`
+entry; omit `serviceTier` if you do not need fast at startup. Substitute your
+existing overrides, use model IDs present in the installed catalog, and repeat
+any other config fields you need:
+
+```yaml
+- id: dsh-tui-auth
+  config:
+    serviceTier: priority
+    modelOverrides:
+      openai-codex:
+        gpt-5.6-sol:
+          contextWindow: 1000000
+```
 
 The default credential file remains `$DSH_HOME/dsh-auth/credentials.json`
 (`~/.dsh/dsh-auth/credentials.json` when `DSH_HOME` is unset), with

@@ -155,13 +155,18 @@ const check = (name, fn) => {
   }
 }
 
-check('palette: light panels are white without changing accent or dark surfaces', () => {
+check('palette: panels are neutral gray/white without changing accent colors', () => {
   const light = getTheme('light')
   assert.equal(light.toolCardBackground, 'rgb(255,255,255)')
   assert.equal(light.toolCardBackgroundDim, 'rgb(255,255,255)')
   assert.notEqual(light.text, light.toolCardBackground, 'body text stays readable on white')
   assert.notEqual(light.background, light.toolCardBackground, 'badge accent remains distinct from panel fill')
-  assert.equal(getTheme('dark').toolCardBackground, 'rgb(36,43,58)')
+  assert.equal(getTheme('dark').toolCardBackground, 'rgb(56,56,56)')
+  assert.equal(getTheme('dark').toolCardBackgroundDim, 'rgb(42,42,42)')
+  assert.equal(getTheme('dark').userPromptBackground, 'rgb(48,48,48)')
+  assert.equal(getTheme('dark').inputBackground, 'rgb(48,48,48)')
+  assert.equal(light.userPromptBackground, 'rgb(255,255,255)')
+  assert.equal(light.inputBackground, 'rgb(255,255,255)')
   assert.equal(getTheme('dark-ansi').toolCardBackground, 'ansi:blackBright')
 })
 
@@ -173,7 +178,9 @@ check('palette: every built-in covers the full Theme contract', () => {
   const reference = Object.keys(getTheme('dark')).sort()
   // 键数本身就是契约：只比「期望集 vs 被测集」的话，从 `Theme` 与三套色板
   // 同时删一键会让两边一起缩水，消费方拿到的 `undefined` 无人咬。
-  assert.equal(reference.length, 81, 'Theme contract key count')
+  // 上游 0.14 契约为 81 键；fork 定制新增 11 键（sessionBackground、
+  // 8 个 markdown* 渲染槽、userPromptBackground）后为 92。
+  assert.equal(reference.length, 92, 'Theme contract key count')
   for (const name of THEME_NAMES) {
     const palette = getTheme(name)
     assert.deepEqual(Object.keys(palette).sort(), reference, `${name} key set`)
@@ -242,6 +249,26 @@ check('light detection: every validator-accepted ink form is read', () => {
   } finally {
     dispose()
   }
+})
+
+check('palette: session canvas is neutral and badge fills stay unchanged', () => {
+  for (const [base, canvas, badge] of [
+    ['dark', 'rgb(25,25,25)', 'rgb(94,136,204)'],
+    ['light', 'rgb(242,242,242)', 'rgb(63,108,196)'],
+    ['dark-ansi', 'ansi:black', 'ansi:cyanBright'],
+  ]) {
+    assert.equal(getTheme(base).sessionBackground, canvas)
+    assert.equal(getTheme(base).background, badge)
+    const spec = parseCustomTheme(JSON.stringify({ base }), `${base}.json`)
+    assert.ok(spec)
+    assert.equal(buildTheme(spec).sessionBackground, canvas, `${base} custom-theme fallback`)
+  }
+  const spec = parseCustomTheme(JSON.stringify({
+    base: 'dark', colors: { sessionBackground: '#202020' },
+  }), 'canvas.json')
+  assert.ok(spec)
+  assert.equal(buildTheme(spec).sessionBackground, '#202020')
+  assert.equal(buildTheme(spec).background, getTheme('dark').background)
 })
 
 // --- parsing / validation --------------------------------------------------
