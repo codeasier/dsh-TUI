@@ -1074,6 +1074,12 @@ export function Launchpad({
       event.stopImmediatePropagation()
       return
     }
+    if (isMod(key) && input === 'u') {
+      if (!inputFocused) return
+      deleteRange(0, caret)
+      event.stopImmediatePropagation()
+      return
+    }
     if (isMod(key) && input === 'w') {
       if (!inputFocused) return
       let start = caret

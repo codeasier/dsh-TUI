@@ -320,6 +320,8 @@ File paths in prose can open the file-action menu; automatic detection does not 
 
 **Dropped files**: a native Windows desktop drop (Windows Terminal / OpenConsole) arrives as an OSC 8 hyperlink; the parser restores its `file://` URI to a decoded local path before paste hygiene runs, so the `]8;id=…;` parameter bytes never reach the draft. Image paths enter the existing image staging pipeline; other files are inserted as a referenceable path (a path containing whitespace arrives in the composer's quoted `"…"` single-token form). Only `file://` URIs are restored, and it is fail-closed: a remote authority/UNC, a payload carrying several distinct URIs, or a URI that carries several tokens is refused and stays literal text rather than guessed.
 
+With the launchpad input focused, `Ctrl+U` deletes from the caret to the beginning of the line, preserving the text to its right.
+
 Full reference: [Interaction and commands](docs/interaction.en.md).
 
 ## Built-in Commands

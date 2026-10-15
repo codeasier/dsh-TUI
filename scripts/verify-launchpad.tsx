@@ -829,6 +829,54 @@ for (const brand of ['claude', 'codex'] as const) {
   s.close()
 }
 
+// #1529：经真实输入解析管线覆盖三种 Ctrl+U 编码，inline/fullscreen 同义。
+for (const fullscreen of [true, false]) {
+  for (const [encoding, sequence] of [
+    ['legacy', '\x15'],
+    ['CSI-u', '\x1b[117;5u'],
+    ['modifyOtherKeys', '\x1b[27;5;117~'],
+  ]) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'alpha beta', columns: 78, rows: 37, fullscreen })
+    const label = `${fullscreen ? 'fullscreen' : 'inline'} ${encoding}`
+    // 同批后续输入既证明按键已处理，也钉住 query/caret 同步镜像。
+    await s.send(sequence + 'X')
+    check(`B17 ${label} Ctrl+U 在行尾清空并把光标移到行首`,
+      ev.some(event => event.type === 'query' && event.value === '' && event.cursor === 0), JSON.stringify(ev))
+    check(`B18 ${label} 同批后续输入接在删除后的光标`,
+      last(ev, 'query')?.value === 'X' && last(ev, 'query')?.cursor === 1, JSON.stringify(last(ev, 'query')))
+    await s.send('\x03alpha beta\x1b[H' + '\x1b[C'.repeat(6) + sequence + 'X')
+    check(`B19 ${label} Ctrl+U 在行中保留光标右侧文本`,
+      last(ev, 'query')?.value === 'Xbeta' && last(ev, 'query')?.cursor === 1, JSON.stringify(last(ev, 'query')))
+    await s.send('\x1b[H' + sequence + 'Y')
+    check(`B20 ${label} Ctrl+U 在行首不删除文本`,
+      last(ev, 'query')?.value === 'YXbeta' && last(ev, 'query')?.cursor === 1, JSON.stringify(last(ev, 'query')))
+    await s.send('\x03' + sequence + 'Z')
+    check(`B21 ${label} 空输入 Ctrl+U 不提交或退出，仍可继续输入`,
+      last(ev, 'query')?.value === 'Z' && last(ev, 'query')?.cursor === 1
+        && last(ev, 'submit') === undefined && last(ev, 'escape') === undefined, JSON.stringify(ev))
+    s.close()
+  }
+}
+{
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { query: '前😀后' })
+  await s.send('\x1b[D\x15X')
+  check('B22 Ctrl+U 删除 Unicode 前缀，保留右侧完整字符',
+    last(ev, 'query')?.value === 'X后' && last(ev, 'query')?.cursor === 1, JSON.stringify(last(ev, 'query')))
+  s.close()
+}
+{
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { query: 'alpha beta' })
+  await s.send('\t')
+  await s.send('\x15\r')
+  check('B23 焦点在参数行时 Ctrl+U 不改草稿，Enter 仍激活参数',
+    last(ev, 'query') === undefined && last(ev, 'param')?.value === 'model'
+      && last(ev, 'submit') === undefined, JSON.stringify(ev))
+  s.close()
+}
+
 // ── C. 键位标签 ─────────────────────────────────────────────────────────────
 {
   const ev: Ev[] = []
@@ -2185,9 +2233,9 @@ for (const cols of [120, 100, 72, 60, 48]) {
 {
   // inputPaused：选择器开着时本屏键盘整块让位——按键不落进草稿。
   const ev: Ev[] = []
-  const s = await openLaunchpad(ev, { inputPaused: true })
+  const s = await openLaunchpad(ev, { inputPaused: true, query: 'alpha beta' })
   const before = ev.length
-  s.input.write('x')
+  s.input.write('\x15x')
   // 固定窗:让位 无事件可观测（静默本身是被测语义）。
   await new Promise(resolve => setTimeout(resolve, 150))
   check('H5 inputPaused 时按键不进草稿（事件零增长）', ev.length === before,

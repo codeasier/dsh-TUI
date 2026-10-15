@@ -269,6 +269,8 @@ OpenAI 条款约束。完整操作与当前边界：[Codex 后端](docs/codex-ba
 
 **拖放文件**：原生 Windows 的桌面拖放（Windows Terminal / OpenConsole）以 OSC 8 超链接到达；解析器在粘贴载荷卫生之前把其中的 `file://` URI 还原为解码后的本地路径，`]8;id=…;` 参数残渣不会进入草稿。图片路径进入既有图片 stage 管线；其他文件作为可引用路径插入（含空白路径以 composer 的单 token 引号形式 `"…"` 到达）。只还原 `file://` URI 且 fail-closed：远程 authority/UNC、一个载荷里带多个不同 URI、或带多个 token 的 URI 一律拒绝并保持字面文本，不做猜测。
 
+启动页输入框获得焦点时，`Ctrl+U` 删除光标到行首的内容，保留光标右侧的文字。
+
 完整参考：[交互与命令](docs/interaction.md)。
 
 ## 内置命令
