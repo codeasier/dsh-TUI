@@ -19,6 +19,9 @@
  *  7. codeFrameStyle setting: light default, full box, round trip.
  *  8. A Text gaining or losing its decoration keeps its hook count.
  *  9. Measure matches paint, and decoration never paints past its node.
+ * 10. Continuation padding stays out of body copies, including partial,
+ *     clipped, scrolled, cached and resized selections.
+ * 11. Cached noSelect replay is bounded by the visible viewport.
  *
  * Run: node --import tsx/esm scripts/verify-markdown-typed-decoration.tsx
  */
@@ -501,4 +504,189 @@ const shortBody = snap(
 assert.equal(shortBody.rows[0], '\u250c\u2500 typescript', 'a label that fits is painted whole')
 console.log('9. measure matches paint under wrap-ansi width drift; narrow hang and long header stay in the node')
 
-console.log('markdown typed decoration verified (engine equivalence, structure counts, copy contract, hanging continuations, fingerprint, mermaid sharing, cache identity, frame style, decoration toggle, measure/paint agreement)')
+// -- 10. Continuation padding is decoration, never source whitespace -----
+
+const frameCopyCases: Array<[string, string, string?]> = [
+  ['long ASCII', 'x'.repeat(60_000) + 'TAIL_7F31'],
+  ['indentation', '    ' + 'abcd'.repeat(30) + NL + '  return value'],
+  ['spaces across wraps', 'a'.repeat(53) + '   ' + 'b'.repeat(53) + '  end'],
+  ['interior whitespace', '  a' + ' '.repeat(70) + 'b  c'],
+  ['blank lines', 'a'.repeat(80) + NL + NL + '  b'.repeat(30) + NL + NL + 'end'],
+  ['wide CJK', '中文示例'.repeat(30) + '尾'],
+  ['graphemes', 'x̄🚀👩‍💻'.repeat(25) + 'TAIL'],
+  // wrap-ansi normalizes wrapped text to NFC; keep that existing behavior.
+  ['existing NFC normalization', 'á🚀👩‍💻'.repeat(25), 'á🚀👩‍💻'.repeat(25)],
+  // Existing contracts: final-fragment whitespace and trailing blank
+  // source lines are trimmed, and tabs become terminal-column spaces.
+  ['existing trailing trim', 'a  ' + NL + '   ' + NL + 'b  ' + NL + NL, 'a' + NL + NL + ' b'],
+  ['existing tab expansion', '\tX', '      X'],
+]
+const hardRowCopy = (source: string) => source.split(NL)
+  .map((line, index) => index > 0 && line !== '' ? ' ' + line : line).join(NL)
+
+for (const style of ['light', 'full'] as const) {
+  applyCodeFrameStyle(style)
+  for (const engine of ['typed', 'hybrid'] as const) {
+    process.env.DSH_TUI_CODE_FRAME = engine
+    for (const width of [20, 55, 80]) {
+      for (const [name, source, expected = hardRowCopy(source)] of frameCopyCases) {
+        const frame = snap(<CodeBlockFrame token={codeToken('txt', source)} highlight={null} />, width)
+        const last = frame.screen.height - (style === 'full' ? 2 : 1)
+        assert.equal(copyRect(frame.screen, [2, 1], [width - 1, last]), expected,
+          `${style}/${engine} ${name}: source copy with existing hard-row inset @${width}`)
+        assert.equal(copyRect(frame.screen, [width - 2, last], [2, 1]), expected,
+          `${style}/${engine} ${name}: reverse body selection @${width}`)
+        for (let row = 1; row <= last; row++) {
+          const continuation = frame.screen.softWrap[row] !== 0
+          assert.equal(cellAtIndex(frame.screen, row * width).char, RAIL,
+            `${style}/${engine}: left rail remains at column zero @${width}:${row}`)
+          if (style === 'full') {
+            assert.equal(cellAtIndex(frame.screen, (row + 1) * width - 1).char, RAIL,
+              `full: right rail remains at the last column @${width}:${row}`)
+            assert.equal(frame.screen.noSelect[(row + 1) * width - 1], 1,
+              `full: right rail stays excluded @${width}:${row}`)
+          }
+          assert.equal(frame.screen.noSelect[row * width + 1], continuation ? 1 : 0,
+            `${style}/${engine}: only continuation padding is excluded @${width}:${row}`)
+          assert.equal(frame.screen.noSelect[row * width + 2], 0,
+            `${style}/${engine}: source indentation stays selectable @${width}:${row}`)
+        }
+      }
+    }
+  }
+}
+applyCodeFrameStyle('light')
+process.env.DSH_TUI_CODE_FRAME = 'typed'
+
+// Partial/reversed body gestures never acquire a wrap pad. A gesture
+// anchored on that pad stays in the decoration's existing direction fence.
+const partialSource = '0123456789'.repeat(15)
+const partial = snap(<CodeBlockFrame token={codeToken('txt', partialSource)} highlight={null} />, 20)
+assert.equal(copyRect(partial.screen, [5, 2], [8, 4]), partialSource.slice(21, 61))
+assert.equal(copyRect(partial.screen, [8, 4], [5, 2]), partialSource.slice(21, 61))
+assert.ok(!copyRect(partial.screen, [1, 2], [19, 4]).includes('012'),
+  'padding-origin gesture stays inside the decoration column fence')
+
+// The visible top row can be a continuation of an offscreen row. Its pad
+// still belongs to the frame even though the preceding source is clipped.
+const clipped = snap(
+  <Box height={3} overflowY="hidden">
+    <Box marginTop={-2}>
+      <CodeBlockFrame token={codeToken('txt', partialSource)} highlight={null} forceWidth={20} />
+    </Box>
+  </Box>, 20,
+)
+assert.equal(copyRect(clipped.screen, [2, 0], [19, 2]), partialSource.slice(18, 72),
+  'vertical clipping retains continuation exclusion and visible source only')
+
+const scrollSelection = selection.createSelectionState()
+selection.startSelection(scrollSelection, 2, 1, partial.screen)
+selection.updateSelection(scrollSelection, 19, partial.screen.height - 1)
+selection.captureScrolledRows(scrollSelection, partial.screen, 1, 2, 'above')
+const { shiftRows } = await import('../src/ink/screen.js')
+shiftRows(partial.screen, 0, partial.screen.height - 1, 3)
+selection.shiftSelection(scrollSelection, -3, 0, partial.screen.height - 1, partial.screen.width)
+assert.equal(selection.getSelectedText(scrollSelection, partial.screen), partialSource,
+  'captured rows and shifted continuation masks reconstruct the source once')
+
+// A changed mask must be represented in the selection fingerprint too.
+const beforeMask = snap(<Text decoration={{ prefix: { text: RAIL + ' ', width: 2, noSelect: 1 } }}>{partialSource}</Text>, 20)
+const afterMask = snap(<Text decoration={{ prefix: { text: RAIL + ' ', width: 2, noSelect: 1, noSelectContinuation: 2 } }}>{partialSource}</Text>, 20)
+const watchedMask = selection.createSelectionState()
+selection.startSelection(watchedMask, 2, 0, beforeMask.screen)
+selection.updateSelection(watchedMask, 19, beforeMask.screen.height - 1)
+assert.equal(selection.refreshSelectionFingerprint(watchedMask, beforeMask.screen, false), false)
+assert.equal(selection.refreshSelectionFingerprint(watchedMask, afterMask.screen, false), true,
+  'copy-changing continuation exclusion invalidates a stationary selection')
+
+// Reuse one mounted frame through cached paints and a width round trip.
+// A sibling tick forces a new frame without changing the code text.
+for (const style of ['light', 'full'] as const) {
+  applyCodeFrameStyle(style)
+  for (const engine of ['typed', 'hybrid'] as const) {
+    process.env.DSH_TUI_CODE_FRAME = engine
+    const out = new FrameOutput()
+    const source = '  ' + 'alpha  中文 🚀 '.repeat(8) + 'TAIL'
+    const tree = (width: number, tick: number) => (
+      <TerminalSizeContext.Provider value={{ columns: width, rows: 40 }}>
+        <Box width={width} flexDirection="column">
+          <CodeBlockFrame token={codeToken('txt', source)} highlight={null} />
+          <Text>{'tick' + tick}</Text>
+        </Box>
+      </TerminalSizeContext.Provider>
+    )
+    const app = await render(tree(40, 0), {
+      stdout: out as unknown as NodeJS.WriteStream,
+      stdin: new FrameInput() as unknown as NodeJS.ReadStream,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+    try {
+      for (const [tick, width] of [40, 40, 20, 40].entries()) {
+        app.rerender(tree(width, tick))
+        assert.ok(await settled(() => {
+          const ink = instances.get(out as unknown as NodeJS.WriteStream) as unknown as {
+            frontFrame: { screen: ReturnType<typeof snap>['screen'] }
+          }
+          const screen = ink?.frontFrame?.screen
+          if (!screen) return false
+          let last = -1
+          let tickText = ''
+          for (let row = 1; row < screen.height; row++) {
+            if (cellAtIndex(screen, row * screen.width).char === RAIL) last = row
+            if (cellAtIndex(screen, row * screen.width).char === 't') {
+              tickText = Array.from({ length: 5 }, (_, col) => cellAtIndex(screen, row * screen.width + col).char).join('')
+            }
+          }
+          return tickText.trimEnd() === 'tick' + tick && last > 0 &&
+            copyRect(screen, [2, 1], [width - 1, last]) === source
+        }), `${style}/${engine}: source copy after cached paint/resize ${width}:${tick}`)
+      }
+    } finally {
+      await app.unmount()
+    }
+  }
+}
+applyCodeFrameStyle('light')
+process.env.DSH_TUI_CODE_FRAME = 'typed'
+console.log('10. continuation copies: whitespace, wide graphemes, all engines/styles, clipping, scroll capture, fingerprints and cached resize')
+
+// Count work rather than timing it: alternating hard/soft masks in a long
+// cached block must replay only the viewport's runs, including near its tail.
+const [{ createNode, createTextNode, appendChildNode, setStyle }, { default: Output }, { default: renderNode },
+  { StylePool, CharPool, HyperlinkPool, createScreen }, { textPaintCache }] = await Promise.all([
+  import('../src/ink/dom.js'), import('../src/ink/output.js'), import('../src/ink/render-node-to-output.js'),
+  import('../src/ink/screen.js'), import('../src/ink/node-cache.js'),
+])
+for (const count of [100, 10_000]) {
+  const node = createNode('ink-text')
+  appendChildNode(node, createTextNode(Array(count).fill('x'.repeat(32)).join(NL)))
+  setStyle(node, { textWrap: 'wrap', flexShrink: 0,
+    decoration: { prefix: { text: RAIL + ' ', width: 2, noSelect: 1, noSelectContinuation: 2 } } })
+  node.yogaNode!.setWidth(20)
+  node.yogaNode!.calculateLayout(20)
+  const styles = new StylePool()
+  const chars = new CharPool()
+  const links = new HyperlinkPool()
+  try {
+    for (const offset of [-10, -10, -(count * 2 - 12)]) {
+      const screen = createScreen(20, 8, styles, chars, links)
+      const output = new Output({ width: 20, height: 8, stylePool: styles, screen })
+      let maskCalls = 0
+      const noSelect = output.noSelect.bind(output)
+      output.noSelect = region => { maskCalls++; noSelect(region) }
+      const prepared = textPaintCache.get(node)
+      renderNode(node, output, { offsetY: offset, prevScreen: undefined })
+      output.get()
+      assert.equal(maskCalls, 8, `${count} source lines: mask work is bounded by eight visible rows`)
+      if (prepared) assert.equal(textPaintCache.get(node), prepared, 'viewport paint reuses the prepared masks')
+      assert.equal(copyRect(screen, [2, 0], [19, 7]), hardRowCopy(Array(4).fill('x'.repeat(32)).join(NL)),
+        'cached/clipped masks preserve four complete source lines')
+    }
+  } finally {
+    node.yogaNode!.freeRecursive()
+  }
+}
+console.log('11. cached mask replay stays viewport-bounded for 100 and 10,000 alternating source lines')
+
+console.log('markdown typed decoration verified (engine equivalence, structure counts, copy contract, hanging continuations, fingerprint, mermaid sharing, cache identity, frame style, decoration toggle, measure/paint agreement, continuation padding)')

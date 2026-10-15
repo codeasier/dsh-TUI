@@ -1044,6 +1044,17 @@ export default class Output {
       y + height > Math.max(0, clip?.y1 ?? 0)
   }
 
+  /** Intersect a rectangle with screen bounds and the active paint clip. */
+  getVisibleRect(x: number, y: number, width: number, height: number): Rectangle | undefined {
+    const clip = this.imageClips.at(-1)
+    const left = Math.max(x, 0, clip?.x1 ?? 0)
+    const top = Math.max(y, 0, clip?.y1 ?? 0)
+    const right = Math.min(x + width, this.width, clip?.x2 ?? this.width)
+    const bottom = Math.min(y + height, this.height, clip?.y2 ?? this.height)
+    if (left >= right || top >= bottom) return undefined
+    return { x: left, y: top, width: right - left, height: bottom - top }
+  }
+
   /**
    * Push a clip region; subsequent writes are restricted to it.
    * @param clip - the clip region to apply.
