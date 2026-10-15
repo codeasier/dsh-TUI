@@ -190,6 +190,7 @@ try {
     roster.filter(line => /LLL|job-|runni|comple|step/.test(line)).join('|'))
   check('open: focus starts at the roster head', focusedLabelLine().includes('LLL1'), focusedLine().trim() + ' | ' + focusedLabelLine().trim())
   check('open: summary line counts running', roster.some(l => l.includes('2 running')), roster.find(l => l.includes('running')) ?? '')
+  await sleep(30) // 固定窗:pacing 焦点帧后让 usePanelInput 的 effect 完成注册
   stdin.write('s')
   await settled(() => attachedContexts.length === 1, { timeout: 4000 })
   check('send-to-chat: title and summary use localized labels', attachedContexts[0]?.title === 'Background job job-run-1' && attachedContexts[0]?.content.includes('Background job job-run-1 (running)') && attachedContexts[0]?.content.includes('Command: gh run watch 1') && attachedContexts[0]?.content.includes('Output (last 1 lines):'), JSON.stringify(attachedContexts[0]))
@@ -212,6 +213,7 @@ try {
   check('click: target row on screen', cell !== null)
   if (cell !== null) {
     stdin.write('\x1b[<0;' + (cell.col + 1) + ';' + (cell.row + 1) + 'M')
+    await sleep(30) // 固定窗:pacing 鼠标 press 和 release 分两次事件
     stdin.write('\x1b[<0;' + (cell.col + 1) + ';' + (cell.row + 1) + 'm')
     await settled(() => focusedLabelLine().includes('LLL3'), { timeout: 4000 })
     check('click: SGR press on a roster row focuses that job', focusedLabelLine().includes('LLL3'), focusedLine().trim() + ' | ' + focusedLabelLine().trim())
@@ -223,12 +225,13 @@ try {
   await settled(() => exposedFocus === 'chat', { timeout: 4000 })
   check('esc: focus returns to chat (panel yields)', exposedFocus === 'chat' && exposedSplit && exposedActive === 'jobs',
     'focus=' + exposedFocus + ' split=' + String(exposedSplit) + ' active=' + exposedActive)
-  check('esc: roster still rendered (sidebar not closed)', lines().some(l => l.includes('LLL1')))
+  check('esc: roster still rendered (sidebar not closed)', lines().some(l => l.includes('LLL3')) && focusedLabelLine().includes('LLL3'))
 
   // --- 7. double-k kills the focused running job (two presses, two ticks:
   //        a same-tick double write merges into one paste event) ------------
   openJobs?.()
   await settled(() => exposedFocus === 'panel', { timeout: 4000 })
+  await sleep(30) // 固定窗:pacing 重新聚焦后让面板输入注册生效
   stdin.write('k')
   await settled(() => focusedLine().includes('press k'), { timeout: 2000 }).catch(() => undefined)
   await sleep(50) // 固定窗:pacing 双击间隔——同 tick 两次写入会被合并成一条粘贴事件（见上行注释）
@@ -252,18 +255,21 @@ try {
 
   setJobs([{ ...J1, command: 'cd D:/project\nWrite-Output CMD-TAIL', outputLines: Array.from({ length: 5 }, (_, index) => ({ text: 'RAW-OUT-' + index })) }])
   openJobs?.()
-  check('details: command folds while panel output remains full', await settled(() => lines().some(line => line.includes('RAW-OUT-4')) && lines().some(line => line.includes('RAW-OUT-0'))) && !lines().some(line => line.includes('CMD-TAIL')))
+  check('details: focused command and panel output are both full', await settled(() => lines().some(line => line.includes('RAW-OUT-4')) && lines().some(line => line.includes('RAW-OUT-0')) && lines().some(line => line.includes('CMD-TAIL'))))
   stdin.write('e')
-  check('details: e expands only the focused command', await settled(() => lines().some(line => line.includes('CMD-TAIL')) && lines().some(line => line.includes('RAW-OUT-0'))))
+  await sleep(80) // 固定窗:探针 按键处理后深视图也不能折叠
+  check('details: e preserves the full focused command and output', await settled(() => lines().some(line => line.includes('CMD-TAIL')) && lines().some(line => line.includes('RAW-OUT-0'))))
   stdin.write('e')
-  check('details: e folds the command while output stays full', await settled(() => !lines().some(line => line.includes('CMD-TAIL'))))
+  await sleep(80) // 固定窗:探针 按键处理后深视图也不能折叠
+  check('details: repeated e never truncates the focused deep view', await settled(() => lines().some(line => line.includes('CMD-TAIL')) && lines().some(line => line.includes('RAW-OUT-4'))))
   const commandCell = findCell('cd D:/project')
   check('details: command click target is visible', commandCell !== null)
   if (commandCell !== null) {
     stdin.write('\x1b[<0;' + (commandCell.col + 1) + ';' + (commandCell.row + 1) + 'M')
     await sleep(30) // 固定窗:pacing 鼠标 press 和 release 分两次事件
     stdin.write('\x1b[<0;' + (commandCell.col + 1) + ';' + (commandCell.row + 1) + 'm')
-    check('details: clicking command expands the script beside full output', await settled(() => lines().some(line => line.includes('CMD-TAIL')) && lines().some(line => line.includes('RAW-OUT-0'))))
+    await sleep(80) // 固定窗:探针 点击处理后深视图也不能折叠
+    check('details: clicking command preserves the full script and output', await settled(() => lines().some(line => line.includes('CMD-TAIL')) && lines().some(line => line.includes('RAW-OUT-0'))))
   }
 } finally {
   await app.unmount()

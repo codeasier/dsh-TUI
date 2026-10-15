@@ -390,7 +390,7 @@
 
     # Built-in subscription OAuth sign-in: mounts available pi-ai routes
     # (ChatGPT/Codex, Claude, Grok; newer pi-ai adds OpenAI direct and Meta)
-    # plus the /auth command. Its facade also delegates DeepSeek sign-in to
+    # plus the /auth and /fast commands. Its facade also delegates DeepSeek sign-in to
     # the Host-owned account service when available. The TUI's /provider
     # wizard gains its OAuth branch from ctx.dshAuth. Entry-level inject only —
     # the internal module's own inject is empty so a stale patch cannot
@@ -398,6 +398,15 @@
     - id: dsh-tui-auth
       name: '@deepseek-harness-tui/dsh-tui/oauth'
       inject: [llm, commands]
+      # Use /fast on|off|status interactively; bare /fast or toggle switches it.
+      # Applies from the next request across this plugin's supported OAuth
+      # routes in the current TUI process; effort and other protocols stay unchanged.
+      # Not persisted: restart restores the optional serviceTier startup default.
+      # config:
+      #   serviceTier: priority # Optional startup default; interactive /fast wins.
+      # Unset means off/provider default. Backend decides acceptance and quota.
+      # Profile overrides replace config: retain existing modelOverrides and
+      # any other fields you need. See docs/configuration.en.md.
 
     # The interactive front door. The plugin creates/resumes its agent at
     # runtime, seeds the startup status line, and disposes the whole app tree
@@ -435,7 +444,14 @@
         fullscreen: true
         # 以下为 /settings 可改的显示设置；每项说明与默认值见应用内 /settings 屏。
         terminalImages: true
+        # 启动时读取 catalog 路由（当前为 opencode-go）厂商端点公布的模型，把内置
+        # pi-ai 快照没有、你还没启用的那些记入调试日志（默认开启，不自动启用新模型）：
+        # 这些模型只能存在于派生路由 <路由名>-live，启用与否由你在 /provider 的
+        # 「管理官方新增模型」里勾选。离线、无密钥或清单读不到时静默；启动时仍会修复
+        # 已有派生路由的 x-opencode-session 头，并分流已启用的 Claude 模型（不改变启用集合）。
+        # catalogModelSync: false
         # diffLayout: auto
+        # toolBackground: subtle # none / subtle（默认）/ strong
         # mermaidDiagrams: true
         # 任务完成通知：off / unfocused（默认）/ always；方式：auto（默认）/ osc9 / bel。
         # taskNotifications: unfocused

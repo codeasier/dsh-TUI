@@ -327,9 +327,11 @@ export type AgentEvent =
    * A background task started. `callId` names the tool call whose result
    * acknowledged it; `command` is the full invocation when known. `hidden`
    * = housekeeping work the backend says is not activity (no card, no
-   * activity chip, no settlement toast).
+   * activity chip, no settlement toast). `handoff` = a command-less proof
+   * that work already left the foreground (a `job_output` read): the
+   * registry marks the durable hand-off without learning a command.
    */
-  | { readonly type: 'task.start'; readonly taskId: string; readonly kind: string; readonly description: string; readonly command?: string; readonly callId?: string; readonly background: boolean; readonly outputFile?: string; readonly hidden?: boolean; readonly time: number }
+  | { readonly type: 'task.start'; readonly taskId: string; readonly kind: string; readonly description: string; readonly command?: string; readonly callId?: string; readonly background: boolean; readonly outputFile?: string; readonly hidden?: boolean; readonly handoff?: boolean; readonly time: number }
   /**
    * A background task changed. `outputFile` = where the task writes its
    * output (as the backend reported it; readers validate it); `progress` = a

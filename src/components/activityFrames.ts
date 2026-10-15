@@ -10,16 +10,16 @@
 import { FRAME_PRESETS as upstreamPresets, type FramePreset } from 'dsh-working-activity/frames'
 export type { FramePreset }
 
-export const DEFAULT_PRESET = 'moon8'
+export const DEFAULT_PRESET = 'moon'
 
 /**
  * Read compatibility for saved preferences; the picker only offers current
  * names. `claude` is a pre-rename preset id (kept upstream by
  * dsh-working-activity for its own history): saved choices normalize to the
- * moon8 default instead of rendering the retired brand preset.
+ * moon8 instead of rendering the retired brand preset.
  */
 export function normalizeActivityPreset(name: string | undefined): string | undefined {
-  return name === 'claude' ? DEFAULT_PRESET : name
+  return name === 'claude' ? 'moon8' : name
 }
 
 export const FRAME_PRESETS: Record<string, FramePreset> = Object.fromEntries(

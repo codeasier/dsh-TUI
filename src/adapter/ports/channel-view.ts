@@ -377,7 +377,10 @@ export interface BackgroundJobOutputLine {
 export interface JobRow {
   id: string
   kind: string
+  /** Original registry label; the fallback when no call description exists. */
   label: string
+  /** Single-line overview from the durable shell call that handed off this job. */
+  description?: string
   status: BackgroundJobStatus
   detail?: string
   /** Live producer progress line (`3/10`, phase name); cleared at settle. */
@@ -817,11 +820,13 @@ export interface JobTimelineEvent {
 export interface BackgroundJobState {
   id: string
   kind: string
+  /** Original registry label; shell producers may use the raw command. */
   label: string
+  /** Single-line overview from the durable shell call that handed off this job. */
+  description?: string
   /** The full command that started the job, captured from the originating
-   *  tool call's args (`command`/`text`); the registry label is the friendly
-   *  description. Absent when the start ack never streamed through (replay
-   *  without the tool card, subagent one-shot jobs, …). */
+   *  tool call's args (`command`/`text`). Absent when the start ack never
+   *  streamed through (replay without the tool card, subagent one-shot jobs, …). */
   command?: string
   status: BackgroundJobStatus
   detail?: string

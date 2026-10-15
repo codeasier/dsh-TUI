@@ -78,6 +78,7 @@ export type Props = {
    * This property tells Ink to wrap or truncate text if its width is larger than container.
    */
   readonly wrap?: Styles['textWrap']
+  readonly continuationIndent?: readonly number[]
 
   /**
    * Ref to the underlying ink-text DOMElement (e.g. useDeclaredCursor
@@ -106,6 +107,7 @@ export default function ThemedText({
   strikethrough = false,
   inverse = false,
   wrap = 'wrap',
+  continuationIndent,
   ref,
   decoration,
   children,
@@ -135,6 +137,7 @@ export default function ThemedText({
       inverse={inverse}
       wrap={wrap}
       decoration={decoration}
+      continuationIndent={continuationIndent}
     >
       {children}
     </Text>

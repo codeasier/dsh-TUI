@@ -419,7 +419,7 @@ mkdirSync(inside, { recursive: true })
       stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false,
     })
     try {
-      check('render: the live job card shows its id and label', await settled(() => screen().includes(`${t('jobs-card-prefix')}b7live`) && screen().includes('make all')), screen())
+      check('render: the live job card shows its id and label', await settled(() => screen().split('\n').some(line => line.includes(`${t('jobs-card-prefix')}make all`) && line.includes('b7live'))), screen())
       check('render: the on-screen card pulls its tail from the reported file', await settled(() => screen().includes('step 1 ok'), { timeoutMs: 5000 }), screen())
       writeFileSync(outputFile, 'compiling…\nstep 1 ok\nstep 2 ok\n')
       check('render: … and keeps it fresh (polled while on screen)', await settled(() => screen().includes('step 2 ok'), { timeoutMs: 5000 }), screen())
@@ -436,7 +436,7 @@ mkdirSync(inside, { recursive: true })
       // The CLI's end report is a long sentence: only its exit code rides
       // the card header (a long detail would squeeze the label to nothing).
       query.emit({ type: 'system', subtype: 'task_notification', task_id: 'b7live', tool_use_id: 'c-live', status: 'completed', output_file: outputFile, summary: 'Background command "make all && make test && make install && make docs" completed (exit code 0)' })
-      check('render: settled id and exit code stay in the header, command follows below', await settled(() => { const lines = screen().split('\n'); const header = lines.findIndex(line => line.includes(`${t('jobs-card-prefix')}b7live`)); return header >= 0 && lines[header]?.includes('exit code: 0') === true && lines[header + 1]?.trimStart().startsWith('│ ') === true && lines[header + 1]?.includes('make all') === true }), screen())
+      check('render: settled title, id and exit code stay in the header', await settled(() => screen().split('\n').some(line => line.includes(`${t('jobs-card-prefix')}make all`) && line.includes('b7live') && line.includes('exit code: 0'))), screen())
     } finally {
       app.unmount()
       terminal.dispose()

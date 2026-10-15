@@ -474,7 +474,7 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
     }
     const h = mk()
     const subagent = channel.subagents.find(item => item.agentId === 'agent-tx')!
-    const app = await render(React.createElement(SubagentDetailScene, { subagent: subagent as never, onBack: () => undefined, loadTranscript: channel.subagentControl.history }), {
+    const app = await render(React.createElement(AlternateScreen, null, React.createElement(SubagentDetailScene, { subagent: subagent as never, onBack: () => undefined, loadTranscript: channel.subagentControl.history })), {
       stdout: h.stdout, stdin: h.stdin as never, stderr: h.stdout, exitOnCtrlC: false, patchConsole: false,
     })
     try {
@@ -491,9 +491,18 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
       const body = h.screen()
       check('transcript render: the page lands on the history view with its honest range line', body.includes('history') && body.includes('read-only'), body)
       check('transcript render: the count-only thinking degrades to body-unavailable, not fabricated prose', body.includes(t('subagent-thinking-unavailable')) && body.includes('4321'), body)
-      check('transcript render: the tool card renders (presented title + result)', body.includes('README.md') && body.includes('fixture body'), body)
+      check('transcript render: the read summary shows its title without dumping its result', body.includes('README.md') && !body.includes('fixture body'), body)
       check('transcript render: the answer text renders as markdown', body.includes('The fixture answer.'), body)
       check('transcript render: the hidden initial prompt stays hidden', !body.includes('secret prompt'), body)
+      const readHit = findText(h.terminal, 'README.md') as { col: number; row: number } | null
+      check('transcript render: the read summary is clickable', readHit !== null, h.screen())
+      const click = (final: string): string => `\x1b[<0;${readHit!.col + 1};${readHit!.row + 1}${final}`
+      h.stdin.write(click('M'))
+      // Separate pointer press/release so the normal row-click path handles expansion.
+      await sleep(30)
+      h.stdin.write(click('m'))
+      check('transcript render: opening the read exposes its durable result', await settled(() => h.screen().includes('fixture body')), h.screen())
+      check('transcript render: expansion still keeps the initial prompt hidden', !h.screen().includes('secret prompt'), h.screen())
     } finally {
       app.unmount()
       h.terminal.dispose()

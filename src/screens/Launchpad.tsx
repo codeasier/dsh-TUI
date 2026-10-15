@@ -2,7 +2,7 @@ import React from 'react'
 import { unlink } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
 import { Box, Text, useInput, useTerminalSize, useNativeCursor } from '../ui.js'
-import { SearchBox } from '../components/SearchBox.js'
+import { SearchBox, MULTILINE_MAX_ROWS } from '../components/SearchBox.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
 import { CommandSuggestions } from '../components/CommandSuggestions.js'
 import type { CommandCompletion } from '../commands.js'
@@ -19,7 +19,10 @@ import { t } from '../i18n.js'
 import { isMinimalUiMode } from '../minimalUiMode.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { isMod, isPlainReturn } from '../utils/modifiers.js'
+import { wordBoundaryLeft, wordBoundaryRight } from '../utils/wordEdit.js'
+import { parseCommandName } from '../commands.js'
 import { actionMatches } from '../utils/keymap.js'
+import { getGraphemeSegmenter } from '../utils/intl.js'
 import { formatClipboardInsert, readClipboard, type ClipboardRead } from '../utils/clipboard.js'
 import { imagePathMediaType, parsePastedImagePath, readBoundedRegularFile, stageClipboardFilePaths } from '../utils/pastedImagePath.js'
 import type { ChannelUi } from '../adapter/channel/ui-policy.js'
@@ -32,6 +35,7 @@ import {
   stripBracketedPasteMarkers,
 } from '../utils/inputPaste.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
+import instances from '../ink/instances.js'
 
 /** 动作入口的类型与状态驱动纯函数在 `launchpadActions.ts`（第四版拆出，表驱动回归在那边）。 */
 export type { LaunchpadAction } from '../components/launchpadActions.js'
@@ -582,6 +586,7 @@ export function Launchpad({
   const paletteOpen = inputFocused && paletteCommands.length > 0 && onCommandPick !== undefined
   const paletteSelectedIndex = Math.min(paletteIndex, Math.max(0, paletteCommands.length - 1))
   const paletteSelected = paletteCommands[paletteSelectedIndex]
+  React.useEffect(() => { setPaletteIndex(0) }, [query])
   const pickCommand = (commandLine: string): void => {
     setPaletteDismissedFor('')
     setPaletteIndex(0)
@@ -660,8 +665,7 @@ export function Launchpad({
   const rowNotice = pasteNotice !== undefined
     ? { text: pasteNotice, color: 'warning' as const }
     : notice
-  /** 单行插入（粘贴）：换行折叠成空格、`\r` 去掉——落地页是单行编辑器，
-   *  多行内容不许拼出换行（Enter 才是提交）。落在当下光标处。 */
+  /** Paste collapses incoming line breaks; explicit Shift+Enter inserts a draft newline. */
   const insertSingleLine = (text: string): void => {
     const clean = collapseToSingleLine(text)
     if (clean === '') return
@@ -724,6 +728,23 @@ export function Launchpad({
     imageChainRef.current = queued.catch(() => undefined)
     return queued
   }
+  /**
+   * 换行插入（Shift+Enter / Option+Enter / Ctrl+J，与聊天页 composer 同一套
+   * 契约）：落地页草稿从第八版起可以是多行——首屏想写两句话不必先回车进
+   * 聊天页。落点同样读当下 refs（同批按键里没有渲染）。
+   */
+  const insertNewline = (): void => {
+    const text = queryRef.current
+    const at = Math.max(0, Math.min(caretRef.current, text.length))
+    changeQuery(text.slice(0, at) + '\n' + text.slice(at), at + 1)
+  }
+
+  /**
+   * 草稿要画几行：换行数 + 1，按 SearchBox 的多行上限截窗。同一个数字喂给
+   * `resolveLaunchpadLayout`，立绘/键帽行该让位时先让位（多行输入框不许被
+   * 自己的行数挤出屏幕）。
+   */
+  const draftRows = Math.min(query.split('\n').length, MULTILINE_MAX_ROWS)
 
   // 光标闪烁相位（第四版修订：**自动呼吸**，不要求终端 focus 事件）。开关只看
   // 「输入框是这一屏的焦点目标」（focusIndex < 0）——`isTerminalFocused` 依赖
@@ -808,6 +829,7 @@ export function Launchpad({
     whale,
     whaleGirl,
     font: titleFont,
+    inputRows: draftRows,
   })
   // Tips 自动轮换（第七版，用户要「呼吸感」）：约 10s 一换，与点击/焦点+Enter
   // 的手动切换**并存**——手动切换改 tipIndex，本 effect 以 tipIndex 为依赖，
@@ -835,9 +857,12 @@ export function Launchpad({
    * 这一屏独占键盘（`Chat` 在 `supervisorOpen` 那一层之前让位），所以输入
    * 在这里自持——把按键转发给 Chat 反而要多绕一层 state 往返。
    *
-   * 编辑能力刻意只做单行编辑器该有的那几样：退格 / Delete / 左右移动 /
-   * Home / End / 粘贴。首屏不是编辑器，用户在上面打的第一句通常就一两个
-   * 词；多行与 `@` 补全属于聊天页，图片经同一 channel 暂存。
+   * 编辑能力是**单行编辑器该有的全套**：退格 / Delete / 左右移动 /
+   * Home / End / 粘贴，加上与聊天页 composer 同一套词级与行级编辑
+   * （Ctrl/Option/Alt+←→ 与 Alt+B/F 跳词、Ctrl+W 删词、Ctrl+A/E/U/K
+   * 行首/行尾/删到行首/删到行尾——用户在聊天页养成的肌肉记忆必须原样
+   * 带进首屏，见 utils/wordEdit.ts 的同源约定）。多行、图片、`@` 补全
+   * 仍属于聊天页，敲 Enter 就过去了。
    *
    * `↑/↓` 与 `Tab` 在键帽行上移动焦点；焦点在 `-1` 时这两组键无操作
    * （首屏没有可滚的东西）。
@@ -846,6 +871,9 @@ export function Launchpad({
     // 选择器盖在这一屏之上时键盘整块让位（Chat 的 overlay 分支处理；Esc 关
     // 选择器回到这里）。没有这道闸，选择器分支没消费的键会漏进草稿。
     if (inputPaused) return
+    // 一批 stdin（discreteUpdates）里的按键之间没有渲染：query/caret 读
+    // 同步镜像（changeQuery 维护），否则同批后续按键吃到上一帧的闭包旧值。
+    // 名字遮蔽 props 同名变量是刻意的——handler 里要的永远是「最新值」。
     const query = queryRef.current
     const caret = caretRef.current
     const composing = key.ctrl || key.meta || key.super
@@ -925,6 +953,22 @@ export function Launchpad({
         return
       }
     }
+    // 第八版补齐两条聊天页有、落地页此前没有的全局动作（这一屏独占键盘，
+    // Chat 的 useInput 在落地页期间整块让位，不在这里接就等于没绑）：
+    //   - redraw（Ctrl+L）：清屏重画。既是最通用的"屏幕被外部写花了"恢复键，
+    //     也正是这次输入法黑带的兜底（终端/输入法带外涂的那一行会被整屏重写）。
+    //   - star（Alt+S）：与开屏标语点击、`/star` 同一个动作——可点目标必须有
+    //     键盘路径（仓库硬规矩），立绘上的星标此前只有鼠标一条路。
+    if (actionMatches('redraw', input, key)) {
+      instances.get(process.stdout)?.forceRedraw()
+      event.stopImmediatePropagation()
+      return
+    }
+    if (actionMatches('star', input, key) && onStarClick !== undefined) {
+      onStarClick()
+      event.stopImmediatePropagation()
+      return
+    }
     // 命令补全面板（第六版 BUG 1）：面板开着时 ↑/↓/Enter/Tab/Esc 全归面板——
     // 与聊天页 composer 的补全菜单同一套键位。Tab 补全；Enter/点击执行选中命令
     // （onCommandPick → Chat 的 runCommand，绝不 submit）；Esc 只收面板，
@@ -946,7 +990,13 @@ export function Launchpad({
         return
       }
       if (isPlainReturn(key)) {
-        pickCommand(paletteSelected.commandLine)
+        // /model plus Tab's trailing space can already list model children.
+        // Bare Enter opens the picker instead of applying the first child.
+        const currentQuery = queryRef.current
+        const parsed = parseCommandName(currentQuery)
+        pickCommand(parsed?.name === 'model' && parsed.rawInput.trim() === ''
+          ? currentQuery.trimEnd()
+          : paletteSelected.commandLine ?? '/' + paletteSelected.name + ' ')
         event.stopImmediatePropagation()
         return
       }
@@ -969,6 +1019,38 @@ export function Launchpad({
       pasteRevisionRef.current += 1
       if (query !== '') changeQuery('', 0)
       else onEscape('exit')
+      event.stopImmediatePropagation()
+      return
+    }
+    // ── 换行（第八版；与聊天页 composer 同一套键位与判定顺序）────────────
+    // Ctrl+J 与 legacy LF 是终端报不出 Enter 修饰时的可移植回退（kitty/
+    // modifyOtherKeys 会把它们编成精确的 Ctrl+J，老终端直接送裸 LF）。
+    // 这一段必须排在 `isPlainReturn`（裸 Enter 提交）**之前**，否则 Shift+
+    // Enter 会被下面 `key.return` 的兜底静默吞掉——用户报的"换行键没反应"
+    // 就是它。
+    const isCtrlJ = input === 'j' && key.ctrl && !key.shift && !key.meta && !key.super
+    if (inputFocused && ((input === '\n' && event?.keypress.name === 'enter') || isCtrlJ)) {
+      insertNewline()
+      event.stopImmediatePropagation()
+      return
+    }
+    if (key.return && isMod(key)) {
+      // Ctrl/Cmd+Enter：聊天页里是"发送"（那边 Enter 是换行）；落地页同义——
+      // 焦点在输入框时直接提交当前草稿，别让组合键落进 `key.return` 兜底
+      // 变成无声无息。
+      if (inputFocused) {
+        const notice = onSubmit(query)
+        if (typeof notice === 'string') showPasteNotice(notice)
+        else pasteRevisionRef.current += 1
+      }
+      event.stopImmediatePropagation()
+      return
+    }
+    if (key.return && (key.shift || key.meta) && !key.ctrl && !key.super) {
+      // Shift+Enter / Option+Enter 换行（Option+Enter 走 ESC CR，是终端报不出
+      // shift 时的回退，见 PromptInput 的同一条注释）。焦点不在输入框时无操作
+      // ——焦点环上的键位归焦点环。
+      if (inputFocused) insertNewline()
       event.stopImmediatePropagation()
       return
     }
@@ -1004,6 +1086,30 @@ export function Launchpad({
       return
     }
     if (key.tab || key.upArrow || key.downArrow) {
+      // 多行草稿里 ↑/↓ 先归光标（编辑器语义，与聊天页 composer 一致）：草稿
+      // 有换行且输入框有焦点时按显示列跨行移动，走到头才轮到焦点环——否则
+      // Shift+Enter 写出来的第二行根本回不去。单行草稿（绝大多数情况）行数
+      // 为 1，这里直接穿过去，焦点环的手感一字不变。
+      if (inputFocused && (key.upArrow || key.downArrow) && query.includes('\n')) {
+        const at = caret
+        const start = lineStartAt(query, at)
+        const end = lineEndAt(query, at)
+        const column = stringWidth(query.slice(start, at))
+        if (key.upArrow && start > 0) {
+          const prevEnd = start - 1
+          const prevStart = lineStartAt(query, prevEnd)
+          changeQuery(query, offsetAtColumn(query, prevStart, prevEnd, column))
+          event.stopImmediatePropagation()
+          return
+        }
+        if (key.downArrow && end < query.length) {
+          const nextStart = end + 1
+          const nextEnd = lineEndAt(query, nextStart)
+          changeQuery(query, offsetAtColumn(query, nextStart, nextEnd, column))
+          event.stopImmediatePropagation()
+          return
+        }
+      }
       if (actions.length === 0) return
       const step = key.upArrow || (key.tab && key.shift) ? -1 : 1
       // `-1`（输入框）从下方进入：向"上"回到输入框，向"下"落到第一格——
@@ -1031,11 +1137,29 @@ export function Launchpad({
       event.stopImmediatePropagation()
       return
     }
+    // ── 词级移动（与聊天页 composer 同一套键位与语义）────────────────────
+    // Ctrl+←/→（Windows/Linux 肌肉记忆）、Option/Alt+←/→（macOS；legacy
+    // ESC b/f 会直接解析成 meta 箭头）与 CSI-u / modifyOtherKeys 报上来的
+    // Alt+B/F 全在这里吃掉——必须排在裸箭头分支**之前**，否则带修饰的箭头
+    // 退化成单码位移动（这次修的就是它）。
+    const altWordKey = key.meta && !key.ctrl && !key.super && !key.shift
+    if (inputFocused && (((isMod(key) || altWordKey) && key.leftArrow) || (altWordKey && input === 'b'))) {
+      changeQuery(query, wordBoundaryLeft(query, caret))
+      event.stopImmediatePropagation()
+      return
+    }
+    if (inputFocused && (((isMod(key) || altWordKey) && key.rightArrow) || (altWordKey && input === 'f'))) {
+      changeQuery(query, wordBoundaryRight(query, caret))
+      event.stopImmediatePropagation()
+      return
+    }
     if (key.leftArrow || key.rightArrow || key.home || key.end) {
       if (!inputFocused) return
       const at = caret
-      const next = key.home ? 0
-        : key.end ? query.length
+      // Home/End 是**行**首/行尾（readline 语义，与聊天页 composer 一致）；
+      // 单行草稿下行首=0、行尾=末长，与从前完全一致。
+      const next = key.home ? lineStartAt(query, at)
+        : key.end ? lineEndAt(query, at)
           : key.leftArrow ? Math.max(0, prevBoundary(query, at))
             : Math.min(query.length, nextBoundary(query, at))
       changeQuery(query, next)
@@ -1055,12 +1179,38 @@ export function Launchpad({
       event.stopImmediatePropagation()
       return
     }
-    if (isMod(key) && input === 'w') {
-      if (!inputFocused) return
-      let start = caret
-      while (start > 0 && /\s/u.test(query[start - 1]!)) start--
-      while (start > 0 && !/\s/u.test(query[start - 1]!)) start--
+    // ── 行级编辑（与聊天页 composer 同一套）──────────────────────────────
+    // Ctrl+A/E 跳行首/行尾（编辑器语境的 Mod+A——聊天页把裸 Ctrl+A 让给
+    // 子代理面板，这里没有那个面板）；Ctrl+U/K 删到行首/行尾；Ctrl+W 删
+    // 光标前一个 Unicode 词（含无空格中文）。第八版起这四条都是**行级**
+    // （与聊天页 composer 的同名键逐条对齐）：多行草稿里 Home/End/Ctrl+A/E
+    // 只在本行走，Ctrl+U/K 只删本行——单行草稿下与从前逐字节一致（行首=0、
+    // 行尾=末长）。焦点不在输入框时与退格一样无操作。
+    if (inputFocused && isMod(key) && input === 'a') {
+      changeQuery(query, lineStartAt(query, caret))
+      event.stopImmediatePropagation()
+      return
+    }
+    if (inputFocused && isMod(key) && input === 'e') {
+      changeQuery(query, lineEndAt(query, caret))
+      event.stopImmediatePropagation()
+      return
+    }
+    if (inputFocused && isMod(key) && input === 'u') {
+      const start = lineStartAt(query, caret)
       deleteRange(start, caret)
+      event.stopImmediatePropagation()
+      return
+    }
+    if (inputFocused && isMod(key) && input === 'k') {
+      const end = lineEndAt(query, caret)
+      deleteRange(caret, end)
+      event.stopImmediatePropagation()
+      return
+    }
+    if (inputFocused && isMod(key) && input === 'w') {
+      const boundary = wordBoundaryLeft(query, caret)
+      deleteRange(boundary, caret)
       event.stopImmediatePropagation()
       return
     }
@@ -1129,6 +1279,11 @@ export function Launchpad({
               cursorOffset={caret}
               imageSpans={imageSpans}
               caretBlink={inputFocused ? caretPhase : true}
+              // 第八版：Shift+Enter 换行——草稿里的 `\n` 分行渲染，框跟着长高
+              // （`draftRows` 同一数字喂给 resolveLaunchpadLayout，立绘让位），
+              // 行数上限就是这一屏的高度预算。
+              multiline
+              maxRows={MULTILINE_MAX_ROWS}
             />
           </Box>
           {/* 参数行：框外、紧贴框下（无空行），左对齐输入框（框缘 + padding 2 格）。
@@ -1352,22 +1507,22 @@ export function fitChips(
 }
 
 /**
- * 光标左移一个**码位**（不是 UTF-16 单元）。
- *
- * `Array.from` 迭代码位，所以退格/左移不会把一个 emoji 或代理对劈成两半
- * ——`SearchBox` 的窗口化在同一条假设上工作（它的 `windowQuery` 专门有
- * 一段"中途代理对回退到起点"的代码），两边必须一致，否则光标会落在半
- * 个字符里，然后下一次按键就画出一个碎 emoji。
+ * 光标左移一个 grapheme（不拆分代理对、组合字符或 ZWJ emoji）。
+ * 与 SearchBox 的窗口化同源，落点始终处于完整字素边界。
  *
  * @param text - 全文。
  * @param at - 当前 UTF-16 偏移。
  * @returns 左侧一个码位的偏移（已在 0 时返回 0）。
  */
 export function prevBoundary(text: string, at: number): number {
-  if (at <= 0) return 0
-  const before = Array.from(text.slice(0, at))
-  before.pop()
-  return before.join('').length
+  const clamped = Math.max(0, Math.min(at, text.length))
+  if (clamped === 0) return 0
+  let prev = 0
+  for (const { index } of getGraphemeSegmenter().segment(text)) {
+    if (index >= clamped) break
+    prev = index
+  }
+  return prev
 }
 
 /**
@@ -1377,10 +1532,60 @@ export function prevBoundary(text: string, at: number): number {
  * @returns 右侧一个码位的偏移（到末尾时返回末长）。
  */
 export function nextBoundary(text: string, at: number): number {
-  if (at >= text.length) return text.length
-  const rest = Array.from(text.slice(at))
-  const first = rest[0] ?? ''
-  return at + first.length
+  const clamped = Math.max(0, Math.min(at, text.length))
+  for (const { index } of getGraphemeSegmenter().segment(text)) {
+    if (index > clamped) return index
+  }
+  return text.length
+}
+
+/**
+ * 光标所在行的行首偏移（readline 语义，与聊天页 composer 的 Home/Ctrl+A
+ * 完全一致）：单行文本恒 0。
+ * @param text - 全文。
+ * @param at - 当前 UTF-16 偏移。
+ * @returns 行首偏移。
+ */
+export function lineStartAt(text: string, at: number): number {
+  const clamped = Math.max(0, Math.min(at, text.length))
+  return clamped === 0 ? 0 : text.lastIndexOf('\n', clamped - 1) + 1
+}
+
+/**
+ * 光标所在行的行尾偏移（**不含**换行符本身）：单行文本恒 `text.length`。
+ * @param text - 全文。
+ * @param at - 当前 UTF-16 偏移。
+ * @returns 行尾偏移。
+ */
+export function lineEndAt(text: string, at: number): number {
+  const clamped = Math.max(0, Math.min(at, text.length))
+  const next = text.indexOf('\n', clamped)
+  return next === -1 ? text.length : next
+}
+
+/**
+ * 行内按**显示列**定位（↑/↓ 跨行时保持列位）：从行首起累加 grapheme 宽度，
+ * 走到第一个「加上它就超过目标列」的簇之前为止；宽字符不会劈半。目标列超出
+ * 行宽时返回行尾。
+ * @param text - 全文。
+ * @param start - 行首偏移。
+ * @param end - 行尾偏移。
+ * @param column - 目标显示列（格）。
+ * @returns 该行内的 UTF-16 偏移。
+ */
+export function offsetAtColumn(text: string, start: number, end: number, column: number): number {
+  if (column <= 0) return start
+  let used = 0
+  let offset = start
+  for (const { index, segment } of getGraphemeSegmenter().segment(text)) {
+    if (index < start) continue
+    if (index >= end) break
+    const w = stringWidth(segment)
+    if (used + w > column) return offset
+    used += w
+    offset = index + segment.length
+  }
+  return offset
 }
 
 /** 最小模式这一屏整体不存在（与 `LogoHeader` 同规则）：直接进会话。 */

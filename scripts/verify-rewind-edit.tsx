@@ -145,15 +145,9 @@ async function verify(fullscreen: boolean, columns: number, entry: 'slash' | 'es
     exitOnCtrlC: false, patchConsole: false,
   })
   const shows = (text: string) => viewportLines(terminal).some(line => line.includes(text))
-  /**
-   * A prompt ROW, not just any row carrying the text.
-   *
-   * The composer's row now begins with the session entry control (`⌸ `) before
-   * the caret glyph, so anchoring on `^\s*❯` stopped matching the very row it
-   * was written to find: the draft was on screen and the assertion said it was
-   * never typed. The anchor therefore skips that leading control.
-   */
-  const promptShows = (text: string) => viewportLines(terminal).some(line => /^\s*(?:⌸\s*)?❯/u.test(line) && line.includes(text))
+  /** Match the composer row, not transcript text: its left rail precedes
+   * the optional session-entry control and the effort/caret glyph. */
+  const promptShows = (text: string) => viewportLines(terminal).some(line => /^\s*┃\s*(?:⌸\s*)?❯/u.test(line) && line.includes(text))
   const enter = async () => {
     await sleep(120) // 固定窗:墙钟 Enter deduplication is 80 ms in both Chat and PromptInput
     stdin.write('\r')

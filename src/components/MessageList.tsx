@@ -9,9 +9,11 @@ import { normalizeIdePath } from '../dsh-adapter/ide-channel.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import type { DOMElement } from '../ink/dom.js'
 import { Divider } from './design-system/Divider.js'
-import { UserPromptMessage } from './messages/UserPromptMessage.js'
+import { UserPromptMessage, USER_PROMPT_PADDING_Y } from './messages/UserPromptMessage.js'
 import { AssistantTextLeafRow, ThinkingLeafRow, ToolLeafRow } from './messages/TranscriptLeaves.js'
 import { liveOutputMaxLines, liveOutputRows } from './messages/liveOutputLines.js'
+import { isInlineToolSummary } from './messages/AssistantToolUseMessage.js'
+import { MachineRail } from './messages/MachineRail.js'
 import { SubagentMessage } from './Chat/SubagentMessage.js'
 import { JobCard } from './Chat/JobCard.js'
 import { JobGroupHeader } from './Chat/JobGroupHeader.js'
@@ -26,11 +28,12 @@ import { StreamingMarkdown } from './StreamingMarkdown.js'
 import { MessageMetadata } from './messages/MessageMetadata.js'
 import { stripNarration } from '../utils/narration.js'
 import { foldLongLines } from '../utils/fold-long-lines.js'
+import { compactSummaryDisplayText } from '../utils/compact-summary.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
 import { clipPreview, type TimelineSnapshot, type TimelineTurn } from '../ink/timeline-rail.js'
 import type { ToolBackground } from '../tuiDisplayPrefs.js'
-import { getRevealVersion, revealLengthOf, revealTextOf } from './smoothReveal.js'
+import { revealLengthOf, revealTextOf } from './smoothReveal.js'
 import { useRevealVersion } from '../hooks/useRevealVersion.js'
 import { TranscriptImages } from './messages/TranscriptImages.js'
 import { primaryComboString } from '../utils/keymap.js'
@@ -278,15 +281,16 @@ function signatureParts(
       )
       break
     case 'job': {
-      // Command expansion and group folding change the row height; output
-      // stays within a fixed two-row tail, independent of command expansion.
+      // The displayed title and group folding change the row height; output
+      // stays within a bounded visual tail.
       const group = row.jobGroup
       signatureScratch.push(
         expanded,
         expandedRows.has(row.id),
         row.job?.status ?? '',
-        // Script text, including blank-line changes, determines expanded height.
-        row.job?.label ?? '',
+        // Match JobCard's jobTitleOf: description wins over the registry label.
+        // Keep the text itself: equal JS lengths can have different cell widths.
+        row.job?.description || row.job?.label || '',
         row.job?.outputLines.length ?? 0,
         row.job?.detail?.length ?? 0,
         row.job?.progress?.length ?? 0,
@@ -300,6 +304,12 @@ function signatureParts(
         group?.head === true,
         group?.folded === true,
       )
+      // At most three logical tail lines contribute to the three VISUAL rows.
+      // Include gaps and actual text, not lengths (CJK/ANSI/word breaks differ).
+      const lines = row.job?.outputLines ?? []
+      for (let index = Math.max(0, lines.length - 3); index < lines.length; index++) {
+        signatureScratch.push(lines[index]!.text, lines[index]!.gapBefore === true)
+      }
       break
     }
     case 'compact':
@@ -346,6 +356,40 @@ function signatureParts(
   return signatureScratch
 }
 
+/**
+ * Visual layer of a transcript row — what the block-gap pre-pass groups by.
+ *
+ * Compact tool summaries form tight runs. Output cards and reasoning are
+ * separated from prose; subagent/job updates and local shell rows stay tight.
+ * Compute gaps before windowing so scroll offsets stay stable.
+ */
+type BlockLayer = 'user' | 'prose' | 'tool' | 'summary' | 'reasoning' | 'machine' | 'notice' | 'interrupt' | 'compact'
+
+function blockLayer(row: ChatRow, expanded: boolean): BlockLayer {
+  switch (row.kind) {
+    case 'user':
+      return 'user'
+    case 'assistant':
+      return 'prose'
+    case 'tool':
+      return !expanded && row.tool && isInlineToolSummary(row.tool) ? 'summary' : 'tool'
+    case 'reasoning':
+      return 'reasoning'
+    case 'subagent':
+    case 'job':
+    case 'local':
+    case 'local-output':
+    case 'turn-summary':
+      return 'machine'
+    case 'notice':
+      return 'notice'
+    case 'interrupt':
+      return 'interrupt'
+    case 'compact':
+      return 'compact'
+  }
+}
+
 export function MessageList({
   rows,
   expanded,
@@ -358,7 +402,7 @@ export function MessageList({
   diffLayout = 'auto',
   thinkingFold = 'preview',
   jobGroupFold = 'auto',
-  toolBackground = 'none',
+  toolBackground = 'subtle',
   foldTerminalCommand = false,
   turnUsageRow = false,
   smoothStreaming = false,
@@ -524,9 +568,8 @@ export function MessageList({
     thinkingVisible: boolean
     out: readonly ChatRow[]
     margins: ReadonlyMap<number, boolean>
-    /** Per-row `streaming === true` bits. The settle flip (streaming cleared
-     * in place, rows identity/length unchanged) changes empty-assistant
-     * filtering below, so the cache must rebuild on any bit change. */
+    /** Per-row streaming and compact-summary bits. In-place changes affect
+     * both filtering and block spacing, even when rows identity is stable. */
     streamBits: Uint8Array
     /** Job-status/toggle fingerprint (see below): job cards settle IN PLACE,
      *  and a settling run changes how — and whether — its members render. */
@@ -534,10 +577,18 @@ export function MessageList({
     /** Turn-usage row toggle: flipping it adds/removes turn-summary rows
      *  from the visible window without touching the row array. */
     turnRowOn: boolean
+    /** Group decorations are shallow copies: replaced job payloads must
+     *  refresh them even when status/folding did not change. */
+    jobRefs: readonly (JobRow | undefined)[]
   } | null>(null)
   /** Generation counter for the visibleRows cache (timeline memo key). */
   const visGenRef = React.useRef(0)
   const visibleCache = visibleRowsCacheRef.current
+  // Include presentation changes in the allocation-free fingerprint: tools
+  // settle in place, and expansion changes compact runs into spaced cards.
+  const rowLayoutBits = (row: ChatRow): number =>
+    (row.streaming === true ? 1 : 0) |
+    (row.kind === 'tool' && blockLayer(row, expanded || expandedRows?.has(row.id) === true) === 'summary' ? 2 : 0)
   // Streaming-bit fingerprint: in-place `streaming = false` writes (turn
   // settle) are invisible to the rows-identity/length key above, but an
   // assistant row that settles with EMPTY text crosses the empty-assistant
@@ -547,7 +598,13 @@ export function MessageList({
   if (streamBitsSame) {
     const bits = visibleCache!.streamBits
     for (let i = 0; i < rows.length; i++) {
-      if (bits[i] !== (rows[i]!.streaming === true ? 1 : 0)) { streamBitsSame = false; break }
+      if (bits[i] !== rowLayoutBits(rows[i]!)) { streamBitsSame = false; break }
+    }
+  }
+  let jobRefsSame = visibleCache !== null && visibleCache.jobRefs.length === rows.length
+  if (jobRefsSame) {
+    for (let index = 0; index < rows.length; index++) {
+      if (visibleCache!.jobRefs[index] !== rows[index]!.job) { jobRefsSame = false; break }
     }
   }
   // Job-group fingerprint: job statuses land IN PLACE (`row.job` is
@@ -570,6 +627,7 @@ export function MessageList({
     visibleCache.thinkingVisible !== thinkingVisible ||
     visibleCache.jobsSig !== jobsSig ||
     visibleCache.turnRowOn !== turnUsageRow ||
+    !jobRefsSame ||
     !streamBitsSame
   ) {
     const sliced = showAll || hiddenCount <= 0
@@ -720,21 +778,20 @@ export function MessageList({
       i = end
     }
     const visibleOut = foldedMembers.size === 0 ? out : out.filter(row => !foldedMembers.has(row.id))
-    // Every rendered block gets a 1-row top margin except the first. Pre-pass
-    // over the FULL list so a windowed row keeps the exact spacing it would
-    // have in a fully-mounted list. Group members are the exception: they sit
-    // flush under their head, which is the separator line the group removes.
+    // Preserve compact tool/machine runs as well as flush job-group members.
+    // Compute gaps over the FULL list before windowing for stable geometry.
     const margins = new Map<number, boolean>()
     {
-      let prev: ChatRow['kind'] | undefined
+      let prev: BlockLayer | undefined
       for (const row of visibleOut) {
+        const layer = blockLayer(row, expanded || expandedRows.has(row.id))
         const member = row.jobGroup !== undefined && !row.jobGroup.head
-        margins.set(row.id, prev !== undefined && !member)
-        prev = row.kind
+        margins.set(row.id, prev !== undefined && !member && !((prev === 'machine' && layer === 'machine') || (prev === 'summary' && layer === 'summary')))
+        prev = layer
       }
     }
     const streamBits = new Uint8Array(rows.length)
-    for (let i = 0; i < rows.length; i++) streamBits[i] = rows[i]!.streaming === true ? 1 : 0
+    for (let i = 0; i < rows.length; i++) streamBits[i] = rowLayoutBits(rows[i]!)
     visibleRowsCacheRef.current = {
       rows,
       rowsLength: rows.length,
@@ -745,6 +802,7 @@ export function MessageList({
       streamBits,
       jobsSig,
       turnRowOn: turnUsageRow,
+      jobRefs: rows.map(row => row.job),
     }
     visGenRef.current++
   }
@@ -805,6 +863,7 @@ export function MessageList({
    *  scrollback and the diff skips them. */
   const lastStartRef = React.useRef<number>(-1)
   const holdFlushTickRef = React.useRef<number>(-1)
+  const geometryFlushPendingRef = React.useRef(false)
   /** True when frame-budgeted history painting still has batches left
    *  (main-screen open): the layout effect schedules the next slice. */
   const paintPendingRef = React.useRef(false)
@@ -870,6 +929,7 @@ export function MessageList({
   // into minor GC; the GC share of the scroll profile).
   const sigRef = React.useRef(new Map<number, Array<string | number | boolean>>())
   let growingStreamNeedsMeasure = false
+  let heightInputsChanged = false
   {
     const sigs = sigRef.current
     for (let i = 0; i < visibleRows.length; i++) {
@@ -906,6 +966,7 @@ export function MessageList({
         }
       }
       if (same) continue
+      heightInputsChanged = true
       if (sigs.size >= HEIGHTS_CACHE_MAX) {
         const oldest = sigs.keys().next().value
         if (oldest !== undefined) sigs.delete(oldest)
@@ -923,6 +984,22 @@ export function MessageList({
       // Retaining the estimate must not skip the next fresh Yoga read.
       else if (localRefs.current.has(row.id)) growingStreamNeedsMeasure = true
       heightsVersionRef.current++
+    }
+  }
+
+  // Inline history must survive the first flush of changed row geometry,
+  // even when that commit did not widen the mount window. A measurement
+  // commit can otherwise replace still-visible rows with spacers BEFORE
+  // the growing frame pushes their complete text into native scrollback.
+  if (historyPaintEnabled) {
+    const flushTick = getTerminalFlushTick()
+    if (geometryFlushPendingRef.current) {
+      // Release the completed hold before arming another: continuous
+      // streaming must still be able to tighten its window at flush edges.
+      if (flushTick !== holdFlushTickRef.current) geometryFlushPendingRef.current = false
+    } else if (heightInputsChanged) {
+      holdFlushTickRef.current = flushTick
+      geometryFlushPendingRef.current = true
     }
   }
 
@@ -1234,7 +1311,10 @@ export function MessageList({
       for (let i = 0; i < visibleRows.length; i++) {
         const row = visibleRows[i]!
         if (row.kind !== 'user') continue
-        measuredTops.set(row.id, base + offsets[i]! + (margins.get(row.id) === true ? 1 : 0))
+        // A filled prompt has a padding row before its text. Anchoring to the
+        // surface edge would pin its header while the first text row is visible.
+        measuredTops.set(row.id, base + offsets[i]! + (margins.get(row.id) === true ? 1 : 0)
+          + (row.text !== '' ? USER_PROMPT_PADDING_Y : 0))
       }
       // Walk ALL rows (not the fold window): the rail must cover the whole
       // conversation — a tool-heavy session packs 300 rows into a handful
@@ -1449,10 +1529,6 @@ export function MessageList({
           const subagent = row.kind === 'subagent' ? row.subagent : undefined
           const job = row.kind === 'job' ? row.job : undefined
           const jobGroup = row.kind === 'job' ? row.jobGroup : undefined
-          const revealVersion = smoothStreaming && row.kind === 'tool' && row.fresh === true &&
-            row.tool?.status === 'running' && row.tool.resultView === undefined
-            ? getRevealVersion()
-            : 0
           // Smooth reveal feeds the SAME flattened text prop a chunk feeds,
           // and keeps the streaming layout alive until the reveal catches up
           // (settling mid-reveal must not snap — a one-shot non-streaming
@@ -1496,9 +1572,6 @@ export function MessageList({
               thinkingFold={thinkingFold}
               toolBackground={toolBackground}
               foldTerminalCommand={foldTerminalCommand}
-              smoothStreaming={smoothStreaming}
-              fresh={row.fresh === true}
-              revealVersion={revealVersion}
               activityFrames={activityFrames}
               background={rowBackground(row.id)}
               toolCallId={tool?.callId}
@@ -1579,12 +1652,6 @@ type MemoRowProps = {
   model: string
   /** Edit/Write diff presentation preference (forwarded to tool cards). */
   diffLayout: 'auto' | 'split' | 'unified'
-  /** Smooth streaming reveal (forwarded to thinking/tool renderers). */
-  smoothStreaming: boolean
-  /** Live-arrived row flag (drives tool-card reveal participation). */
-  fresh: boolean
-  /** Version tick for active tool reveal; 0 keeps settled rows memoized. */
-  revealVersion: number
   thinkingFold: 'preview' | 'full'
   toolBackground: ToolBackground
   /** Terminal-card header folding (forwarded to tool cards). */
@@ -1682,9 +1749,6 @@ function TranscriptRow({
   expanded,
   model,
   diffLayout,
-  smoothStreaming,
-  fresh,
-  revealVersion,
   thinkingFold,
   toolBackground,
   foldTerminalCommand,
@@ -1798,6 +1862,7 @@ function TranscriptRow({
               text={displayText}
               marginTopOnTurn={marginTopOnTurn}
               isSelected={isSelected}
+              bleed
             />
           )}
           {images !== undefined && (
@@ -1810,24 +1875,19 @@ function TranscriptRow({
     case 'assistant':
       return streaming ? (
         <Box
-          alignItems="flex-start"
-          flexDirection="row"
+          flexDirection="column"
           marginTop={marginTopOnTurn ? 1 : 0}
           width="100%"
           backgroundColor={background}
           ref={ref}
           onClick={foldClickable ? foldOnClick : undefined}
         >
-          <Box minWidth={2}>
-            <Text color="text">●</Text>
-          </Box>
-          <Box flexDirection="column">
-            {/* The ⏵ self-narration line (working-activity narrate contract)
-              is stripped here: the live working line on the status bar
-              already shows it. */}
-            <StreamingMarkdown>{stripNarration(displayText)}</StreamingMarkdown>
-            {images !== undefined && <TranscriptImages images={images} indent={0} onPreview={onPreviewImage} suppressGraphics={suppressImageGraphics} />}
-          </Box>
+          {/* The ⏵ self-narration line (working-activity narrate contract)
+            is stripped here: the live working line on the status bar
+            already shows it. No leading bullet: prose is the unmarked,
+            flush-left layer of the transcript (machine rows are railed). */}
+          <StreamingMarkdown>{stripNarration(displayText)}</StreamingMarkdown>
+          {images !== undefined && <TranscriptImages images={images} indent={0} onPreview={onPreviewImage} suppressGraphics={suppressImageGraphics} />}
         </Box>
       ) : (
         <Box
@@ -1920,9 +1980,7 @@ function TranscriptRow({
             footnote={toolFootnote}
             diffLayout={diffLayout}
             toolBackground={toolBackground}
-            smoothReveal={smoothStreaming}
-            fresh={fresh}
-            revealVersion={revealVersion}
+            bleed
             foldTerminalCommand={foldTerminalCommand}
             onClick={foldOnClick}
             onOpenFile={onOpenFile}
@@ -1944,7 +2002,7 @@ function TranscriptRow({
     case 'interrupt':
       return (
         <Box marginTop={1} ref={ref}>
-          <TurnInterruptedRow backendLabel={interruptBackend} />
+          <Text><TurnInterruptedRow backendLabel={interruptBackend} /></Text>
         </Box>
       )
     case 'turn-summary':
@@ -1960,22 +2018,34 @@ function TranscriptRow({
         </Box>
       )
     case 'local':
-      // `!` mode command echo.
+      // `!` mode command echo — machine layer, railed like every other
+      // machine row, so its output lines below stay tight under it and the
+      // block gap comes from the pre-pass like every other row's (a
+      // hardcoded margin here would desync the measured offsets the scroll
+      // math derives from the same map).
       return (
-        <Box marginTop={1} backgroundColor={background} ref={ref} onClick={foldClickable ? foldOnClick : undefined}>
-          <Text color="bashBorder">!{executionTarget ? ` [${executionTarget}]` : ''} {displayText}</Text>
+        <Box flexDirection="row" marginTop={marginTopOnTurn ? 1 : 0} backgroundColor={background} ref={ref} onClick={foldClickable ? foldOnClick : undefined}>
+          <MachineRail />
+          <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+            <Text color="bashBorder">!{executionTarget ? ` [${executionTarget}]` : ''} {displayText}</Text>
+          </Box>
         </Box>
       )
     case 'local-output':
+      // No extra left padding: the rail is the indent (its `│ ` puts the
+      // output one column in, matching the echo's own content column).
       return (
-        <Box paddingLeft={2} backgroundColor={background} ref={ref} onClick={foldClickable ? foldOnClick : undefined}>
-          <Text dimColor>{displayText}</Text>
+        <Box flexDirection="row" marginTop={marginTopOnTurn ? 1 : 0} backgroundColor={background} ref={ref} onClick={foldClickable ? foldOnClick : undefined}>
+          <MachineRail />
+          <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+            <Text dimColor>{displayText}</Text>
+          </Box>
         </Box>
       )
-    case 'compact':
-      // The post-compaction summary defaults to a folded one-liner with a
-      // text preview; Ctrl+O (global), message-selection Enter, or a click
-      // reveals the full summary.
+    case 'compact': {
+      // Decode raw framing before any long-line folding can clip its closing tag.
+      // Ctrl+O, message-selection Enter, or a click reveals the same summary body.
+      const summary = compactSummaryDisplayText(text)
       return (
         <Box
           marginTop={marginTopOnTurn ? 1 : 0}
@@ -1987,16 +2057,17 @@ function TranscriptRow({
           onMouseLeave={() => setCompactHovered(false)}
         >
           {expanded || isExpanded ? (
-            <Text dimColor>{text}</Text>
+            <Text dimColor>{summary}</Text>
           ) : (
             <Text dimColor italic color={compactHovered ? 'text' : undefined}>
               <Text color={compactHovered ? 'text' : undefined}>∴</Text>
-              {' '}{t('compact-summary-folded')} · {compactPreview(displayText)}{' '}
+              {' '}{t('compact-summary-folded')} · {compactPreview(summary)}{' '}
               {t('hint-expand-ctrl-o', { key: primaryComboString('transcript') })}
             </Text>
           )}
         </Box>
       )
+    }
     case 'subagent':
       if (!subagent) return null
       return (
@@ -2030,9 +2101,15 @@ function TranscriptRow({
           {groupHead && jobGroup.folded ? null : (
             <JobCard
               job={job}
+              marginTopOnTurn={groupHead ? false : marginTopOnTurn}
+              // The bracket hugs the CARDS: the summary line above stays
+              // outside it, and the head/last member round the two ends in
+              // place (no extra cap row) — see JobCard's `rail` prop.
+              rail={jobGroup === undefined ? undefined : { open: jobGroup.head, close: jobGroup.last }}
+              // Upstream-0.14 command-folding seam: the compact fork card
+              // keeps no command section, so the toggle props ride unused.
               expanded={isExpanded !== expanded}
               onToggle={toggleJobGroup}
-              marginTopOnTurn={groupHead ? false : marginTopOnTurn}
               // Clicking a card opens the panel focused on THAT job, not the roster head.
               onClick={onOpenJobs === undefined ? undefined : () => onOpenJobs(job.id)}
               onWatchOutput={onWatchJobOutput}

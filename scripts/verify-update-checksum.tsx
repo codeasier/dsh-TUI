@@ -101,7 +101,12 @@ const MANIFEST_STREAM_CHUNKS = 128 // 总量 2MB，注入上限 64KB → 中断�
 const realAssetBytes = makeAssetArchive('legit-new-binary\n')
 const evilAssetBytes = makeAssetArchive('evil-tampered-binary\n')
 const realDigest = createHash('sha256').update(realAssetBytes).digest('hex')
-const ASSET_NAME = 'dsh-tui-standalone-linux-x64.tar.gz'
+// Exercise the native download path: the updater selects the running host,
+// so a Linux-only fixture would fail checksums/sidecars on supported macOS.
+const fixturePlatform = process.platform === 'win32' ? 'win' : process.platform
+const fixtureExtension = process.platform === 'win32' ? 'zip' : 'tar.gz'
+const fixtureArch = process.platform === 'win32' ? 'x64' : process.arch
+const ASSET_NAME = `dsh-tui-standalone-${fixturePlatform}-${fixtureArch}.${fixtureExtension}`
 
 const server = http.createServer(async (req, res) => {
   const url = req.url ?? ''
@@ -117,10 +122,10 @@ const server = http.createServer(async (req, res) => {
       assets.push({ name: `${ASSET_NAME}.sha256`, browser_download_url: `http://127.0.0.1:${serverPort()}/${ASSET_NAME}.sha256` })
     }
     if (sidecarMode === 'foreign') {
-      // 外来旁注：另一平台资产（win zip）的 .sha256——它的 digest 登记
-      // 的是 win 资产，拿来校验 linux 资产必然 mismatch（fail-closed 误拒
-      // 无辜用户的更新）。
-      assets.push({ name: 'dsh-tui-standalone-win-x64.zip.sha256', browser_download_url: `http://127.0.0.1:${serverPort()}/dsh-tui-standalone-win-x64.zip.sha256` })
+      // The negative sidecar must remain FOREIGN on every tested host.
+      const foreignAsset = process.platform === 'win32'
+        ? 'dsh-tui-standalone-linux-x64.tar.gz' : 'dsh-tui-standalone-win-x64.zip'
+      assets.push({ name: `${foreignAsset}.sha256`, browser_download_url: `http://127.0.0.1:${serverPort()}/${foreignAsset}.sha256` })
     }
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ tag_name: 'v9.9.9', assets }))

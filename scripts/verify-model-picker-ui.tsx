@@ -416,7 +416,7 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
     const titleRow = lines.findIndex(line => line.trim() === '模型')
     const firstModelRow = lines.findIndex(line => line.includes('Model 01'))
     assert.deepEqual(lines.slice(titleRow + 1, firstModelRow).map(line => line.trim()).filter(Boolean),
-      ['↑/↓ 模型 · Enter 选择 · Esc 取消'], `${label}: header contains only model/action shortcuts`)
+      ['↑/↓ 模型 · Enter 选择 · Esc 取消', '⌕ 输入以筛选模型…'], `${label}: header contains model/action shortcuts and independent search`)
     assert.equal(readFileSync(recentFile, 'utf8'), previousRecents, `${label}: opening does not update recents`)
     stdin.write('\t\x1b[Z')
     await sleep(90) // 固定窗:探针 Tab/Shift+Tab must not move flat-catalog focus or cycle the session mode.
@@ -435,6 +435,22 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
     stdin.write('\x1b')
     assert.ok(await settled(() => !text().includes('推理强度') && text().includes('Backend history 19')), `${label}: cancel restores transcript`)
     assert.deepEqual(picks, ['m0'], `${label}: cancellation discards the model draft`)
+    stdin.write('/model')
+    assert.ok(await settled(() => text().includes('/model')), `${label}: search composer`)
+    stdin.write('\r')
+    assert.ok(await settled(() => text().includes('输入以筛选模型…')), `${label}: search picker`)
+    stdin.write('Model 01')
+    assert.ok(await settled(() => focused('Model 01') && !text().includes('Model 00')
+      && text().includes('⌕ Model 01')), `${label}: typing filters the flat catalog without committing`)
+    assert.deepEqual(picks, ['m0'])
+    assert.deepEqual(effortPicks, [])
+    stdin.write('\x1b')
+    assert.ok(await settled(() => text().includes('输入以筛选模型…') && text().includes('Model 00')),
+      `${label}: first Escape clears search and retains picker`)
+    stdin.write('\x1b')
+    assert.ok(await settled(() => !text().includes('输入以筛选模型…') && text().includes('Backend history 19')),
+      `${label}: second Escape closes picker`)
+    assert.deepEqual(picks, ['m0'], `${label}: search cancellation does not commit`)
     if (fullscreen) {
       stdin.write('/model')
       assert.ok(await settled(() => text().includes('/model')), `${label}: mouse composer`)
@@ -567,6 +583,17 @@ async function shortTerminal(backendId: 'dsh' | 'claude' | 'codex', fullscreen: 
         if (index < models.length - 1 || rows !== 10) stdin.write('\x1b[B')
       }
     }
+    if (backendId === 'dsh' && !fullscreen && columns === 36) {
+      stdin.write('2')
+      await check('a two-row overlay keeps search and its focused result visible', () =>
+        text().includes('⌕ 2') && text().includes('❯ alpha / Short model 2'))
+      stdin.write('\x15')
+      await check('Ctrl+U clears the short-overlay query without confirming', () =>
+        text().includes('输入以筛选模型…') && picks.length === 0)
+      stdin.write('\x1b[B\x1b[B')
+      await check('navigation restores the final model after clearing search', () =>
+        caretOnPointer(term, models[2]!.name))
+    }
     if (fullscreen) {
       const lines = viewportLines(term)
       const row = lines.findIndex(line => line.includes('选择'))
@@ -688,7 +715,7 @@ async function reviewRegression(fullscreen: boolean): Promise<void> {
       stdin.write('\x1bz')
       await check('Alt+Z restores the split', () => pickerWidth() === splitWidth)
       stdin.write('\t\x1b[B')
-      await check('Tab/Down belong to the picker while the sidebar owns focus', () => focused('Alpha 01'))
+      await check('Tab/Down belong to the picker while the sidebar owns focus', () => focused('Alpha 01') && text().includes('MEDIUM'))
       stdin.write('\x1b[C')
       await check('Right changes the effort draft instead of the active panel', () => inverse('HIGH') && focused('Alpha 01'))
       stdin.write('\x1b')

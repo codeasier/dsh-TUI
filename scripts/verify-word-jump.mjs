@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /**
- * Regression: Ctrl+Left/Right word jump in PromptInput (#156, #158).
+ * Regression: Ctrl/Option/Alt word movement and Ctrl+W in PromptInput.
+ * Covers legacy, CSI-u and modifyOtherKeys encodings, Chinese without spaces,
+ * whitespace, punctuation, emoji, middle-of-draft deletion and empty input.
  *
  * Windows Terminal (and most xterm-family terminals) deliver Ctrl+Left as
  * ESC[1;5D — parsed to { name: 'left', ctrl: true } (parse-keypress.ts) and
@@ -26,7 +28,7 @@
  * differs. A word-jump-on-bare-arrow regression likewise moves marker Z.
  *
  * Plus a static invariant (verify-cordis-approval style): in the source the
- * isMod arrow arms must textually precede the bare arrow arms.
+ * word-boundary moves must textually precede the bare arrow arms.
  *
  * Run with plain node against the compiled lib:
  *   node scripts/verify-word-jump.mjs
@@ -55,6 +57,8 @@ function check(name, ok, extra = '') {
 
 const { render } = await import('../lib/types/ui.js')
 const { PromptInput } = await import('../lib/types/components/PromptInput.js')
+const controller = { current: null }
+let backgroundRequests = 0
 
 function makeStreams() {
   const stdout = new Writable({ write(_c, _e, cb) { cb() } })
@@ -99,6 +103,8 @@ const instance = await render(
     onToggleHelp() {},
     onRunCommand: () => false,
     selectionActive: false,
+    controllerRef: controller,
+    onBackgroundRequest() { backgroundRequests += 1 },
   }),
   { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
 )
@@ -129,16 +135,61 @@ check(
   JSON.stringify(submitted),
 )
 
+// Observe the synchronous draft controller instead of adding fixed waits for
+// each new case. One stdin batch exercises cursor/edit composition as well.
+async function editCase(name, sequence, expected) {
+  controller.current.clear()
+  stdin.write(sequence)
+  check(name, await settled(() => controller.current?.text() === expected),
+    JSON.stringify(controller.current?.text()))
+}
+
+const wordKeys = [
+  ['Ctrl+arrows', '\x1b[1;5D', '\x1b[1;5C'],
+  ['Option/Alt+arrows', '\x1b[1;3D', '\x1b[1;3C'],
+  ['Option/Alt+B/F (legacy)', '\x1bb', '\x1bf'],
+  ['Option/Alt+B/F (CSI-u)', '\x1b[98;3u', '\x1b[102;3u'],
+  ['Option/Alt+B/F (modifyOtherKeys)', '\x1b[27;3;98~', '\x1b[27;3;102~'],
+]
+for (const [label, left, right] of wordKeys) {
+  await editCase(`${label}: left moves by word`, `hello world${left}X`, 'hello Xworld')
+  await editCase(`${label}: right moves by word`, `hello world\x1b[H${right}X`, 'hello Xworld')
+  await editCase(`${label}: Chinese left does not jump across the whole draft`,
+    `你好世界${left}X`, '你好X世界')
+  await editCase(`${label}: Chinese right moves to the next word`,
+    `你好世界\x1b[H${right}X`, '你好X世界')
+  await editCase(`${label}: empty draft does not background the session`, `${left}X`, 'X')
+}
+check('modified word-left never backgrounds an empty draft', backgroundRequests === 0)
+
+for (const [label, key] of [
+  ['Ctrl+W (legacy)', '\x17'],
+  ['Ctrl+W (CSI-u)', '\x1b[119;5u'],
+  ['Ctrl+W (modifyOtherKeys)', '\x1b[27;5;119~'],
+]) {
+  await editCase(`${label}: Chinese deletes only the preceding word`, `你好世界${key}`, '你好')
+  await editCase(`${label}: deletes a word with trailing whitespace`, `hello  world  ${key}`, 'hello  ')
+  await editCase(`${label}: keeps text after the caret`,
+    `hello world tail\x1b[1;5D${key}`, 'hello tail')
+  await editCase(`${label}: preserves the previous line`,
+    `\x1b[200~first line\n你好世界\x1b[201~${key}`, 'first line\n你好')
+  await editCase(`${label}: punctuation is a separate boundary`, `foo-bar${key}`, 'foo-')
+  await editCase(`${label}: emoji stays a complete grapheme`, `hello 👩‍💻${key}`, 'hello ')
+  await editCase(`${label}: empty draft stays usable`, `${key}X`, 'X')
+  await editCase(`${label}: deleting a single word may empty the draft`, `word${key}`, '')
+  await editCase(`${label}: combining marks are not split`, `hello e\u0301${key}`, 'hello ')
+}
+
 instance.unmount()
 
-// ── static invariant: isMod arrow arms precede bare arrow arms ─────────────
+// ── static invariant: modified arrow arms precede bare arrow arms ─────────
 const source = readFileSync(join(root, 'src/components/PromptInput.tsx'), 'utf8')
-const modLeft = source.indexOf('if (isMod(key) && key.leftArrow)')
+const wordLeft = source.indexOf('wordBoundaryLeft(value, cursor)')
 const bareLeft = source.indexOf('if (key.leftArrow)')
-const modRight = source.indexOf('if (isMod(key) && key.rightArrow)')
+const wordRight = source.indexOf('wordBoundaryRight(value, cursor)')
 const bareRight = source.indexOf('if (key.rightArrow)')
-check('source: isMod+left arm exists and precedes bare left arm', modLeft !== -1 && bareLeft !== -1 && modLeft < bareLeft)
-check('source: isMod+right arm exists and precedes bare right arm', modRight !== -1 && bareRight !== -1 && modRight < bareRight)
+check('source: word-left arm exists and precedes bare left arm', wordLeft !== -1 && bareLeft !== -1 && wordLeft < bareLeft)
+check('source: word-right arm exists and precedes bare right arm', wordRight !== -1 && bareRight !== -1 && wordRight < bareRight)
 
 if (failed > 0) {
   console.error(`verify-word-jump: ${failed} assertion(s) failed`)

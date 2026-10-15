@@ -9,9 +9,9 @@
  *     ink-box nodes; the hybrid engine still renders its component layout.
  *  3. Copy contract: a body-anchored selection copies the clean code;
  *     rail/header anchors copy only the decoration.
- *  4. Wrap continuation: without the hang decoration a continuation falls
- *     to column 0; with it quote rails repeat, list/task continuations
- *     hang at the content column, CJK keeps the structure, copied bytes
+ *  4. Wrap continuation: without explicit indentation a continuation falls
+ *     to column 0; fork Markdown hangs quote/list/task continuations
+ *     at the content column without repeating markers, and copied bytes
  *     match the unwrapped line, and streaming equals the settled render.
  *  5. The selection fingerprint reads the same screen planes.
  *  6. Mermaid fallback shares the typed frame; a changed decoration
@@ -234,8 +234,9 @@ assert.ok(legacyCont.length >= 2 && legacyCont.every(r => !r.startsWith(BAR)),
 const quote = snap(<Markdown>{'> ' + WORDS + NL}</Markdown>, 40)
 const quoteRows = quote.rows.filter(r => r !== '')
 assert.ok(quoteRows.length >= 3, 'quote wraps to 3+ rows')
-assert.ok(quoteRows.every(r => r.startsWith(BAR + ' ')),
-  'every wrapped quote row repeats the rail: ' + JSON.stringify(quoteRows))
+assert.ok(quoteRows[0]!.startsWith(BAR + ' ')
+  && quoteRows.slice(1).every(r => r.startsWith('  ') && !r.trimStart().startsWith(BAR)),
+  'quote soft rows hang under the body without repeating the source rail: ' + JSON.stringify(quoteRows))
 assert.equal(
   copyRect(quote.screen, [0, 0], [39, quoteRows.length - 1]),
   BAR + ' ' + WORDS,
@@ -257,15 +258,16 @@ assert.ok(taskRows.slice(1).every(r => r.startsWith('      ')),
 
 const cjkQuote = snap(<Markdown>{'> ' + '\u4e2d\u6587\u6d4b\u8bd5'.repeat(16) + NL}</Markdown>, 40)
 const cjkRows = cjkQuote.rows.filter(r => r !== '')
-assert.ok(cjkRows.length >= 3 && cjkRows.every(r => r.startsWith(BAR + ' ')),
-  'CJK quote continuations keep the rail: ' + JSON.stringify(cjkRows.slice(0, 3)))
+assert.ok(cjkRows.length >= 3 && cjkRows[0]!.startsWith(BAR + ' ')
+  && cjkRows.slice(1).every(r => r.startsWith('  ') && !r.trimStart().startsWith(BAR)),
+  'CJK quote continuations keep the body indentation: ' + JSON.stringify(cjkRows.slice(0, 3)))
 assert.equal(
   cjkRows.map(r => r.slice(2)).join(''),
   '\u4e2d\u6587\u6d4b\u8bd5'.repeat(16),
   'CJK wrapped rows reassemble to the original payload',
 )
 
-// Streaming keeps the hang: sealed quote blocks do not lose their rails
+// Streaming keeps the hang: sealed quote blocks retain their body columns
 // when the suffix grows.
 const QUOTE_DOC = '> ' + WORDS + NL + NL + '> second quoted line' + NL
 assert.deepEqual(
@@ -273,7 +275,7 @@ assert.deepEqual(
   snap(<Markdown>{QUOTE_DOC}</Markdown>, 40).rows,
   'streaming equals settled for wrapped quotes',
 )
-console.log('4. wrap continuations hang: quote rail repeats, list/task columns, CJK, copy bytes, streaming')
+console.log('4. wrap continuations hang: quote body columns, list/task columns, CJK, copy bytes, streaming')
 
 // -- 5. The fingerprint consumes the same planes -------------------------
 
@@ -397,8 +399,8 @@ assert.equal(
 // The narrow fallback (net width < 8) stays the plain ANSI fence under
 // whatever style is active.
 const tinyFull = snap(<CodeBlockFrame token={codeToken('js', 'const a = 1')} highlight={null} />, 12)
-assert.ok(tinyFull.rows.some(r => r.startsWith('```js')),
-  'net width < 8 keeps the ANSI fence even in full style')
+assert.ok(tinyFull.rows.some(r => r === 'js'),
+  'net width < 8 keeps the ANSI caption even in full style')
 assert.ok(!tinyFull.rows.some(r => r.includes('\u2510')), 'no closed-box glyphs in the narrow fallback')
 
 // Roundtrip: flipping back to light restores the section-3 bytes.
@@ -437,8 +439,8 @@ const resizeRow = () => {
 }
 assert.ok(await settled(() => resizeRow().startsWith('\u250c')), 'wide frame paints its header')
 app3.rerender(resizeTree(12))
-assert.ok(await settled(() => resizeRow().startsWith('```ts')),
-  'narrowed frame falls back to the fence: ' + JSON.stringify(resizeRow()))
+assert.ok(await settled(() => resizeRow() === 'ts'),
+  'narrowed frame falls back to the caption: ' + JSON.stringify(resizeRow()))
 app3.rerender(resizeTree(80))
 assert.ok(await settled(() => resizeRow().startsWith('\u250c')), 'widened frame paints its header again')
 assert.equal(resizeError, undefined, 'toggling decoration on one Text does not crash the app')

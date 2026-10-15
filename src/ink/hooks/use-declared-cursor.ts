@@ -33,10 +33,11 @@ export function useDeclaredCursor(options: {
   line: number
   column: number
   active: boolean
+  imeProtectColumns?: number
   visible?: boolean
   hideOnIdle?: boolean
 }): RefCallback<DOMElement> {
-  const { line, column, active, visible = false, hideOnIdle = false } = options
+  const { line, column, active, visible = false, hideOnIdle = false, imeProtectColumns } = options
   const setCursorDeclaration = useContext(CursorDeclarationContext)
   const nodeRef = useRef<DOMElement | null>(null)
 
@@ -46,7 +47,7 @@ export function useDeclaredCursor(options: {
     // A store-driven editor layer can attach after the caller's layout
     // effect, so claim its cursor as soon as the node is attached.
     if (active) {
-      setCursorDeclaration({ relativeX: column, relativeY: line, node, visible, hideOnIdle })
+      setCursorDeclaration({ relativeX: column, relativeY: line, node, visible, hideOnIdle, ...(imeProtectColumns === undefined ? {} : { imeProtectColumns }) })
     }
     // React 19 binds this cleanup to the attached node. A withdrawn editor
     // must not erase the inline node that has already taken over this ref.
@@ -54,7 +55,7 @@ export function useDeclaredCursor(options: {
       setCursorDeclaration(null, node)
       if (nodeRef.current === node) nodeRef.current = null
     }
-  }, [active, column, line, setCursorDeclaration, hideOnIdle, visible])
+  }, [active, column, line, setCursorDeclaration, hideOnIdle, visible, imeProtectColumns])
 
   // When active, set unconditionally. When inactive, clear conditionally
   // (only if the currently-declared node is ours). The node-identity check
@@ -72,7 +73,7 @@ export function useDeclaredCursor(options: {
   useLayoutEffect(() => {
     const node = nodeRef.current
     if (active && node) {
-      setCursorDeclaration({ relativeX: column, relativeY: line, node, visible, hideOnIdle })
+      setCursorDeclaration({ relativeX: column, relativeY: line, node, visible, hideOnIdle, ...(imeProtectColumns === undefined ? {} : { imeProtectColumns }) })
     } else {
       setCursorDeclaration(null, node)
     }

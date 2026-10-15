@@ -13,6 +13,7 @@ import { planReload, type ReloadKind } from '../reload.js'
 import { AlternateScreen, Box, Image, Text, InputCaret, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
 import * as tuiKit from '../ui.js'
 import { usePageInset } from '../components/PageMargin.js'
+import { TerminalSizeContext } from '../ink/components/TerminalSizeContext.js'
 import { POINTER } from '../terminal-utils/figures.js'
 import { previousCodePoint } from '../components/AgentMessageComposer.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
@@ -131,7 +132,7 @@ import { PlanPicker } from '../components/PlanPicker.js'
 import { LangPicker } from '../components/LangPicker.js'
 import { ThemePicker, getThemeOptions } from '../components/ThemePicker.js'
 import { AUTO_THEME_NAME, getAutoThemeBase } from '../theme.js'
-import { FRAME_PRESETS, PRESET_NAMES } from '../components/activityFrames.js'
+import { DEFAULT_PRESET, FRAME_PRESETS, PRESET_NAMES } from '../components/activityFrames.js'
 import { ThinkingToggle } from '../components/ThinkingToggle.js'
 import { HistorySearchDialog } from '../components/HistorySearchDialog.js'
 import { RewindPicker } from '../components/RewindPicker.js'
@@ -2696,7 +2697,7 @@ export function Chat({
         if (parts[0] === 'status') {
           setHelpOpen(false)
           channel.pushLocal('/activity', [
-            t('activity-current-preset', { name: channel.activityFrames ?? 'moon8' }),
+            t('activity-current-preset', { name: channel.activityFrames ?? DEFAULT_PRESET }),
             t('activity-switch-hint'),
             t('activity-persist-hint'),
           ])
@@ -2710,7 +2711,7 @@ export function Chat({
           }
           const current = channel.activityFrames
           channel.pushLocal('/activity', [
-            t('activity-current-direct', { name: current ?? 'moon8' }),
+            t('activity-current-direct', { name: current ?? DEFAULT_PRESET }),
             ...PRESET_NAMES.map(name =>
               `${name.padEnd(10)} ${name === 'random' ? t('activity-random-each') : FRAME_PRESETS[name].frames.slice(0, 5).join(' ')}${name === current ? t('activity-current-marker') : ''}`,
             ),
@@ -3125,8 +3126,9 @@ export function Chat({
           // same consistency the picker's per-open refetch provides, minus
           // the stale flash on the next open. The wizard's live-switch branch
           // already dropped the completion cache via switchModelRecorded;
-          // this covers keep-current, add, edit, delete and OAuth login/logout.
-          if (outcome === 'added' || outcome === 'updated'
+          // this covers keep-current, add, edit, delete, OAuth login/logout
+          // and an official-model sync that changed the derived route.
+          if (outcome === 'added' || outcome === 'updated' || outcome === 'synced'
             || outcome === 'deleted' || outcome === 'signed-out') {
             channel.invalidateModelCompletion()
             void channel.listModels().then(setModels)
@@ -4176,7 +4178,7 @@ export function Chat({
    * count, so it recomputes when the session actually grows rather than on
    * every animation tick. The tick only re-colours the cells it already has.
    */
-  const { columns: terminalColumns } = useTerminalSize()
+  const { columns: terminalColumns, screenRows } = useTerminalSize()
   const pageInsetX = usePageInset().x
   // 侧栏控制器：几何（chatColumns/panelColumns）、焦点与键盘分发都在
   // 这个 hook 里（设计文档 §16.5——Chat 只多一次调用、一处键盘让位、
@@ -4238,6 +4240,14 @@ export function Chat({
   // 所有显式下传的宽度（gutter / 图片预览区 / wake 条）都改用它；转录
   // 子树则经 SidePanelLayout 的 TerminalSizeContext 覆盖自动拿到。
   const chatColumns = sidePanel.chatColumns
+  const transcriptLeftBleed = pageInsetX
+  const transcriptRightBleed = sidePanel.split ? 0 : pageInsetX
+  const transcriptColumns = Math.max(1, chatColumns - Math.max(0,
+    (normalizeScrollGutter(channel.scrollGutter) === 'hidden' ? 0 : 2) - transcriptRightBleed))
+  const transcriptSize = React.useMemo(
+    () => ({ columns: transcriptColumns, rows: terminalRows, screenRows: screenRows ?? terminalRows }),
+    [transcriptColumns, terminalRows, screenRows],
+  )
   const wakeWidth = miniWakeWidth(chatColumns)
   const panelPickerRows = usePanelPickerRows(sidePanel)
   const wakeBand = React.useMemo(
@@ -5591,6 +5601,9 @@ export function Chat({
           {overlay.kind === 'model' && (
             <Box flexDirection="column" marginTop={1}>
               <ModelPicker
+                query={modelPicker.query}
+                cursorOffset={modelPicker.cursorOffset}
+                isTerminalFocused={terminalFocused}
                 groups={modelPicker.groups}
                 provider={modelPicker.provider}
                 models={modelPicker.models}
@@ -6523,15 +6536,13 @@ export function Chat({
           }}
         />
       )}
-      {/* Transcript row. Under PageMargin the negative right margin makes
-          the row stretch past the content column to the terminal edge —
-          the gutter (timeline rail / scrollbar) thus lands at the very
-          edge while the transcript TEXT stays inside the page margin
-          (structural chrome convention: dividers and the rail bleed, text
-          and cards keep the content column). No explicit width: cross-axis
-          stretch with the margin yields exactly content+margin. */}
-      <Box flexDirection="row" flexGrow={1} flexShrink={1} marginRight={sidePanel.split ? 0 : -pageInsetX}>
+      {/* The scroll viewport includes the allowed canvas margins so card
+          surfaces are not clipped. Text keeps its content inset; in split
+          mode the right gutter stays inside chat, before the divider. */}
+      <Box flexDirection="row" flexGrow={1} flexShrink={1} marginLeft={-transcriptLeftBleed} marginRight={-transcriptRightBleed}>
         <ScrollBox ref={setHandle} flexDirection="column" flexGrow={1} flexShrink={1} stickyScroll>
+        <TerminalSizeContext.Provider value={transcriptSize}>
+        <Box flexDirection="column" flexShrink={0} marginLeft={transcriptLeftBleed} width={transcriptColumns}>
         <LogoHeader
           key={logoNonce}
           model={channel.modelDisplay ?? channel.model}
@@ -6609,6 +6620,8 @@ export function Chat({
           olderHistory={channel.olderHistory}
           onWatchJobOutput={watchJobOutput}
         />
+        </Box>
+        </TerminalSizeContext.Provider>
         </ScrollBox>
         {(() => {
           // Gutter mode (settings `dsh-tui.scrollGutter`): the timeline
@@ -6819,6 +6832,8 @@ export function Chat({
         <PromptInput
           key="prompt-input"
           channel={channel}
+          bleed
+          collapsedColumns={transcriptColumns}
           suspended={promptReplacementOpen}
           // 选择器、搜索框或侧栏持有键盘焦点时，让对应输入框接管原生
           // 光标与 IME 锚点，避免主输入框在后续提交中抢回声明。

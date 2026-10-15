@@ -151,6 +151,7 @@ export function ToolLeafRow({
   fresh,
   revealVersion,
   foldTerminalCommand,
+  bleed = false,
   onClick,
   onOpenFile,
   images,
@@ -171,6 +172,8 @@ export function ToolLeafRow({
   fresh?: boolean
   revealVersion?: number
   foldTerminalCommand?: boolean
+  /** Standalone cards bleed into the page/panel margins (fork composer language). */
+  bleed?: boolean
   onClick?(event: ClickEvent): void
   onOpenFile?: (path: string) => void
   images?: readonly TranscriptImage[]
@@ -196,6 +199,7 @@ export function ToolLeafRow({
         fresh={fresh}
         revealVersion={revealVersion}
         foldTerminalCommand={foldTerminalCommand}
+        bleed={bleed}
         onClick={onClick}
         onOpenFile={onOpenFile}
         sourceFolded={sourceFolded}

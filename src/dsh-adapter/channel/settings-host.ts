@@ -100,6 +100,9 @@ export function createSettingsHosts(ctx: ServiceLookup, assertActive: () => void
               api?: string
               apiKey?: string
             },
+            // rc.6 already accepts the optional signal; older typings omit it,
+            // so the structural shape carries it explicitly.
+            signal?: AbortSignal,
           ): Promise<readonly LlmDiscoveredModel[]>
         }
         | undefined
@@ -226,6 +229,9 @@ export function createSettingsHosts(ctx: ServiceLookup, assertActive: () => void
               : undefined
             const hasCustomHeaders = typeof headers === 'object' && headers !== null
               && !Array.isArray(headers) && Object.keys(headers).length > 0
+            const headerEntries = typeof headers === 'object' && headers !== null && !Array.isArray(headers)
+              ? Object.entries(headers).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+              : []
             // Keep the raw model entries: a model-list re-selection must
             // rewrite kept ids with their stored objects, so per-model fields
             // this wizard never learned about survive the edit.
@@ -253,6 +259,7 @@ export function createSettingsHosts(ctx: ServiceLookup, assertActive: () => void
               ...(baseURL !== undefined ? { baseURL } : {}),
               ...(api !== undefined ? { api } : {}),
               ...(hasCustomHeaders ? { hasCustomHeaders: true } : {}),
+              ...(headerEntries.length === 0 ? {} : { headers: Object.fromEntries(headerEntries) }),
               ...(models !== undefined ? { models } : {}),
               ...(modelEntries !== undefined && modelEntries.length > 0
                 ? { modelEntries }
@@ -261,8 +268,8 @@ export function createSettingsHosts(ctx: ServiceLookup, assertActive: () => void
             }]
           })
         },
-        discoverModels(request) {
-          return llm.discoverModels('llm-pi-ai', request)
+        discoverModels(request, options) {
+          return llm.discoverModels('llm-pi-ai', request, options?.signal)
         },
         envShadows(ref) {
           return process.env[ref] !== undefined

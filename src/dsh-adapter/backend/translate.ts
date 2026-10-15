@@ -21,7 +21,7 @@ import { NO_EVENTS, type AgentEvent, type AgentEventOf, type AgentEventType, typ
 import type { SuppressedToolPresentation, ToolCallPresentation, ToolResultPresentation } from '../../agent/presentation.js'
 import type { PricingWindow } from '../../channel/usage.js'
 import { isPeakHour } from '../../deepseekPricing.js'
-import { BACKGROUND_START_ACK, isSubagentToolName, parseJobOutputId, todoPanelItems, toolCommandOf } from '../channel/projection-helpers.js'
+import { BACKGROUND_START_ACK, BACKGROUND_PROMOTED_ACK, isSubagentToolName, parseJobOutputId, todoPanelItems, toolCommandOf, toolDescriptionOf } from '../channel/projection-helpers.js'
 import { harnessToolResultView, prepareReplayEvents, toolErrorText } from '../channel/transcript.js'
 import type { ToolCallView, ToolResultView, ToolsRegistryLike } from '../channel/types.js'
 import { isCompactionCheckpointSource, toolResultPayload } from '../compat/messages.js'
@@ -229,6 +229,11 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
    */
   const openCalls = new Map<string, { readonly name: string; readonly args: string; readonly card: boolean }>()
 
+  /** Foreign tool names do not imply native delegation or questionnaire
+   *  facts. Import provenance comes from the durable assistant message's
+   *  `migrated:*` source provider, not UI state. */
+  const importedToolCalls = new Set<string>()
+
   /** Ask the producing tool how its call should render (diff/terminal/…).
    *  Unknown tool, unparseable args, or a throwing presenter all degrade to
    *  the plain text card. */
@@ -304,6 +309,7 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
     const callId = data.message.source.callId
     const call = openCalls.get(callId)
     openCalls.delete(callId)
+    importedToolCalls.delete(callId)
     const payload = toolResultPayload(data.message)
     const isError = data.error !== undefined || payload.isError
     // Text/presentation/images are derived only for results something
@@ -328,25 +334,75 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
     if (card === undefined || isError) return [result]
     const events: AgentEvent[] = [result]
     // A job_output read doubles as the job card's output feed (the
-    // registry's read is consuming and reserved for the owning agent).
+    // registry's read is consuming and reserved for the owning agent) and as
+    // a durable hand-off proof: reading it revives an independent card even
+    // when the original start ack was compacted away.
     if (card.name === 'job_output' && text !== '') {
       const id = parseJobOutputId(card.args)
-      if (id !== undefined) events.push({ type: 'task.output', taskId: id, text, time: event.time, callId })
+      if (id !== undefined) {
+        events.push({ type: 'task.start', taskId: id, kind: 'shell', description: '', handoff: true, background: true, callId, time: event.time })
+        events.push({ type: 'task.output', taskId: id, text, time: event.time, callId })
+      }
     }
     // A `started background job <id>` ack pairs the job with its tool call.
     // Take the full command from the args; the registry label is only the
-    // friendly description.
+    // friendly description. A timeout promotion (`[still running after Nms;
+    // moved to background job X]`) proves the same hand-off for a foreground
+    // bash/pwsh call, and that call's description rides along as the
+    // one-line overview the job surfaces prefer.
     const startAck = BACKGROUND_START_ACK.exec(text)
+      ?? (card.name === 'bash' || card.name === 'pwsh' ? BACKGROUND_PROMOTED_ACK.exec(text) : null)
     if (startAck !== null) {
       const command = toolCommandOf(card.args)
       if (command !== undefined) {
-        events.push({ type: 'task.start', taskId: startAck[1], kind: 'shell', description: '', command, callId, background: true, time: event.time })
+        events.push({
+          type: 'task.start',
+          taskId: startAck[1],
+          kind: 'shell',
+          description: (card.name === 'bash' || card.name === 'pwsh' ? toolDescriptionOf(card.args) : undefined) ?? '',
+          command,
+          callId,
+          background: true,
+          time: event.time,
+        })
       }
     }
     return events
   }
 
   /** Translate one durable session event (live or as part of a replay). */
+  /** DSH job semantics shared by the tool/result ack path and nested PTC
+   *  dispatches: a `job_output` read proves a durable hand-off and feeds the
+   *  card's output; an explicit start or timeout-promotion ack registers the
+   *  job with its full command and one-line overview. */
+  const translateJobSemantics = (name: string, argsFull: string | undefined, text: string, at: number): AgentEvent[] => {
+    const events: AgentEvent[] = []
+    if (name === 'job_output' && text !== '') {
+      const id = parseJobOutputId(argsFull)
+      if (id !== undefined) {
+        events.push({ type: 'task.start', taskId: id, kind: 'shell', description: '', handoff: true, background: true, time: at })
+        events.push({ type: 'task.output', taskId: id, text, time: at })
+      }
+    }
+    const startAck = BACKGROUND_START_ACK.exec(text)
+      ?? (name === 'bash' || name === 'pwsh' ? BACKGROUND_PROMOTED_ACK.exec(text) : null)
+    if (startAck !== null) {
+      const command = toolCommandOf(argsFull)
+      if (command !== undefined) {
+        events.push({
+          type: 'task.start',
+          taskId: startAck[1],
+          kind: 'shell',
+          description: (name === 'bash' || name === 'pwsh' ? toolDescriptionOf(argsFull) : undefined) ?? '',
+          command,
+          background: true,
+          time: at,
+        })
+      }
+    }
+    return events
+  }
+
   const translateEvent = (event: SessionEvent): readonly AgentEvent[] => {
     const type = (event as { type: string }).type
     // Top-level `goal/change` events are how the goal service records durable
@@ -354,6 +410,21 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
     // confirmed in production logs. The pinned peer's SessionEvent union
     // predates the type, so admit it structurally.
     if (type === 'goal/change') return [goalChange((event as unknown as { data: GoalChangePayload }).data)]
+    // Nested PTC calls have no ordinary tool card. Consume their plugin-owned
+    // outcome structurally, keeping dsh-tools out of the runtime peer surface:
+    // only the job-registry facts ride on (hand-off proofs and output feeds).
+    if (type === 'tool/ptc-dispatch') {
+      const data = (event as unknown as { data: {
+        name: string
+        arguments: unknown
+        content: readonly { type: string; text?: string }[]
+        isError: boolean
+        error?: unknown
+      } }).data
+      if (data.isError || data.error !== undefined) return NO_EVENTS
+      const text = (data.content ?? []).map(block => (block.type === 'text' ? block.text : '')).join('').trim()
+      return translateJobSemantics(data.name, JSON.stringify(data.arguments), text, event.time ?? Date.now())
+    }
     switch (event.type) {
       case 'user/message':
         return translateUserMessage(event)
@@ -365,6 +436,11 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
       case 'assistant/message': {
         const data = event.data
         const content = data.message.content
+        if ((data.message as { source?: { provider?: string } }).source?.provider?.startsWith('migrated:') === true) {
+          for (const block of content) {
+            if (block.type === 'tool-call') importedToolCalls.add(block.id)
+          }
+        }
         return [{
           type: 'assistant.message',
           seq: event.seq,
@@ -387,13 +463,17 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
         const callId = data.callId
         const base = { type: 'tool.call' as const, seq: event.seq, anchor: String(event.seq), turn: data.turn, step: data.step, callId, name: data.name, argsJson: data.arguments, time: event.time }
         // ask_user_question renders as the interactive questionnaire panel
-        // (DSH user-interaction seam), not as a tool card.
-        if (data.name === 'ask_user_question') {
+        // (DSH user-interaction seam), not as a tool card — unless the call
+        // was imported from another agent: a foreign tool name does not imply
+        // native questionnaire facts, so it keeps the plain card.
+        const imported = importedToolCalls.has(callId)
+        if (data.name === 'ask_user_question' && !imported) {
           openCalls.set(callId, { name: data.name, args: data.arguments, card: false })
           return [{ ...base, presentation: QUESTION }]
         }
-        // The delegation tools render as the live subagent card.
-        if (isSubagentToolName(data.name)) return [{ ...base, presentation: SUBAGENT }]
+        // The delegation tools render as the live subagent card (an imported
+        // call implies no native delegation and keeps the plain card).
+        if (!imported && isSubagentToolName(data.name)) return [{ ...base, presentation: SUBAGENT }]
         openCalls.set(callId, { name: data.name, args: data.arguments, card: true })
         return [{ ...base, presentation: presentCallView(data.name, data.arguments) as ToolCallPresentation | undefined }]
       }
@@ -529,6 +609,7 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
   const reset = (): void => {
     lastStreamRevision = -1
     openCalls.clear()
+    importedToolCalls.clear()
   }
 
   return { translateEvent, translateFrame, translateReplay, reset, presentCallView, presentResultView }

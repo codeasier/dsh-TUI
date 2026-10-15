@@ -4,7 +4,6 @@ import type { LocalCommand } from '../commands.js'
 import { localizedDescription } from '../commands.js'
 import { t } from '../i18n.js'
 import { primaryComboString } from '../utils/keymap.js'
-import { modLabel } from '../utils/modifiers.js'
 
 /**
  * The `?` help menu with a three-column shortcut layout, trimmed to the keys
@@ -78,7 +77,10 @@ export function HelpMenu({
         <Text dimColor>{t('help-move-cursor')}</Text>
       </Box>
       <Box>
-        <Text dimColor>{t('help-word-jumps', { mod: modLabel })}</Text>
+        <Text dimColor>{t('help-word-jumps')}</Text>
+      </Box>
+      <Box>
+        <Text dimColor>{t('help-delete-word')}</Text>
       </Box>
       <Box>
         <Text dimColor>{t('help-complete-command')}</Text>

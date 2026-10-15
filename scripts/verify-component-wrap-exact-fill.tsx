@@ -11,7 +11,7 @@ const isolatedHome = mkdtempSync(join(tmpdir(), 'dsh-tui-wrap-'))
 process.env.HOME = isolatedHome
 process.env.USERPROFILE = isolatedHome
 
-const [assertModule, React, { renderToScreen }, { cellAt }, { TerminalSizeContext },
+const [assertModule, React, { renderToScreen }, { cellAt, setCopyWrapSpan }, { TerminalSizeContext },
   { JobCard }, { GoalTodoPanel }, { MarkdownTable }, { CompanionPanel },
   { SidePanelRuntimeContext }, { layoutInlineMedia }, { default: wrapText, wrapTextLines },
   { default: stripAnsi }, { Box, Text, render, AlternateScreen }, selection,
@@ -120,7 +120,8 @@ selection.updateSelection(selected, 11, 1)
 selected.fence = { colStart: 2, colEnd: 11 }
 assert.equal(selection.getSelectedText(selected, painted), 'aaa the PR.', 'copy restores the separator within an offset panel')
 selection.refreshSelectionFingerprint(selected, painted, false)
-painted.softWrap[1] = 9
+// Mutate the owning plane; softWrap is its compatibility projection.
+setCopyWrapSpan(painted, 1, 2, 12, 9)
 assert.equal(selection.refreshSelectionFingerprint(selected, painted, false), true, 'a gap-only change makes the selection stale')
 
 // A separator-only row must retain its width through the row Box path.

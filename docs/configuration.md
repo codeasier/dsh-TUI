@@ -87,7 +87,7 @@ TUI bundle 继承已安装 DSH 官方组合的上报配置；上游未提供的�
     # `!!js process.cwd()`（那会把工作区钉死在启动子目录上，issue #96）。
     effort: max
     activity: true
-    activityFrames: moon8
+    activityFrames: moon
     contextBar: true
     fullscreen: false
     terminalImages: true
@@ -120,13 +120,14 @@ TUI bundle 继承已安装 DSH 官方组合的上报配置；上游未提供的�
 | `modes` | 内置三档 | Shift+Tab 会话模式循环（plan/sandbox/approval 原子组合）；缺省为 默认 → 计划 → 完全访问 |
 | `upstreamRetry` | `true` | 为当前会话实际使用的 `llm-pi-ai` 渠道播种重试策略（最多重试 5 次，失败码覆盖传输类中断、含 `STREAM_CLOSED` 上游断链）：每次绑定（启动、`/model` 切换、resume）时检查该渠道，未声明 `retryPolicy` 才写入官方 `llm-pi-ai` settings 分节——内核 `llm-retry` 插件执行的就是这份策略。从不写闲置渠道；已显式声明 `retryPolicy` 的渠道（cordis.yml 或手改 settings）不会被覆盖；`false` 整体关闭 |
 | `activity` | `true` | 是否显示实时工作状态行 |
-| `activityFrames` | `moon8` | 工作状态动画预设；也可通过 `/activity` 修改。旧配置值 `claude` 读取时映射为 `moon8`，选择器不再显示该旧预设 |
+| `activityFrames` | `moon` | 工作状态动画预设；显式配置或 `/activity` 已保存的选择优先。旧配置值 `claude` 读取时仍映射为 `moon8`，选择器不再显示该旧预设 |
 | `contextBar` | `true` | 输入框下方的分段上下文进度条；`false` 隐藏该行。与 `/settings → statusBar.contextBar`（默认开）同时为开才显示 |
 | `fullscreen` | `true`（0.9.0 起出厂默认） | `true` 使用 alternate screen、应用内滚动和鼠标选区；`false` 使用 inline 模式 |
 | `terminalImages` | `true` | 允许在支持的终端预览图片；`false` 保留文字信息，跳过图片探测与预览解码。修改后重启生效 |
 | `preset` | 名册默认 `standard` | 新会话 Agent preset；优先级：`DSH_TUI_PRESET`（本次运行）> `/preset` 持久化选择 > 本字段（部署默认值）> 名册默认 |
 | `sessionId` | 未设置 | 要恢复的会话 ID，通常由 Windows `--resume` 启动器注入 |
 | `backend` | 未设置（`/kernel` 记住的选择，否则 `dsh`） | 会话后端：内置 `dsh`，或已装的后端（实验性的 `claude` / `codex`，以及插件后端；不区分大小写）。**未安装或未知的取值一律按 `dsh` 启动并告警**，不会崩。profile 行读取 `DSH_TUI_BACKEND`，`dsh-tui --backend <id>` 会设置它。profile 自己的补丁里若把它写成 `!!js` 表达式（只转发 `DSH_TUI_BACKEND` 的写法除外，例如随包行的 `process.env.DSH_TUI_BACKEND \|\| undefined`），本次启动改走 `dsh --profile`（只有 profile 的 Loader 能求值），`/kernel` 切换除外。见 [Claude 后端](claude-backend.md) |
+| `catalogModelSync` | `true` | 启动时读取 catalog 路由厂商端点公布的模型，把未启用的那些记入调试日志（详见 [`/provider`](configuration.md#provider运行时管理模型提供方) 一节）；不会自动启用新模型；仅修复已启用派生路由缺失的厂商路由头，并将其中的 Claude 模型迁至 Anthropic 协议派生路由。启用与否由你在 `/provider → 管理官方新增模型` 里勾选。`false` 只跳过启动这一遍。观测模式（shadow/replay）不执行 |
 
 DeepSeek 品牌下，开启标题图形（`whale`）时，`companion.skin` 与「女仆娘立绘」（`whaleGirl`）按下表决定开屏艺术槽：
 
@@ -368,7 +369,36 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、`DSH_TUI_COMPACT_RETA
   配置了自定义请求头的 catalog 路由也会明确提示并回退到目录快照，不把线上
   新模型写入无法验证的 profile。
 - 逐项菜单细节见[用户指南](user-guide.md)。
-
+- 「管理官方新增模型」分支：catalog 路由的模型来自**安装版 pi-ai 快照**，厂商后加的
+  模型不在其中，而 profile 只能按路由声明协议与端点，所以这些模型无法并入原路由。
+  该分支实时读取厂商端点公布的清单（`opencode-go` 取
+  `https://opencode.ai/zen/go/v1/models`），把内置目录之外的模型列为**可勾选项**，
+  当前已启用的项预勾选；勾选结果按厂商的单模型协议写入派生路由：`claude-*`
+  走 `anthropic-messages`（`<路由名>-live-anthropic`，端点
+  `https://opencode.ai/zen/go`），其余走 `<路由名>-live`（协议与端点由该路由
+  自己声明，共用父路由的密钥）。把 Claude 强制写进 OpenAI 兼容路由会在首个回合
+  直接 `400 {"type":"ModelProtocolUnsupported"}`，分流即修复该报错。
+  **没有任何模型会被自动启用**：未勾选的不启用，全部
+  取消则移除派生路由。派生路由还会带上厂商要求的 `x-opencode-session` 头（声明式路由
+  不走 pi-ai 的 OpenCode 包装器，缺它会 400），值在首次写入时生成、之后保持不变。
+  勾选项的说明与实际写入的模型条目都取自厂商目录
+  [models.dev](https://models.dev)（该端点只公布 id）：名称、上下文/输出容量、输入
+  类型（text/image，厂商声明 video/pdf 时按本适配器能承载的收窄）与思考档
+  （effort 列表映射为 off/low/medium/high/xhigh/max，toggle 映射为 off/high）；
+  已存条目里手写的字段优先，不会被元数据覆盖。models.dev 取不到时（离线或被拒）
+  给出提示并回落到裸 id + 路由默认容量。catalog 路由自身配置（含已启用的模型子集）一律不改写，官方已
+  有的模型仍由原路由按各自原生协议服务。厂商新增的模型会出现在这个勾选面板里（以及
+  添加路由时的问题详情中）等待你决定；官方已下架的已启用项会标注「官方已下架（仍
+  启用）」由你决定去留。Claude 行会额外标注走 anthropic 派生路由。
+- 启动时的 `catalogModelSync`（默认开）做只读检查：把「厂商已公布但你未启用」和
+  「已启用但厂商已下架」写进 debug 日志；离线、无密钥或清单读不到时静默。写入只做
+  两件**非启用决策的修复**：已存在的派生路由若缺少厂商要求的 `x-opencode-session`（OpenCode 端点
+  没有它会直接 `400 MissingSessionID`），启动时补上一个稳定值；旧版写在主派生路由上
+  的 Claude id 会迁移到 `-live-anthropic`（否则首个回合 `400 ModelProtocolUnsupported`）。
+  两者都不启用也不停用任何模型。
+- 添加 catalog 路由时，模型选择题会注明「官方端点另有 N 个新增模型（…）由…管理」
+  ——这些 id 不进入该路由的候选行（原路由承载不了它们），也不会在连接时被启用；
+  连接完成后到「管理官方新增模型」里勾选即可。编辑同一路由的模型列表时给出同一说明。
 写入位置：
 
 | 产物 | 位置 |
@@ -389,11 +419,46 @@ Claude（`anthropic`）、Grok（`xai`）订阅账号登录。宿主 pi-ai catal
 短码。无交互问卷服务的宿主会明确拒绝登录。
 
 `dsh-tui-auth` 行可配置 `providers`（默认安装版 pi-ai catalog 中所有受支持的流程；
-显式指定时必须是其中的非空子集）、`credentialsFile`（自定义凭据文件）和
+显式指定时必须是其中的非空子集）、`credentialsFile`（自定义凭据文件）、
+`serviceTier`（可选启动默认，对应请求体 `service_tier`，见下）和
 `modelOverrides.<provider>.<model>`（可选的 `contextWindow`、`maxTokens`）。
-profile 覆盖的 `config` 是整段替换，覆盖时保留所需的每个字段。OAuth 流程使用宿主
+profile 覆盖的 `config` 是整段替换，覆盖时保留所需的每个字段，尤其是已有的
+`modelOverrides`（以及自定义的 `providers`、`credentialsFile`）。OAuth 流程使用宿主
 `dsh-llm-pi-ai` 所带的 pi-ai 实现；这不是通用 API key 登录，订阅账号只走相应的
 订阅后端。
+
+**优先用 `/fast` 交互控制 fast 服务档位**，无需修改 YAML 或重启。该命令由本插件的
+OAuth 入口注册：空参 `/fast` 或 `/fast toggle` 切换，`/fast on` 设置 `priority`，
+`/fast off` 设置 `default`，`/fast status` 只报告当前状态。
+改变从**下一次模型请求**开始生效，不改变已发出的请求，也不改变推理强度 `effort`。
+它作用于**当前 TUI 进程中本插件自注册的所有支持 OAuth 路由**，不限于当前会话或模型：
+支持的 wire 协议为 `openai-codex-responses` 与 `openai-responses`（`openai-codex`
+ChatGPT/Codex 后端及可用时的 `openai` 直连路由；SSE 与 WebSocket 均生效）。
+其他协议（`anthropic`、`xai`、`meta`）与其他插件注册的路由不受影响。
+未挂载 OAuth 入口时不提供 `/fast` 命令；入口已挂载但没有成功注册支持路由时，
+`/fast` 给出明确不可用错误，不会静默修改其他路由。
+是否接受 `priority` 档位、可用额度及限额由后端决定，TUI 不保证请求获准或获得额外额度。
+
+`config.serviceTier` 只是**可选启动默认**，交互 `/fast` 优先。开关不写入配置或其他
+持久化文件；重启恢复配置的启动值。未配置时 fast 默认关闭，不发送 `service_tier`，
+由供应商采用默认档位（而 `/fast off` 明确发送 `default`）。
+`serviceTier: priority` 可使启动时默认请求 fast，不降低或覆盖 `effort`。
+配置值去除首尾空白后透传给后端，不作枚举映射：OpenAI 文档值为 `auto` / `default` /
+`flex` / `scale` / `priority`，其他值同样由后端裁决。配置了 `serviceTier` 但挂载的
+路由中没有任何支持模型时，启动直接报错而不是静默忽略；空白字符串同样报错。
+下面示例选择可选的 `priority` 启动默认，同时保留一个 `modelOverrides`；无需启动时
+开启 fast 可省略 `serviceTier`。请换成自己的已有覆盖，模型 ID 必须存在于安装版
+catalog 中，并一并保留其他所需配置：
+
+```yaml
+- id: dsh-tui-auth
+  config:
+    serviceTier: priority
+    modelOverrides:
+      openai-codex:
+        gpt-5.6-sol:
+          contextWindow: 1000000
+```
 
 默认凭据文件保持 `$DSH_HOME/dsh-auth/credentials.json`（未设置 `DSH_HOME` 时为
 `~/.dsh/dsh-auth/credentials.json`），也可用 `DSH_AUTH_CREDENTIALS` 覆盖；旧版登录

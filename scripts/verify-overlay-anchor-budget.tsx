@@ -216,7 +216,7 @@ function intact(shape: Shape): boolean {
 }
 
 // 场景 B：长会话（转录 60 行 > 48 行终端，inline 溢出）——不能过度钳制，
-// 列表仍用满整屏预算（rows - 8 - 11 = 29 行）。
+// 列表仍用满整屏预算（rows - 8 - 12 = 28 行）。
 {
   const ROWS = 48
   const m = await mount(ROWS, 60, 5)
@@ -225,9 +225,9 @@ function intact(shape: Shape): boolean {
     await settled(() => { shape = readShape(m.term, ROWS); return intact(shape) }),
     JSON.stringify(shape))
   dump(m.term, ROWS, 'B')
-  // 浮层 40 行（rows - 8）减同页选择器框架 11 行 = 29 行列表。
+  // 浮层 40 行（rows - 8）减同页选择器框架和搜索行共 12 行 = 28 行列表。
   check('48 rows / long session: full-screen budget still used (no over-clamp)',
-    shape.listRows === 29, `listRows=${shape.listRows}`)
+    shape.listRows === 28, `listRows=${shape.listRows}`)
   m.unmount()
 }
 

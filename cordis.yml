@@ -1,6 +1,14 @@
 # dsh-tui interactive front door over the agent-spine bundle.
 # Run with: dsh --config cordis.yml (或 npm 安装后走 dsh plugin 机制)
 # Requires DEEPSEEK_API_KEY; a terminal TTY is mandatory.
+# Subscription OAuth uses the standard profile's dsh-tui-auth row instead:
+# Use /fast on|off|status (bare or toggle switches) from the next request;
+# it wins over the optional config.serviceTier startup default, without changing effort.
+# The switch covers this plugin's supported OAuth routes in the current TUI process,
+# is not persisted, and restart restores serviceTier (unset: off/provider default).
+# Acceptance and quota are backend-owned. See docs/configuration.en.md
+# (Built-in subscription OAuth); this bare example does not mount OAuth and
+# does not provide /fast. A mounted OAuth entry with no supported route reports an error.
 
 # The user-interaction service: hosts `ctx.userQuestions`, the seam behind
 # the model-facing ask_user_question tool. dsh-tui uses the legacy provider
@@ -63,6 +71,13 @@
     fullscreen: true
     # 以下为 /settings 可改的显示设置；每项说明与默认值见应用内 /settings 屏。
     terminalImages: true
+    # 启动时读取 catalog 路由（当前为 opencode-go）厂商端点公布的模型，把内置
+    # pi-ai 快照没有、你还没启用的那些记入调试日志（默认开启，不自动启用新模型）：
+    # 这些模型只能存在于派生路由 <路由名>-live，启用与否由你在 /provider 的
+    # 「管理官方新增模型」里勾选。离线、无密钥或清单读不到时静默；启动时仍会修复
+    # 已有派生路由的 x-opencode-session 头，并分流已启用的 Claude 模型（不改变启用集合）。
+    # catalogModelSync: false
+    # toolBackground: subtle # none / subtle（默认）/ strong
     # mermaidDiagrams: true
     # 任务完成通知：off / unfocused（默认）/ always；方式：auto（默认）/ osc9 / bel。
     # taskNotifications: unfocused

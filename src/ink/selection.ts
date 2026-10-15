@@ -13,7 +13,7 @@
 import { clamp } from './layout/geometry.js'
 import type { Screen, StylePool } from './screen.js'
 import type { TerminalImagePlacement } from './terminal-image.js'
-import { CellWidth, cellAt, cellAtIndex, setCellStyleId } from './screen.js'
+import { CellWidth, cellAt, cellAtIndex, decodeCopyWrap, setCellStyleId } from './screen.js'
 
 type Point = { col: number; row: number }
 
@@ -1205,7 +1205,9 @@ export function isCellSelected(
  *  When the next row is a soft-wrap continuation (screen.softWrap[row+1]!==0),
  *  clamp to that content-end column and skip the trailing trim so the
  *  word-separator space survives the join. See Screen.softWrap for why the
- *  clamp is necessary. */
+ *  clamp is necessary. Column-owned provenance clamps each selected plane
+ *  independently and joins only if all its owned columns continue: a hard
+ *  selectable sibling keeps physical breaks and is never clipped by Chat. */
 function extractRowText(
   screen: Screen,
   row: number,
@@ -1217,10 +1219,20 @@ function extractRowText(
   const noSelect = screen.noSelect
   const copyRegion = screen.copyRegion
   const rowOff = row * screen.width
-  const next = row + 1 < screen.height ? screen.softWrap[row + 1]! : 0
+  const wraps = screen.copyWrap
+  const next = wraps === undefined && row + 1 < screen.height ? screen.softWrap[row + 1]! : 0
   const contentEnd = Math.abs(next)
   const lastCol = contentEnd > 0 ? Math.min(colEnd, contentEnd - 1) : colEnd
+  let preserveSpace = contentEnd > 0
+  let continues = true
+  let owned = false
+  let ownEnd = 0
+  let nextContinues = true
+  let nextOwned = false
+  let nextPlaneEnd = 0
+  let nextGapSelected = false
   let line = ''
+  let pendingPadding = 0
   const regions: SelectionRegion[] = []
   let lastRegion = 0
   for (let col = colStart; col <= lastCol; col++) {
@@ -1229,11 +1241,35 @@ function extractRowText(
     // a panel-origin drag selects panel text). Check before cellAt to avoid
     // the decode cost for excluded cells.
     if (!includeNoSelect && noSelect[rowOff + col] === 1) continue
+    if (wraps !== undefined) {
+      const boundary = wraps[rowOff + col]!
+      if (boundary !== 0) {
+        owned = true
+        const end = decodeCopyWrap(boundary)
+        if (end === 0 || (ownEnd !== 0 && end !== ownEnd)) continues = false
+        if (end !== 0 && ownEnd === 0) ownEnd = end
+      }
+      // Clamp only this column's plane; a Chat wrap must never clip a
+      // selectable sibling to its right, or consume that pane's hard break.
+      const nextBoundary = row + 1 < screen.height ? wraps[rowOff + screen.width + col]! : 0
+      const nextEnd = decodeCopyWrap(nextBoundary)
+      if (nextBoundary !== 0) {
+        nextOwned = true
+        if (nextEnd === 0 || (nextPlaneEnd !== 0 && nextEnd !== nextPlaneEnd)) nextContinues = false
+        if (nextEnd !== 0 && nextPlaneEnd === 0) nextPlaneEnd = nextEnd
+      }
+      if (nextEnd !== 0 && col >= Math.abs(nextEnd)) continue
+      if (nextEnd < 0 && col === -nextEnd - 1) nextGapSelected = true
+    }
     // A copy region (a formula image) contributes one entry per run of its
     // cells: the text it stands for, at the offset those cells occupy here.
     // resolveCopyRegions inserts it once per selection.
     const region = copyRegion?.[rowOff + col] ?? 0
     if (region !== 0) {
+      if (pendingPadding > 0) {
+        line += ' '.repeat(pendingPadding)
+        pendingPadding = 0
+      }
       if (region !== lastRegion) {
         regions.push({ at: line.length, id: region, text: screen.copyTexts?.get(region) ?? '' })
       }
@@ -1251,18 +1287,34 @@ function extractRowText(
     ) {
       continue
     }
+    // Unowned blanks in both rows are layout padding, not a word separator.
+    // Defer them: a later glyph/region commits a real leading/intercolumn gap,
+    // while a continuation join drops only the out-of-source trailing suffix.
+    if (wraps !== undefined && cell.char === ' ' && wraps[rowOff + col] === 0 &&
+      (row + 1 >= screen.height || wraps[rowOff + screen.width + col] === 0)) {
+      pendingPadding++
+      continue
+    }
+    if (pendingPadding > 0) {
+      line += ' '.repeat(pendingPadding)
+      pendingPadding = 0
+    }
     line += cell.char
   }
   // Restore an elided separator only when the selection joins the next row.
-  if (continuesSelection && next < 0 && colStart <= lastCol && lastCol === contentEnd - 1) line += ' '
+  if (continuesSelection && (wraps === undefined
+    ? next < 0 && colStart <= lastCol && lastCol === contentEnd - 1
+    : nextGapSelected && nextContinues)) line += ' '
   // The trailing trim may only eat blanks written AFTER the last region: a
   // region's cells are content (a formula's box), so the space separating it
   // from the text before it survives. The markers this replaced were never
   // whitespace, which is what used to protect that space.
   const tail = regions.length > 0 ? regions[regions.length - 1]!.at : 0
+  if (wraps !== undefined) preserveSpace = nextOwned && nextContinues
+  if (!preserveSpace && pendingPadding > 0) line += ' '.repeat(pendingPadding)
   return {
-    text: contentEnd > 0 ? line : line.slice(0, tail) + line.slice(tail).replace(/\s+$/, ''),
-    sw: screen.softWrap[row]! !== 0,
+    text: preserveSpace ? line : line.slice(0, tail) + line.slice(tail).replace(/\s+$/, ''),
+    sw: wraps === undefined ? screen.softWrap[row]! !== 0 : owned && continues,
     regions,
   }
 }
@@ -1428,13 +1480,18 @@ export function refreshSelectionFingerprint(
       if (colStart > colEnd) continue
     }
     for (let col = colStart; col <= colEnd; col++) {
+      if (noSelect![rowOff + col] === 1 && !s.includeNoSelectCells) continue
+      if (screen.copyWrap !== undefined) {
+        // Same current join + next-row clamp inputs as extractRowText,
+        // including hard ownership and blanks/spacers before text decoding.
+        h = Math.imul(h ^ 0x9e3779b9 ^ screen.copyWrap[rowOff + col]!, 0x85ebca6b)
+        const next = row + 1 < height ? screen.copyWrap[rowOff + width + col]! : 0
+        h = Math.imul(h ^ 0x27d4eb2f ^ next, 0x165667b1)
+      }
       const ci = (rowOff + col) * 2
       // word1's low 2 bits are the cell width; SpacerTail/SpacerHead carry
       // no text of their own.
       if ((cells[ci + 1]! & 3) >= CellWidth.SpacerTail) continue
-      // Mirrors extractRowText's noSelect skip (same fence flag): the hash
-      // must cover exactly the cells the copy would read.
-      if (noSelect![rowOff + col] === 1 && !s.includeNoSelectCells) continue
       // A copy region (a formula image) is content too: its cells are blank,
       // so without this term a formula swapped under a stationary highlight
       // would hash identically while the copied SOURCE changed. Fold the id
@@ -1455,7 +1512,8 @@ export function refreshSelectionFingerprint(
         h = Math.imul(h ^ ch.charCodeAt(k), 0x01000193)
       }
     }
-    // Row separator + the row's soft-wrap bit: getSelectedText joins a
+    if (screen.copyWrap !== undefined) continue
+    // Legacy row separator + wrap bit: getSelectedText joins a
     // wrapped row onto the previous line with NO newline (softWrap[row]!==0)
     // but emits a real newline otherwise — identical cells with a flipped
     // wrap bit produce a different copy, so the fingerprint must see it.
@@ -1545,7 +1603,7 @@ export function getSelectedText(s: SelectionState, screen: Screen): string {
     rows.push(s.scrolledOffAbove[i]!)
   }
 
-  for (let row = start.row; row <= end.row; row++) {
+  for (let row = Math.max(0, start.row); row <= end.row && row < screen.height; row++) {
     let rowStart = row === start.row ? start.col : 0
     let rowEnd = row === end.row ? end.col : screen.width - 1
     // Fence (panel-origin gestures) applies to EVERY row, not just the
@@ -1614,6 +1672,7 @@ export function captureScrolledRows(
     const colStart = row === start.row ? start.col : 0
     const colEnd = row === end.row ? end.col : width - 1
     const screenRow = row - screenRowOffset
+    if (screenRow < 0 || screenRow >= screen.height) continue
     captured.push(extractRowText(
       screen, screenRow, colStart, colEnd,
       row < end.row || s.scrolledOffBelow.length > 0, s.includeNoSelectCells,

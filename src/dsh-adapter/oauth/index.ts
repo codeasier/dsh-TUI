@@ -23,6 +23,9 @@
  *     # providers: [openai-codex, anthropic, xai]  # optional catalog subset;
  *     # newer pi-ai also offers openai and meta
  *     # credentialsFile: /secure/path/credentials.json   # default $DSH_HOME/dsh-auth/
+ *     # Request-body service_tier for wire protocols that carry one (the
+ *     # openai-codex and openai routes); verbatim passthrough, e.g. priority.
+ *     # serviceTier: priority
  *     # Per-provider catalog overrides, keyed by provider id then model id:
  *     # any optional field keeps the installed catalog's value. The example
  *     # below tunes the Codex `gpt-5.6-sol` context window to 1M tokens.
@@ -50,9 +53,10 @@ import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { PiAiAdapterOptions } from '@deepseek-ai/dsh-llm-pi-ai'
 import { CredentialFile, defaultCredentialsFile } from './credentials.js'
-import { availableOAuthProviderIds, buildOAuthProfile, OAUTH_PROVIDER_IDS, type ModelOverride } from './profiles.js'
+import { availableOAuthProviderIds, buildOAuthProfile, OAUTH_PROVIDER_IDS, SERVICE_TIER_APIS, type ModelOverride } from './profiles.js'
 import { createDshAuthApi, DshAuthService } from './service.js'
 import { createAuthCommandHandler } from './command.js'
+import { createFastControl } from './fast.js'
 import type { PiAiAuthContext } from './pi-ai.js'
 import { createDeepSeekCallbackOriginResolver, deepSeekAccountFrom } from './deepseek.js'
 import { WhaleCouponStore } from './bonus.js'
@@ -89,6 +93,17 @@ export interface Config {
   /** Credential file override; default `$DSH_HOME/dsh-auth/credentials.json`. */
   credentialsFile?: string
   /**
+   * Startup default for the request-body `service_tier`; `/fast` can override
+   * it at runtime without changing this configuration. Carried on models
+   * whose wire protocol has the field (`openai-codex-responses` /
+   * `openai-responses` — the ChatGPT/Codex and OpenAI direct routes; other
+   * mounted protocols ignore it). Trimmed passthrough: OpenAI documents
+   * `auto | default | flex | scale | priority`, and the backend decides what
+   * any other value means. A tier that no mounted route could ever carry is
+   * refused at boot, never silently skipped.
+   */
+  serviceTier?: string
+  /**
    * Per-provider catalog overrides, keyed by provider id then model id (see
    * {@link ModelOverride}). A provider key naming a provider that is not
    * among the mounted set — or a model id the provider's catalog does not
@@ -105,6 +120,7 @@ const modelOverride = z.object({
 export const Config: z<Config> = z.object({
   providers: z.array(z.string()).default(availableOAuthProviderIds()),
   credentialsFile: z.string(),
+  serviceTier: z.string(),
   modelOverrides: z.dict(z.dict(modelOverride)),
 })
 
@@ -114,7 +130,7 @@ export { QuestionBridge, describeEvent } from './interaction.js'
 export type { AskFn, QuestionBridgeHelpers } from './interaction.js'
 export { copyToClipboard, openInBrowser, openerFor } from './opener.js'
 export { CredentialFile, defaultCredentialsFile } from './credentials.js'
-export { OAUTH_PROVIDER_IDS, availableOAuthProviderIds, buildOAuthProfile, type ModelOverride } from './profiles.js'
+export { OAUTH_PROVIDER_IDS, availableOAuthProviderIds, buildOAuthProfile, SERVICE_TIER_APIS, withServiceTier, type ModelOverride } from './profiles.js'
 export { DEEPSEEK_ACCOUNT_PROVIDER, deepSeekAccountFrom, deepSeekCallbackOrigin, deepSeekClientMetadata, loginDeepSeekAccount } from './deepseek.js'
 export { WhaleCouponStore } from './bonus.js'
 
@@ -181,10 +197,28 @@ export function apply(ctx: Context, config: Config): void {
       `dsh-auth: modelOverrides names provider "${unknownOverridden[0]}", which is not among the mounted providers [${configured.join(', ')}]`,
     )
   }
+  // A configured tier is trimmed once and rides every request verbatim; an
+  // empty remainder is a configuration mistake, not "no tier".
+  const serviceTier = config.serviceTier?.trim()
+  if (serviceTier === '') {
+    throw new Error('dsh-auth: serviceTier must be a non-empty string when set')
+  }
   // Profile construction validates the installed catalog loudly: a pi-ai
   // downgrade that dropped a provider fails the boot that asked for it, and
   // a per-model miss is refused per route (see buildOAuthProfile).
-  const profiles = new Map(configured.map(id => [id, buildOAuthProfile(id, overrides[id])]))
+  let supportsFast = false
+  const fast = createFastControl(serviceTier, () => supportsFast)
+  const profiles = new Map(configured.map(id => [id, buildOAuthProfile(id, overrides[id], fast.getServiceTier)]))
+  // A tier nothing can carry is refused at boot too: silently skipping it
+  // would leave the config looking applied while no request ever changed.
+  if (serviceTier !== undefined
+    && ![...profiles.values()].some(profile =>
+      (profile.piProvider?.getModels() ?? []).some(model => SERVICE_TIER_APIS.has(model.api)))) {
+    throw new Error(
+      `dsh-auth: serviceTier is set, but none of the mounted providers ([${configured.join(', ')}]) `
+      + `ships a model whose wire protocol carries service_tier (${[...SERVICE_TIER_APIS].join(', ')})`,
+    )
+  }
   const store = new CredentialFile(config.credentialsFile ?? defaultCredentialsFile())
 
   // Fail closed on store trouble: a credential file that cannot be read
@@ -251,6 +285,9 @@ export function apply(ctx: Context, config: Config): void {
       for (const id of configured) {
         try {
           releases.push(llm.registerAdapter([id], adapter))
+          if ((profiles.get(id)?.piProvider?.getModels() ?? []).some(model => SERVICE_TIER_APIS.has(model.api))) {
+            supportsFast = true
+          }
         } catch (error: unknown) {
           ctx.logger.error(
             `dsh-auth: route "${id}" was not registered: ${error instanceof Error ? error.message : String(error)} `
@@ -261,7 +298,7 @@ export function apply(ctx: Context, config: Config): void {
     }
     const active = new Set<Promise<unknown>>()
     if (commands === undefined) {
-      ctx.logger.warn('dsh-auth: no commands service mounted — the /auth command stays unregistered')
+      ctx.logger.warn('dsh-auth: no commands service mounted — /auth and /fast stay unregistered')
     } else {
       const handler = createAuthCommandHandler(api)
       releases.push(commands.register({
@@ -274,11 +311,17 @@ export function apply(ctx: Context, config: Config): void {
           return operation
         },
       }))
+      releases.push(commands.register({
+        name: 'fast',
+        description: 'Toggle the OAuth fast service tier: on, off, status',
+        handler: fast.handler,
+      }))
     }
     // Drain before releasing: LIFO composite teardown lets no new invocation
     // enter while already-started logins finish their final write.
     yield async () => { await Promise.allSettled([...active]) }
     yield () => {
+      supportsFast = false
       for (const release of releases) release()
     }
   }, 'dsh-auth lifecycle')

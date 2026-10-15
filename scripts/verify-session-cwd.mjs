@@ -32,7 +32,13 @@ function check(name, ok, extra = '') {
 
 // --- resolveSessionCwd -----------------------------------------------------
 const fixture = mkdtempSync(join(tmpdir(), 'dsh-tui-cwd-'))
+const fixtureHome = process.env.HOME
+const fixtureUserProfile = process.env.USERPROFILE
 try {
+  // Bound ancestor discovery to this fixture, even when the temp directory
+  // itself sits beneath a worktree or a sandbox-provided .git entry.
+  process.env.HOME = fixture
+  process.env.USERPROFILE = fixture
   // Plain clone layout: repo/.git is a directory, launch from repo/sub/dir.
   const repo = join(fixture, 'repo')
   mkdirSync(join(repo, '.git'), { recursive: true })
@@ -58,6 +64,10 @@ try {
   )
   check('outside any worktree the launch directory survives', resolveSessionCwd(undefined, plain) === plain)
 } finally {
+  if (fixtureHome === undefined) delete process.env.HOME
+  else process.env.HOME = fixtureHome
+  if (fixtureUserProfile === undefined) delete process.env.USERPROFILE
+  else process.env.USERPROFILE = fixtureUserProfile
   rmSync(fixture, { recursive: true, force: true })
 }
 
