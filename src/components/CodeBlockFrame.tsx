@@ -44,6 +44,11 @@ const WIDE_HEADER_MIN_COLUMNS = 56
 const MIN_NET_BODY_WIDTH = 8
 /** Rail column + the single padding column. */
 const FRAME_OVERHEAD = 2
+/** Structural frames use the same paint-owned pad as the typed frame.
+ *  Hard rows retain the existing selectable inset; wraps must not copy it. */
+const BODY_PADDING: TextDecoration = {
+  prefix: { text: ' ', width: 1, noSelectContinuation: 1 },
+}
 
 /**
  * Which frame engine renders code fences. `typed` is the default;
@@ -103,10 +108,11 @@ export function CodeBlockFrame({ token, highlight, dimColor = false, forceWidth 
       header: headerText,
       headerFill,
       prefix: {
-        // The rail is excluded from selection; the padding column is not.
+        // Keep the hard-row inset, but exclude the injected wrap padding.
         text: colorize('│', theme.subtle, 'foreground') + ' ',
         width: FRAME_OVERHEAD,
         noSelect: 1,
+        noSelectContinuation: FRAME_OVERHEAD,
       },
     }
   }, [headerText, headerFill, emptyBody, theme.subtle])
@@ -157,7 +163,8 @@ export function CodeBlockFrame({ token, highlight, dimColor = false, forceWidth 
  * (a layout border, so it stays continuous across wrapped rows and
  * follows the content column) and a bottom edge under the whole block.
  * Header/rail/wall/bottom stay NoSelect; the body (and its padding
- * column) stay selectable - the same copy contract as the light frame.
+ * column on hard rows) stay selectable - the same copy contract as the
+ * light frame. Continuation padding is decoration, not source text.
  */
 function CodeBlockFrameFull({
   contentWidth,
@@ -192,6 +199,7 @@ function CodeBlockFrameFull({
       />
       <Box flexDirection="row">
         <NoSelect
+          flexShrink={0}
           borderStyle="single"
           borderLeft
           borderTop={false}
@@ -199,10 +207,11 @@ function CodeBlockFrameFull({
           borderBottom={false}
           borderColor={subtle}
         />
-        <Box paddingLeft={1} flexGrow={1}>
-          <Text dimColor={dimColor}>{body}</Text>
+        <Box flexGrow={1}>
+          <Text dimColor={dimColor} decoration={BODY_PADDING}>{body}</Text>
         </Box>
         <NoSelect
+          flexShrink={0}
           borderStyle="single"
           borderRight
           borderTop={false}
@@ -263,6 +272,7 @@ function CodeBlockFrameHybrid({
       )}
       <Box flexDirection="row">
         <NoSelect
+          flexShrink={0}
           borderStyle="single"
           borderLeft
           borderTop={false}
@@ -270,8 +280,8 @@ function CodeBlockFrameHybrid({
           borderBottom={false}
           borderColor={subtle}
         />
-        <Box paddingLeft={1}>
-          <Text dimColor={dimColor}>{body}</Text>
+        <Box>
+          <Text dimColor={dimColor} decoration={BODY_PADDING}>{body}</Text>
         </Box>
       </Box>
     </Box>

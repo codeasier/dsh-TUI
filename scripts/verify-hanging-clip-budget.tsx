@@ -86,10 +86,10 @@ try {
       <Component>{source}</Component>
     </TerminalSizeContext.Provider>, width)
     // CodeBlockFrame uses the plain ANSI fence only below net width 8.
-    // Framed headers/rails are nonselectable; its one-column body padding
-    // deliberately remains selectable on each physical row (upstream contract).
+    // Framed headers/rails are nonselectable. Keep the initial hard-row
+    // inset, but never inject continuation padding into the source copy.
     const expected = width - 6 < 8 ? stripAnsi(applyMarkdown(source))
-      : '\n' + wrapText('const message = "中文"', width - 2, 'wrap').split('\n').map(line => ' ' + line).join('')
+      : '\n const message = "中文"'
     assert.equal(copy(actual.screen), expected,
       `CJK code caption width=${width}: narrow fallback or framed body copy contract`)
   }

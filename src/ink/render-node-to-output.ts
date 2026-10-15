@@ -758,15 +758,32 @@ function pushNoSelectRuns(
   y: number,
   runs: readonly TextNoSelectRun[] | undefined,
 ): void {
-  if (runs === undefined) return
+  if (runs === undefined || runs.length === 0) return
   const bx = Math.floor(x)
   const by = Math.floor(y)
-  for (const run of runs) {
+  // Runs are sorted and disjoint. A wrapped code block can alternate
+  // masks on every row: cached viewport paint must not scan its history.
+  const last = runs[runs.length - 1]!
+  const band = output.getVisibleRect(0, by, output.width, last.offset + last.height)
+  if (band === undefined) return
+  const from = band.y - by
+  const to = from + band.height
+  let lo = 0
+  let hi = runs.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    const run = runs[mid]!
+    if (run.offset + run.height <= from) lo = mid + 1
+    else hi = mid
+  }
+  for (let index = lo; index < runs.length; index++) {
+    const run = runs[index]!
+    if (run.offset >= to) break
     if (run.width <= 0 || run.height <= 0) continue
     output.noSelect({ x: bx, y: by + run.offset, width: run.width, height: run.height })
     // The decoration is its own source plane when a gesture starts on it:
     // repeated rails keep physical row breaks, independently of body wraps.
-    const visible = output.getVisibleRect(bx, by + run.offset, run.width, run.height)
+    const visible = output.getVisibleRect(bx, by + run.offset, run.hardBreakWidth ?? run.width, run.height)
     if (visible !== undefined) {
       for (let row = visible.y; row < visible.y + visible.height; row++) {
         output.softWrapRow(row, 0, visible.x, visible.width)
@@ -908,12 +925,21 @@ function paintDecoratedTextNode(
   }
 
   if (prefixWidth > 0 && prefix !== undefined) {
+    let run: TextNoSelectRun | undefined
     for (let r = headerOffset; r < rows.length; r++) {
       rows[r] = prefix.text + rows[r]!
-    }
-    const ns = prefix.noSelect ?? 0
-    if (ns > 0) {
-      noSelectRuns.push({ offset: headerOffset, height: rows.length - headerOffset, width: ns })
+      const ns = flags[r]
+        ? prefix.noSelectContinuation ?? prefix.noSelect ?? 0
+        : prefix.noSelect ?? 0
+      const hardBreakWidth = Math.max(0, Math.min(ns, prefix.noSelect ?? 0))
+      if (ns <= 0) {
+        run = undefined
+      } else if (run?.width === ns && run.hardBreakWidth === hardBreakWidth) {
+        run.height++
+      } else {
+        run = { offset: r, height: 1, width: ns, hardBreakWidth }
+        noSelectRuns.push(run)
+      }
     }
   } else if (decoration.hang === true) {
     // Continuation rows get their source line's leading structure: rails

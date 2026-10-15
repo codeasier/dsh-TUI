@@ -3,6 +3,7 @@ import { Box, Text } from '../ui.js'
 import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
 import { useTerminalSize } from '../ink/hooks/use-terminal-size.js'
 import { stringWidth } from '../ink/stringWidth.js'
+import { getGraphemeSegmenter } from '../utils/intl.js'
 import { t } from '../i18n.js'
 import { formatDuration, formatTokens } from '../terminal-utils/format.js'
 import { SpinnerGlyph } from './Spinner/SpinnerGlyph.js'
@@ -19,6 +20,34 @@ const FRAME_MS = 140
 const TICK_MS = 60
 /** Columns the classic dot occupies (`SpinnerGlyph`'s fixed two-column slot). */
 const DOT_SLOT = 2
+
+/** Fit the mandatory fields after optional phase/hint degradation. Never
+ * split graphemes or turn a clipped duration into a different elapsed value. */
+export function compactionBaseline(label: string, elapsed: string, indicatorWidth: number, budget: number): {
+  label: string
+  elapsed: string
+  indicator: boolean
+} {
+  const elapsedWidth = stringWidth(elapsed)
+  if (elapsedWidth > budget) return { label: '', elapsed: budget > 0 ? '…' : '', indicator: false }
+  let indicator = true
+  let labelWidth = budget - indicatorWidth - stringWidth(SEP) - elapsedWidth
+  if (labelWidth < 1) {
+    indicator = false
+    labelWidth = budget - stringWidth(SEP) - elapsedWidth
+  }
+  if (labelWidth < 1) return { label: '', elapsed, indicator: false }
+  if (stringWidth(label) <= labelWidth) return { label, elapsed, indicator }
+  let clipped = ''
+  let width = 0
+  for (const { segment } of getGraphemeSegmenter().segment(label)) {
+    const next = stringWidth(segment)
+    if (width + next > labelWidth - 1) break
+    clipped += segment
+    width += next
+  }
+  return { label: `${clipped}…`, elapsed, indicator }
+}
 
 /** A `/activity` preset resolved once per name, with its widest frame. */
 interface Indicator {
@@ -87,15 +116,18 @@ export function CompactionStatusRow({
   const detailWidth = stringWidth(SEP) + stringWidth(detail)
   const showHint = hint !== undefined && base + elapsedWidth + hintWidth <= budget
   const showDetail = base + elapsedWidth + hintWidth + detailWidth <= budget
+  const fitted = compactionBaseline(label, elapsed, indicator?.width ?? DOT_SLOT, budget)
 
   return (
-    <Box ref={viewportRef} flexDirection="row" flexWrap="wrap" marginTop={1} width="100%">
-      {glyph === null
-        ? <SpinnerGlyph frame={frame} messageColor="accent" />
-        : <Text color="activity">{`${glyph} `}</Text>}
-      <Text color="accent">{label}</Text>
+    <Box ref={viewportRef} flexDirection="row" flexWrap="nowrap" marginTop={1} width="100%">
+      {fitted.indicator && <Box width={indicator?.width ?? DOT_SLOT} flexShrink={0}>
+        {glyph === null
+          ? <SpinnerGlyph frame={frame} messageColor="accent" />
+          : <Text color="activity">{`${glyph} `}</Text>}
+      </Box>}
+      {fitted.label !== '' && <Text color="accent">{fitted.label}</Text>}
       {showDetail && <Text dimColor>{`${SEP}${detail}`}</Text>}
-      <Text dimColor>{`${SEP}${elapsed}`}</Text>
+      <Text dimColor>{`${fitted.label === '' ? '' : SEP}${fitted.elapsed}`}</Text>
       {showHint && <Text dimColor>{`${SEP}${hint}`}</Text>}
     </Box>
   )

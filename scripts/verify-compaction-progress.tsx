@@ -20,7 +20,7 @@
  *
  * 运行：node --import tsx/esm scripts/verify-compaction-progress.tsx
  */
-const [{ createChannel }, { settled, viewportLines }, { Writable, PassThrough }, React, { Terminal: XTerm }, ui, { CompactionStatusRow }, { t, setLang }, { Chat }, { QuestionStore }, { default: instances }, { FRAME_PRESETS }, { ActivityStore }] =
+const [{ createChannel }, { settled, viewportLines }, { Writable, PassThrough }, React, { Terminal: XTerm }, ui, { CompactionStatusRow, compactionBaseline }, { t, setLang }, { Chat }, { QuestionStore }, { default: instances }, { FRAME_PRESETS }, { ActivityStore }] =
   await Promise.all([
     import('../src/dsh-adapter/channel.js'),
     import('./lib/term-test.mjs'),
@@ -40,6 +40,12 @@ const [{ createChannel }, { settled, viewportLines }, { Writable, PassThrough },
 // The 34/36-column budget fixtures below use Chinese copy. Pin the UI
 // resolver explicitly so inherited env/settings cannot change their geometry.
 setLang('zh')
+
+const [{ TerminalSizeContext }, { stringWidth }, { formatDuration }] = await Promise.all([
+  import('../src/ink/components/TerminalSizeContext.js'),
+  import('../src/ink/stringWidth.js'),
+  import('../src/terminal-utils/format.js'),
+])
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -270,28 +276,39 @@ function assemble(kind = 'hang-until-abort', extra = []) {
 }
 
 // ==== 场景 6：状态行渲染（标签 / 阶段 / 计时 / Esc 提示 / 窄屏降级）==========
-async function mountRow(compaction, cols, activityPreset) {
+async function mountRow(compaction, cols, activityPreset, contextColumns = cols) {
   const rows = 6
+  let wrote = false
+  let committed = false
+  function Row() {
+    React.useLayoutEffect(() => { committed = true }, [])
+    return React.createElement(CompactionStatusRow, { compaction, activityPreset })
+  }
   const term = new XTerm({ cols, rows, scrollback: 0, allowProposedApi: true })
   class FakeStdout extends Writable {
     constructor() { super(); this.columns = cols; this.rows = rows; this.isTTY = true }
-    _write(chunk, _encoding, callback) { term.write(String(chunk), callback) }
+    _write(chunk, _encoding, callback) { term.write(String(chunk), () => { wrote = true; callback() }) }
   }
   const { render, ThemeProvider } = ui
   const app = await render(
     React.createElement(
       ThemeProvider,
       { theme: 'dark' },
-      React.createElement(CompactionStatusRow, { compaction, activityPreset }),
+      React.createElement(TerminalSizeContext.Provider, { value: { columns: contextColumns, rows } },
+        React.createElement(ui.Box, { width: contextColumns },
+          React.createElement(Row))),
     ),
     { stdout: new FakeStdout(), exitOnCtrlC: false, patchConsole: false },
   )
-  await settled(() => term.buffer.active.getLine(1)?.translateToString(true).includes(t('compact-working')), { timeoutMs: 3000 })
+  // Monotonic deadline keeps polling bounded even in clock-pinned fixtures.
+  const deadline = performance.now() + 3000
+  // 固定窗:pacing 冻结时钟且极窄行没有文本锚点；首帧以提交和解析条件轮询，单调上限防止无限等待。
+  while (performance.now() < deadline && !(committed && wrote && (contextColumns <= 2 || (term.buffer.active.getLine(1)?.translateToString(true).trim().length ?? 0) > 0))) await sleep(10)
   return { term, app, row: () => term.buffer.active.getLine(1)?.translateToString(true) ?? '' }
 }
 
-async function renderRow(compaction, cols, activityPreset) {
-  const { term, app } = await mountRow(compaction, cols, activityPreset)
+async function renderRow(compaction, cols, activityPreset, contextColumns = cols) {
+  const { term, app } = await mountRow(compaction, cols, activityPreset, contextColumns)
   const lines = []
   for (let y = 0; y < 6; y++) lines.push(term.buffer.active.getLine(y)?.translateToString(true) ?? '')
   await app.unmount()
@@ -353,6 +370,56 @@ async function renderRow(compaction, cols, activityPreset) {
   }
   await live.app.unmount()
   check('scene6: the indicator advances through the preset frames', seen.size >= 2, [...seen].join(','))
+}
+
+// Mandatory baseline fits independently of language, indicator and physical
+// terminal width. A narrow context models the chat column beside a sidebar.
+// Only geometry fixtures freeze elapsed time; animation and cancellation use real time.
+const realNow = Date.now
+const geometryNow = realNow()
+Date.now = () => geometryNow
+try {
+  for (const lang of ['en', 'zh']) {
+    setLang(lang)
+    for (const preset of [undefined, 'aesthetic']) {
+      if (lang === 'en') {
+        const progress = { startedAt: Date.now() - 26_000, phase: 'prefill', outputChars: 0, cancellable: true }
+        const medium = (await renderRow(progress, 60, preset)).join('')
+        check(`baseline en/${preset ?? 'dot'}: phase yields before actionable hint`,
+          medium.includes(t('compact-working')) && medium.includes('26s') && medium.includes(t('compact-esc-cancel')) && !medium.includes(t('compact-phase-prefill')), medium)
+        const wide = (await renderRow(progress, 100, preset)).join('')
+        check(`baseline en/${preset ?? 'dot'}: roomy row keeps phase and hint`,
+          wide.includes(t('compact-phase-prefill')) && wide.includes(t('compact-esc-cancel')), wide)
+      }
+      for (const columns of [1, 2, 3, 5, 8, 12, 24, 34, 36]) {
+        const age = columns % 2 === 0 ? 3_661_000 : 26_000
+        const elapsed = formatDuration(age)
+        const lines = await renderRow({ startedAt: Date.now() - age, phase: 'prefill', outputChars: 0, cancellable: true }, 100, preset, columns)
+        const painted = lines.filter(line => line.trim() !== '')
+        const tag = `baseline ${lang}/${preset ?? 'dot'}@${columns}`
+        check(`${tag}: one bounded visual row`, painted.length <= 1 && painted.every(line => stringWidth(line) <= Math.max(0, columns - 2)), JSON.stringify(painted))
+        check(`${tag}: complete elapsed or honest unavailable marker`, stringWidth(elapsed) <= Math.max(0, columns - 2)
+          ? painted.join('').includes(elapsed)
+          : painted.join('').trim() === (columns > 2 ? '…' : ''), JSON.stringify(painted))
+      }
+      for (const phase of ['prefill', 'summary']) {
+        for (const columns of [34, 36]) {
+          const lines = await renderRow({ startedAt: Date.now() - 26_000, phase, outputChars: 4_800, cancellable: false }, columns, preset)
+          check(`baseline ${lang}/${preset ?? 'dot'}/${phase}@${columns}: no spurious cancel hint or wrap`,
+            lines.filter(line => line.trim() !== '').length === 1 && !lines.join('').includes(t('compact-esc-cancel')) && lines.join('').includes('26s'), JSON.stringify(lines))
+        }
+      }
+    }
+  }
+  // A cut must retain whole combining/ZWJ clusters, not merely code points.
+  for (const cluster of ['e\u0301', '👩‍💻', '界']) {
+    const fitted = compactionBaseline(`${cluster}${cluster}tail`, '26s', 2, 2 + 3 + 3 + stringWidth(cluster) + 1)
+    check(`baseline clips whole grapheme ${cluster}`, fitted.label === `${cluster}…` && fitted.elapsed === '26s' && fitted.indicator)
+  }
+  setLang('zh')
+} finally {
+  Date.now = realNow
+  setLang('zh')
 }
 
 // ==== 场景 7：挂真实 Chat —— 行在屏上，Esc 真的打到 cancelCompact ============
