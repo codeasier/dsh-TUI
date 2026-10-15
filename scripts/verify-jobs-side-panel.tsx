@@ -15,10 +15,12 @@
  *    still re-applies — the nonce, not the id, drives it).
  * Run: node --import tsx/esm scripts/verify-jobs-side-panel.tsx
  */
+import type { Screen } from '../src/ink/screen.js'
+
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'en'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, { SidePanelColumn }, { useSidePanel }, prefs, { panelStore }, { jobsFocusStore }, termTest] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, { SidePanelColumn }, { useSidePanel }, prefs, { panelStore }, { jobsFocusStore }, termTest, { default: instances }, { cellAt }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -29,6 +31,8 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, { SidePanelCol
   import('../src/components/sidePanel/PanelStore.js'),
   import('../src/components/sidePanel/jobsFocusStore.js'),
   import('./lib/term-test.mjs'),
+  import('../src/ink/instances.js'),
+  import('../src/ink/screen.js'),
 ])
 const { render, ThemeProvider, AlternateScreen, Box, Text, useInput } = ui
 const { applySidePanelOpen, applySidePanelRatio } = prefs
@@ -36,6 +40,7 @@ const { settled, sleep } = termTest
 
 const COLS = 120
 const ROWS = 22
+const PANEL_START = Math.floor(COLS * 0.68)
 
 let failed = 0
 function check(name: string, ok: boolean, extra = ''): void {
@@ -158,6 +163,21 @@ const findCell = (needle: string): { col: number; row: number } | null => {
   }
   return null
 }
+// Inspect the painted model without invalidating caches: a terminal-only check
+// can miss a stale subtree blit that corrupts the model and terminal together.
+const modelLines = (): string[] => {
+  const ink = instances.get(stdout as unknown as NodeJS.WriteStream) as unknown as { frontFrame: { screen: Screen } }
+  return Array.from({ length: ROWS }, (_, row) =>
+    Array.from({ length: COLS }, (_, col) => cellAt(ink.frontFrame.screen, col, row)?.char ?? ' ').join(''))
+}
+const rosterHeaderCount = (frame: readonly string[], label: string): number =>
+  frame.filter(line => /[●✓×·] job-/u.test(line) && line.includes(label)).length
+const rosterHeadersIntact = (): boolean => [lines(), modelLines()].every(frame =>
+  ['LLL3', 'LLL4'].every(label => rosterHeaderCount(frame, label) === 1))
+const panelModelMatchesTerminal = (): boolean => {
+  const painted = modelLines()
+  return lines().every((line, row) => line.slice(PANEL_START) === painted[row]!.slice(PANEL_START))
+}
 const focusedLine = (): string => lines().find(line => /❯[●✓×·]/u.test(line)) ?? ''
 const focusedLabelLine = (): string => {
   const index = lines().findIndex(line => /❯[●✓×·]/u.test(line))
@@ -207,6 +227,11 @@ try {
   stdin.write('\x1b[B')
   await settled(() => focusedLabelLine().includes('LLL2'), { timeout: 4000 })
   check('keys: downArrow moves focus to the second row (usePanelInput dispatch)', focusedLabelLine().includes('LLL2'), focusedLine().trim() + ' | ' + focusedLabelLine().trim())
+
+  // Focus expands a detail block while ArrowDown also scrolls. Both untouched
+  // following headers must survive the cached row-shift repair exactly once.
+  check('paint: focus growth keeps each following roster header exactly once', await settled(rosterHeadersIntact), JSON.stringify(lines().slice(4, 18)))
+  check('paint: focused panel model matches the terminal', await settled(panelModelMatchesTerminal))
 
   // --- 5. SGR click on another row focuses it ------------------------------
   const cell = findCell('LLL3')

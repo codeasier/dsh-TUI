@@ -498,7 +498,7 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
       check('transcript render: the read summary is clickable', readHit !== null, h.screen())
       const click = (final: string): string => `\x1b[<0;${readHit!.col + 1};${readHit!.row + 1}${final}`
       h.stdin.write(click('M'))
-      // Separate pointer press/release so the normal row-click path handles expansion.
+      // 固定窗:pacing Separate pointer press/release so the normal row-click path handles expansion.
       await sleep(30)
       h.stdin.write(click('m'))
       check('transcript render: opening the read exposes its durable result', await settled(() => h.screen().includes('fixture body')), h.screen())

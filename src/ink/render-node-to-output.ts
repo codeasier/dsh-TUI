@@ -1951,11 +1951,12 @@ function renderNodeToOutput(
               y1: edgeTop,
               y2: edgeBottom + 1,
             })
-            // Snapshot dirty children before the first pass — the first
-            // pass clears dirty flags, and edge-spanning children would be
-            // missed by the second pass without this snapshot.
+            // Snapshot dirty children and their previous heights before the
+            // edge pass overwrites their dirty flags and layout cache.
             const dirtyChildren = content.dirty
-              ? new Set(content.childNodes.filter(c => (c as DOMElement).dirty))
+              ? new Map(content.childNodes
+                  .filter(c => (c as DOMElement).dirty)
+                  .map(c => [c, nodeCache.get(c as DOMElement)?.height ?? 0]))
               : null
             renderScrolledChildren(
               content,
@@ -2002,7 +2003,7 @@ function renderNodeToOutput(
               // shift the topSpacer shrink + new-item heights self-balance
               // to zero before reaching the clean block. Middle-growth
               // leaves shift non-zero → clean children after the growth
-              // point fall through to yoga + the fine-grained check below,
+              // point fall through to yoga and repaint their visible rows,
               // preserving the ghost-box fix.
               let cumHeightShift = 0
               for (const childNode of content.childNodes) {
@@ -2020,8 +2021,11 @@ function renderNodeToOutput(
                 const childH = cy.getComputedHeight()
                 const childBottom = childTop + childH
                 if (isDirty) {
-                  const prev = nodeCache.get(childElem)
-                  cumHeightShift += childH - (prev ? prev.height : 0)
+                  // The edge pass may already have replaced this child's
+                  // cache with its new height. Compare against the snapshot,
+                  // or middle growth incorrectly looks like zero and clean
+                  // siblings keep pixels shifted from their old positions.
+                  cumHeightShift += childH - dirtyChildren.get(childNode)!
                 }
                 // Skip culled children (outside viewport)
                 if (
@@ -2033,21 +2037,10 @@ function renderNodeToOutput(
                 if (childTop >= edgeTopLocal && childBottom <= edgeBottomLocal)
                   continue
                 const screenY = Math.floor(contentY + childTop)
-                // Clean children reaching here have cumHeightShift ≠ 0 OR
-                // no cache. Re-check precisely: cached.y − delta is where
-                // the shift left old pixels; if it equals new screenY the
-                // blit is correct (shift re-balanced at this child, or
-                // yogaTop happens to net out). No cache → blit never
-                // painted it → render.
-                if (!isDirty) {
-                  const childCached = nodeCache.get(childElem)
-                  if (
-                    childCached &&
-                    Math.floor(childCached.y) - delta === screenY
-                  ) {
-                    continue
-                  }
-                }
+                // Clean children reaching here follow a middle-height change
+                // (or have no cache). Repaint them: stable rows from earlier
+                // pure scrolls deliberately keep their old cached screen y,
+                // so cached.y - delta is not a valid previous-frame position.
                 // Wipe this child's region with spaces to overwrite stale
                 // blitted content — output.clear() only expands damage and
                 // cannot zero cells that the blit already wrote.

@@ -20,7 +20,7 @@
  *
  * 运行：node --import tsx/esm scripts/verify-compaction-progress.tsx
  */
-const [{ createChannel }, { settled, viewportLines }, { Writable, PassThrough }, React, { Terminal: XTerm }, ui, { CompactionStatusRow }, { t }, { Chat }, { QuestionStore }, { default: instances }, { FRAME_PRESETS }, { ActivityStore }] =
+const [{ createChannel }, { settled, viewportLines }, { Writable, PassThrough }, React, { Terminal: XTerm }, ui, { CompactionStatusRow }, { t, setLang }, { Chat }, { QuestionStore }, { default: instances }, { FRAME_PRESETS }, { ActivityStore }] =
   await Promise.all([
     import('../src/dsh-adapter/channel.js'),
     import('./lib/term-test.mjs'),
@@ -36,6 +36,10 @@ const [{ createChannel }, { settled, viewportLines }, { Writable, PassThrough },
     import('../src/components/activityFrames.js'),
     import('../src/dsh-adapter/activity-store.js'),
   ])
+
+// The 34/36-column budget fixtures below use Chinese copy. Pin the UI
+// resolver explicitly so inherited env/settings cannot change their geometry.
+setLang('zh')
 
 let failed = 0
 function check(name, ok, extra = '') {
