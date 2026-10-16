@@ -468,10 +468,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // Child-process stderr guard (issue #17): MCP servers spawned with an
   // inherited stderr (the MCP SDK's stdio default) write straight to the
   // terminal device from the child process, bypassing the renderer's own
-  // stderr patch and corrupting the alt-screen. Take over those spawns and
-  // surface their stderr as deduplicated notifications instead. Installed
-  // before agent resolution so servers spawned during startup are covered;
-  // notices posted before the channel exists are buffered and flushed then.
+  // stderr patch and corrupting the alt-screen. Take over those spawns, keep
+  // every line in the debug log, and turn the ones that announce a problem
+  // into deduplicated notifications — a server's start-up banner (every MCP
+  // server logs one to stderr on each boot) stays out of the notice area.
+  // Installed before agent resolution so servers spawned during startup are
+  // covered; notices posted before the channel exists are buffered and flushed
+  // then.
   const stderrBacklog: Array<[string, { color?: 'error' | 'warning' | 'success'; timeoutMs?: number }?]> = []
   let notifyStderr: ((text: string, options?: { color?: 'error' | 'warning' | 'success'; timeoutMs?: number }) => void) | undefined
   const stderrReporter = createChildStderrReporter((text, options) => {
@@ -480,6 +483,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   })
   ctx.effect(() => {
     const restoreSpawn = installChildStderrGuard(line => {
+      // The debug log is the retention channel for silenced lines: the
+      // reporter only notifies what announces a problem.
       logForDebugging(`[child-stderr] ${line}`)
       stderrReporter.push(line)
     })

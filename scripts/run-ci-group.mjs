@@ -1236,7 +1236,8 @@ const GROUPS = {
 // 兄弟切换不串消息、Dashboard 的 children/peers 分区与跨会话降级。
     ["verify-agent-workbench", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-workbench.tsx']],
 // 子进程 stderr 接管回归（issue #17）：inherit 的 MCP 子进程 stderr
-// 不再裸写终端破坏 alt-screen，输出去重聚合为受控通知。
+// 不再裸写终端破坏 alt-screen，行按内容分级——正常启动播报静默（仍进调试日志）、
+// 告警为 warning、失败为 error，去重聚合后进受控通知。
     ["verify-child-stderr", ['node', '--import', 'tsx/esm', 'scripts/verify-child-stderr.tsx']],
 // 模型路由原子解析回归（issue #67）：完整 config > pref > default 整对
 // 生效，provider-only pin 不得与另一半拼接出错配路由。
