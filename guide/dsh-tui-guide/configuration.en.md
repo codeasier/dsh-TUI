@@ -136,7 +136,7 @@ A complete common override looks like this:
     # (that pins the workspace to the launch subdirectory, issue #96).
     effort: max
     activity: true
-    activityFrames: moon8
+    activityFrames: moon
     contextBar: true
     fullscreen: false
     terminalImages: true
@@ -169,13 +169,14 @@ A complete common override looks like this:
 | `modes` | built-in trio | Shift+Tab session-mode cycle (plan/sandbox/approval atom bundles); defaults to default → plan → full-access |
 | `upstreamRetry` | `true` | Seed a retry policy (5 attempts, transport-drop-aware failure codes including `STREAM_CLOSED`) on the `llm-pi-ai` provider route the bound session actually uses, whenever it declares no `retryPolicy` — at every bind (boot, `/model` switch, resume), through the official `llm-pi-ai` settings section (the policy the kernel's `llm-retry` plugin executes). Dormant channels are never written; routes with an explicit `retryPolicy` (cordis.yml or hand-edited settings) are never overwritten; `false` opts out entirely |
 | `activity` | `true` | Show the live activity row |
-| `activityFrames` | `moon8` | Activity animation preset; `/activity` changes it at runtime. A legacy saved value of `claude` is read as `moon8`, and the picker no longer offers that legacy preset |
+| `activityFrames` | `moon` | Activity animation preset; an explicit setting or a saved `/activity` choice takes precedence. A legacy saved value of `claude` still reads as `moon8`, and the picker no longer offers that legacy preset |
 | `contextBar` | `true` | Segmented context-usage bar below the input box; `false` hides the row. Both this and `/settings → statusBar.contextBar` (also on by default) must be on for it to render |
 | `fullscreen` | `true` (factory default since 0.9.0) | `true` uses the alternate screen, app scrolling, and mouse selection; `false` uses inline mode |
 | `terminalImages` | `true` | Allow previews in supported terminals; `false` keeps text metadata and skips image probing and preview decoding. Restart to apply changes |
 | `preset` | roster default `standard` | Agent preset for new sessions; precedence: `DSH_TUI_PRESET` (this run) > the persisted `/preset` choice > this field (deployment default) > the roster default |
 | `sessionId` | unset | Session to resume, normally injected by the Windows `--resume` launcher |
 | `backend` | unset (the backend `/kernel` remembers, else `dsh`) | Session backend: the built-in `dsh`, or an installed backend (the experimental `claude` / `codex`, plus plugin backends; case-insensitive). **An unknown or uninstalled value starts on `dsh` with a warning**, never a crash. The profile row reads `DSH_TUI_BACKEND`, which `dsh-tui --backend <id>` sets. When the profile's own patch writes it as a `!!js` expression (other than one that only forwards `DSH_TUI_BACKEND`, such as the bundled row's `process.env.DSH_TUI_BACKEND \|\| undefined`), the launch goes through `dsh --profile` (only the profile's Loader evaluates it), except for a `/kernel` switch. See [Claude backend](claude-backend.en.md) |
+| `catalogModelSync` | `true` | Read a catalog route's vendor-published listing at boot and log the models that are not enabled (see the [`/provider`](configuration.en.md#provider-manage-model-providers-at-runtime) section); it never enables new models automatically; it only repairs missing vendor routing headers on enabled derived routes and moves their Claude models to the Anthropic-protocol derived route. Enabling is your call in `/provider` → manage official models. `false` skips the boot pass only. Observational modes (shadow/replay) never run it |
 
 For the DeepSeek brand, when header art (`whale`) is enabled, `companion.skin` and the Maid-portrait toggle (`whaleGirl`) choose the splash art with this precedence:
 
@@ -459,7 +460,48 @@ providers without a restart.
   detail. Catalog routes with no single known protocol or custom request
   headers also explain the limitation and stay on the snapshot, rather than
   saving endpoint-only models into an unverifiable profile.
-
+- The "manage official models" branch: a catalog route's models come from the
+  **installed pi-ai snapshot**, so models the vendor added later are missing —
+  and because a profile declares protocol and endpoint per ROUTE, those ids
+  cannot join the catalog route itself. The branch reads the vendor's published
+  listing live (`opencode-go` uses `https://opencode.ai/zen/go/v1/models`) and
+  lists the models beyond the installed catalog as CHECKABLE rows, with the
+  currently enabled ones pre-checked. The selection is written to derived
+  route(s) by the vendor's per-model protocol: `claude-*` goes to
+  `<route>-live-anthropic` (anthropic-messages at `https://opencode.ai/zen/go`),
+  everything else to `<route>-live` (protocol and endpoint declared there,
+  sharing the parent's key). Forcing a Claude id onto the OpenAI-compatible
+  derived route fails its first turn with
+  `400 {"type":"ModelProtocolUnsupported"}` — the split fixes exactly that.
+  **Nothing is ever enabled automatically**: unchecked ids stay
+  off, and clearing every row removes the derived route(s). Both the row
+  descriptions and the written model entries come from the vendor catalog
+  [models.dev](https://models.dev) (the endpoint publishes ids only): name,
+  context/output capacities, input modalities (text/image, narrowed when the
+  vendor declares video/pdf) and thinking tiers (an effort list maps onto
+  off/low/medium/high/xhigh/max, a toggle onto off/high). Fields already stated
+  by a stored entry win over the catalog. When models.dev is unreachable the
+  pass says so and falls back to bare ids with the route defaults. The catalog route's own
+  configuration (including its enabled model subset) is never rewritten, and the
+  models the catalog already describes keep being served by that route over
+  their native protocols. A model the vendor added shows up in that panel (and in
+  the add flow's question detail) until you decide; an enabled id the vendor
+  retired is marked as such so you can drop it. Claude rows carry an extra
+  anthropic-routing note.
+- The boot-time `catalogModelSync` (on by default) inspects and logs: models the
+  vendor publishes but you have not enabled, and enabled ids the vendor retired.
+  An offline host, a missing key or an unreadable listing is silent. Its only
+  writes are non-enablement repairs: a stored derived route missing the vendor's
+  `x-opencode-session` header (the OpenCode endpoints answer `400
+  MissingSessionID` without it) gets one stable value, and a Claude id stranded
+  on the primary derived route by an older build migrates to `-live-anthropic`
+  (otherwise its first turn answers `400 ModelProtocolUnsupported`). Neither
+  enables nor disables any model.
+- While adding a catalog route, the model question names the vendor's extra
+  models and the route they are managed on. Those ids are never selectable rows
+  on that route (it cannot serve them) and are not enabled by connecting;
+  tick them in "manage official models" afterwards. Editing the same route's
+  model list repeats the note.
 Where it writes:
 
 | Artifact | Location |
@@ -486,12 +528,56 @@ interactive question surface refuses sign-in explicitly.
 
 The `dsh-tui-auth` row accepts `providers` (default: all supported flows present
 in the installed pi-ai catalog; an explicit non-empty subset must exist in
-that catalog), `credentialsFile` (custom file path), and
+that catalog), `credentialsFile` (custom file path), `serviceTier` (optional
+startup default for the request body `service_tier`, see below), and
 `modelOverrides.<provider>.<model>` (optional `contextWindow` and `maxTokens`).
 A profile override replaces the whole `config` block, so retain every field
-you need. The flow implementation comes from the host's `dsh-llm-pi-ai` / pi-ai
+you need, especially existing `modelOverrides` (and any custom `providers` or
+`credentialsFile`). The flow implementation comes from the host's `dsh-llm-pi-ai` / pi-ai
 installation. Subscription authentication uses its subscription backend; it
 is not a general-purpose API key.
+
+**Prefer the interactive `/fast` command for the fast service tier**, without
+editing YAML or restarting. This plugin's OAuth entry registers the command:
+bare `/fast` or `/fast toggle` switches it, `/fast on` sets `priority`,
+`/fast off` sets `default`, and `/fast status` only reports the current state.
+Changes apply from the **next model request**, leaving already-sent requests
+and reasoning `effort` unchanged. The switch covers **all supported OAuth
+routes registered by this plugin in the current TUI process**, not just the
+current session or model. Supported wire protocols are `openai-codex-responses`
+and `openai-responses` (the `openai-codex` ChatGPT/Codex backend and, when
+available, the OpenAI direct `openai` route), over both SSE and WebSocket.
+Other protocols (`anthropic`, `xai`, `meta`) and routes registered by other
+plugins are unaffected. An unmounted OAuth entry does not provide `/fast`.
+When the entry is mounted but has no successfully registered supported route,
+`/fast` gives a clear unavailable error rather than silently changing unrelated routes. The backend decides acceptance of `priority`, quota, and
+limits; the TUI does not guarantee approval or additional quota.
+
+`config.serviceTier` is only an **optional startup default**; interactive
+`/fast` takes precedence. The switch writes neither config nor other persistent
+files; restarting restores the configured startup value. With no configuration,
+fast starts off and `service_tier` is omitted, leaving the provider's default
+(whereas `/fast off` explicitly sends `default`). `serviceTier: priority` can
+request fast at startup without reducing or overriding `effort`.
+The configured value passes through after trimming surrounding whitespace,
+without enum mapping: OpenAI documents `auto` / `default` / `flex` / `scale` /
+`priority`, and the backend decides what any other value means. Setting
+`serviceTier` while no mounted route has a supported model fails at boot rather
+than being silently ignored; a whitespace-only value also fails. This example
+chooses the optional `priority` startup default and retains a `modelOverrides`
+entry; omit `serviceTier` if you do not need fast at startup. Substitute your
+existing overrides, use model IDs present in the installed catalog, and repeat
+any other config fields you need:
+
+```yaml
+- id: dsh-tui-auth
+  config:
+    serviceTier: priority
+    modelOverrides:
+      openai-codex:
+        gpt-5.6-sol:
+          contextWindow: 1000000
+```
 
 The default credential file remains `$DSH_HOME/dsh-auth/credentials.json`
 (`~/.dsh/dsh-auth/credentials.json` when `DSH_HOME` is unset), with
