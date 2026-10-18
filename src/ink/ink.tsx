@@ -29,7 +29,7 @@ import { noteTerminalFlush } from './flush-tick.js';
 import instances from './instances.js';
 import { suppressInputFor } from './input-suppression.js';
 import { LogUpdate } from './log-update.js';
-import { KittyGraphicsManager } from './kitty-graphics.js';
+import { IMAGE_BACKGROUND_Z_INDEX, IMAGE_FOREGROUND_Z_INDEX, KittyGraphicsManager } from './kitty-graphics.js';
 import { SixelGraphicsManager } from './sixel-graphics.js';
 import { selectTerminalImageProtocol } from './terminal-image-protocol.js';
 import { nodeCache } from './node-cache.js';
@@ -43,15 +43,20 @@ import createRenderer, { type Renderer } from './renderer.js';
 import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
 import { applySearchHighlight } from './transcript-highlight.js';
 import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, getSelectionCursor, hasSelection, moveFocus, pickFollowForSelection, refreshSelectionFingerprint, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
-import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsCursorStyleReset, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
-import { CURSOR_HOME, cursorMove, cursorPosition, cursorStyle, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
+import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsCursorStyleReset, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, terminalImagesBindToCells, type Terminal, writeDiffToTerminal } from './terminal.js';
+import { CURSOR_HOME, cursorMove, cursorPosition, cursorStyle, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, eraseToEndOfLine, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, HIDE_CURSOR, SHOW_CURSOR } from './termio/dec.js';
-import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
+import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, osc, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
 import { decrqm, kittyGraphics, terminalCellSizePixels, terminalWindowSizePixels, xtversion } from './terminal-querier.js';
 import { TerminalWriteProvider } from './useTerminalNotification.js';
 import { TerminalImagesContext } from './hooks/use-terminal-images.js';
 import { DEFAULT_TERMINAL_CELL_SIZE, resolveTerminalCellSize, type TerminalImagePlacement } from './terminal-image.js';
 import { detachHandoffStdin } from './stdin-handoff.js';
+
+/** `0..255` → two lowercase hex digits (OSC 11 colour spec). */
+function hexByte(value: number): string {
+  return Math.max(0, Math.min(255, Math.round(value))).toString(16).padStart(2, '0');
+}
 
 // Alt-screen: renderer.ts sets cursor.visible = !isTTY || screen.height===0,
 // which is always false in alt-screen (TTY + content fills screen).
@@ -259,6 +264,12 @@ export default class Ink {
   private cursorIdleHidden = false;
   private readonly cursorStyleReset = supportsCursorStyleReset() ? DEFAULT_CURSOR_STYLE : '';
   private cursorStyleHandedOff = false;
+  // Canvas colour published as the terminal's default background (OSC 11)
+  // while a themed frame is up. Input methods paint their composition band
+  // with that default — on a #191919 canvas a #111111 default reads as a
+  // black bar. Null means "not ours"; unmount restores OSC 111.
+  private imeSurface: { r: number; g: number; b: number } | null = null;
+  private imeSurfaceApplied: string | null = null;
   private handleStdinError(error: NodeJS.ErrnoException): void {
     if (this.isUnmounted && error.code === 'EIO') {
       return;
@@ -673,11 +684,13 @@ export default class Ink {
    * own state change (setExpanded) drives the render that consumes it —
    * forcing an extra render here would paint the OLD layout once more and
    * burn the flag before the real frame lands.
+   * Overlay lifecycle callers may preserveGrowth: re-anchor the old frame
+   * before incremental growth so newly arrived transcript reaches scrollback.
    */
-  reanchorViewport() {
+  reanchorViewport(options?: { preserveGrowth?: boolean }) {
     if (this.altScreenActive) return;
     noteFrameCause('reanchor');
-    this.log.requestViewportReanchor();
+    this.log.requestViewportReanchor(options);
   }
   /** Render synchronously and invalidate older trailing/drain callbacks. */
   private renderNow(): void {
@@ -1068,6 +1081,14 @@ export default class Ink {
     }
     const optimized = optimize(diff);
     const optimizeMs = performance.now() - tOptimize;
+    if (this.altScreenActive && this.kittyGraphicsSupported) {
+      // A cell-bound terminal never paints a negative placement (see
+      // terminalImagesBindToCells). Sixel covers the family whenever it is
+      // available, so this is the fallback for one that has no Sixel.
+      this.kittyGraphicsManager.setBackgroundZIndex(
+        terminalImagesBindToCells() ? IMAGE_FOREGROUND_Z_INDEX : IMAGE_BACKGROUND_Z_INDEX,
+      );
+    }
     const graphicsOutput =
       this.altScreenActive && this.kittyGraphicsSupported
         ? this.kittyGraphicsManager.reconcile(frame.images ?? [])
@@ -1184,11 +1205,23 @@ export default class Ink {
         }
       }
       if (target !== null) {
+        // Repair the input-owned row without changing the terminal-owned
+        // cursor shape. Native caret visibility is handled below.
+        const showInputCursor = selectionTarget === null && decl?.imeProtectColumns !== undefined;
+        const clip = showInputCursor
+          ? this.imeTailClip(rect, decl, target, terminalWidth)
+          : null;
         if (this.altScreenActive) {
           // Absolute CUP (1-indexed); next frame's CSI H resets regardless.
           // Emitted after altScreenParkPatch so the declared position wins.
           const row = Math.min(Math.max(target.y + 1, 1), terminalRows);
           const col = Math.min(Math.max(target.x + 1, 1), terminalWidth);
+          if (clip !== null) {
+            optimized.push({
+              type: 'stdout',
+              content: cursorPosition(clip.y + 1, clip.x + 1) + clip.sequence
+            });
+          }
           optimized.push({
             type: 'stdout',
             content: cursorPosition(row, col)
@@ -1201,13 +1234,22 @@ export default class Ink {
             x: frame.cursor.x,
             y: frame.cursor.y
           };
-          const dx = target.x - from.x;
-          const dy = target.y - from.y;
-          if (dx !== 0 || dy !== 0) {
+          if (clip !== null) {
+            const cdx = clip.x - from.x;
+            const cdy = clip.y - from.y;
             optimized.push({
               type: 'stdout',
-              content: cursorMove(dx, dy)
+              content: (cdx !== 0 || cdy !== 0 ? cursorMove(cdx, cdy) : '') + clip.sequence + cursorMove(target.x - clip.x, target.y - clip.y)
             });
+          } else {
+            const dx = target.x - from.x;
+            const dy = target.y - from.y;
+            if (dx !== 0 || dy !== 0) {
+              optimized.push({
+                type: 'stdout',
+                content: cursorMove(dx, dy)
+              });
+            }
           }
         }
         this.displayCursor = target;
@@ -1416,6 +1458,46 @@ export default class Ink {
    */
   invalidatePrevFrame(): void {
     this.prevFrameContaminated = true;
+  }
+
+  /**
+   * Reclaim the rows around the declared cursor on the next frame, because
+   * the TERMINAL wrote them out-of-band.
+   *
+   * Terminal emulators render IME preedit (and the composition band they
+   * reserve for it) at the physical cursor themselves, painting those cells
+   * with the terminal's DEFAULT background — not the app's canvas. A diff
+   * engine can only repair what it knows changed, so the band survives every
+   * later frame: the app's model of those cells still holds the canvas
+   * background it wrote once, and identical cells are never written twice
+   * (observed as a black bar trailing the input caret, worst in CJK input).
+   *
+   * A committed composition is the one reliable signal an input method gives
+   * us (see `isImeCommit`), and by then the preedit is gone, so the input
+   * layer marks the declared cursor's rows for an unconditional diff.
+   * Preserve their old cells: replacing the baseline with blanks would hide
+   * deletions where the new cell is also blank, leaving stale terminal text.
+   * `prevFrameContaminated` bypasses cached blits while the forced row diff
+   * also rewrites equal cells, including default-background blanks.
+   *
+   * Cheap and scoped: one row per declared input, no screen clear, no
+   * flicker. A no-op when no cursor is declared (nothing focused) — guessing
+   * a row would cost a full repaint for no reason.
+   */
+  repaintCursorRow(): void {
+    if (!this.options.stdout.isTTY || this.isUnmounted || this.isPaused) return;
+    const decl = this.cursorDeclaration;
+    const rect = decl !== null ? nodeCache.get(decl.node) : undefined;
+    if (rect === undefined) return;
+    const y = Math.max(0, Math.floor(rect.y));
+    const height = Math.max(1, Math.ceil(rect.height));
+    this.prevFrameContaminated = true;
+    const screen = this.frontFrame.screen;
+    screen.repaintRows ??= new Set();
+    for (let row = y; row < Math.min(y + height, screen.height); row++) {
+      screen.repaintRows.add(row);
+    }
+    this.scheduleRender();
   }
 
   /**
@@ -1839,11 +1921,9 @@ export default class Ink {
     }
     const querier = this.app?.querier;
     if (querier === undefined) return;
-    // macOS Terminal.app prints the trailing `p` of `CSI ? 1049 $ p` as
-    // literal text instead of ignoring the unsupported query, leaking a
-    // visible character at the cursor on every probe. The blind
-    // mouse-tracking re-assert above still runs there — only the round trip
-    // is skipped, which costs nothing: Terminal.app never answered it.
+    // Terminal.app leaks the query's trailing `p`; Orca's shared PTY stalls
+    // mobile redraws during mode-1049 round trips. Skip only the query on
+    // those hosts; the blind mouse-tracking re-assert above still runs.
     if (!supportsDecrqmProbe()) return;
     void Promise.all([querier.send(decrqm(1049)), querier.flush()]).then(([reply]) => {
       if (this.isUnmounted || this.isPaused || this.terminalQueriesSuspended) return;
@@ -1927,7 +2007,12 @@ export default class Ink {
         if (this.isUnmounted || this.isPaused || this.terminalQueriesSuspended) {
           return;
         }
-        const protocol = selectTerminalImageProtocol(reply?.status, attributes?.params, process.env.DSH_TUI_IMAGE_PROTOCOL);
+        const protocol = selectTerminalImageProtocol(
+          reply?.status,
+          attributes?.params,
+          process.env.DSH_TUI_IMAGE_PROTOCOL,
+          terminalImagesBindToCells(),
+        );
         if (protocol === 'none') return;
         if (protocol === 'sixel') {
           const [mode] = await Promise.all([querier.send(decrqm(80)), querier.flush()]);
@@ -2280,6 +2365,65 @@ export default class Ink {
    */
   setShadeTarget(rgb: { r: number; g: number; b: number } | null): void {
     this.stylePool.setShadeTarget(rgb);
+  }
+
+  /**
+   * Publish the theme canvas as the terminal default background (OSC 11)
+   * for the TUI's lifetime, and remember it for the IME tail clip.
+   *
+   * An input method paints its composition overlay with the terminal's
+   * default background, not the SGR colour of the cells underneath. On a
+   * themed canvas that default (#111111 in the reported terminal) is a
+   * black bar from the caret to the end of the row, and the composition
+   * caret it parks at the end of that bar sits outside the input box.
+   * Matching OSC 11 to the canvas makes the band disappear; `null` restores
+   * the terminal's own default (OSC 111) on theme clear and on unmount.
+   */
+  setImeSurfaceColor(color: { r: number; g: number; b: number } | null): void {
+    this.imeSurface = color;
+    this.applyImeSurfaceColor();
+  }
+
+  private applyImeSurfaceColor(): void {
+    if (!this.options.stdout.isTTY || this.isUnmounted) return;
+    const next = this.imeSurface === null
+      ? null
+      : `${this.imeSurface.r},${this.imeSurface.g},${this.imeSurface.b}`;
+    if (next === this.imeSurfaceApplied) return;
+    const sequence = next === null
+      ? osc(111)
+      : osc(11, `#${hexByte(this.imeSurface!.r)}${hexByte(this.imeSurface!.g)}${hexByte(this.imeSurface!.b)}`);
+    this.options.stdout.write(wrapForMultiplexer(sequence));
+    this.imeSurfaceApplied = next;
+  }
+
+  /**
+   * Erase the cursor row from just past the input box to the end of the
+   * line, with the canvas background (BCE), so an IME composition band
+   * cannot trail into the page margin. The caret itself is left alone —
+   * the preedit is a terminal overlay, not buffer text, and rewriting the
+   * caret cell would erase it.
+   *
+   * Returns the column to stand on before the erase, plus the SGR+EL
+   * sequence. Null when this declaration is not a text input, the canvas
+   * colour is unknown, or the box already reaches the screen edge.
+   */
+  private imeTailClip(
+    rect: { x: number; y: number; width: number } | undefined,
+    decl: CursorDeclaration | null,
+    target: { x: number; y: number },
+    terminalWidth: number,
+  ): { x: number; y: number; sequence: string } | null {
+    const protect = decl?.imeProtectColumns;
+    if (protect === undefined || rect === undefined || this.imeSurface === null) return null;
+    const clipX = Math.floor(rect.x + Math.max(0, rect.width)) + protect;
+    if (clipX <= target.x || clipX >= terminalWidth) return null;
+    const { r, g, b } = this.imeSurface;
+    return {
+      x: clipX,
+      y: target.y,
+      sequence: `\x1b[48;2;${r};${g};${b}m${eraseToEndOfLine()}${SGR_RESET}`,
+    };
   }
 
   setSelectionBgColor(color: string): void {
@@ -2860,6 +3004,11 @@ export default class Ink {
       writeSync(stdoutFd, SHOW_CURSOR);
       // Restore a child editor's style if shutdown interrupted its handoff.
       if (this.cursorStyleHandedOff) writeSync(stdoutFd, this.cursorStyleReset);
+      // Drop the canvas colour we published as the terminal default background.
+      if (this.imeSurfaceApplied !== null) {
+        writeSync(stdoutFd, wrapForMultiplexer(osc(111)));
+        this.imeSurfaceApplied = null;
+      }
       // Clear iTerm2 progress bar
       writeSync(stdoutFd, CLEAR_ITERM2_PROGRESS);
       // Clear tab status (OSC 21337) so a stale dot doesn't linger

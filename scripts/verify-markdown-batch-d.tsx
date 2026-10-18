@@ -60,18 +60,16 @@ const UNDERLINE = ESC + '[4m'
 
 // -- 1. Heading layering + compressed whitespace ------------------------
 
-// Bad baseline: every heading emitted EOL + EOL, which stacked with the
-// following space token into TWO blank rows; tight sources gained an
-// invented blank row. Now the heading ends with exactly one newline and
-// the source's own blank lines provide the air.
+// The fork normalizes top-level block boundaries to one blank row,
+// including tightly authored headings; extra source blanks never stack.
 const h1doc = applyMarkdown('# Title' + '\n' + '\n' + 'intro' + '\n')
 assert.equal(plain(h1doc), 'Title' + '\n' + '\n' + 'intro',
   'blank-separated heading keeps exactly ONE blank row: ' + JSON.stringify(plain(h1doc)))
 assert.ok(!plain(h1doc).includes('\n\n\n'), 'no double blank row below a heading')
 
 const tightH3 = applyMarkdown('### h3 head' + '\n' + 'body right under' + '\n')
-assert.equal(plain(tightH3), 'h3 head' + '\n' + 'body right under',
-  'tight heading sits directly above its body: ' + JSON.stringify(plain(tightH3)))
+assert.equal(plain(tightH3), 'h3 head' + '\n\n' + 'body right under',
+  'tight heading keeps one semantic block gap: ' + JSON.stringify(plain(tightH3)))
 
 const twoHeadings = applyMarkdown('# A' + '\n' + '\n' + '## B' + '\n' + '\n' + 'text' + '\n')
 assert.equal(plain(twoHeadings), 'A' + '\n' + '\n' + 'B' + '\n' + '\n' + 'text',
@@ -101,7 +99,7 @@ assert.ok(!depths[2]!.includes('38;2'), 'H3 stays near-text')
 // -- 2. hr: subtle single-row divider -----------------------------------
 
 const hrStd = applyMarkdown('intro' + '\n' + '\n' + '---' + '\n' + '\n' + 'outro' + '\n')
-assert.equal(plain(hrStd), 'intro' + '\n' + '\n' + '\u2500\u2500\u2500' + '\n' + 'outro',
+assert.equal(plain(hrStd), 'intro' + '\n' + '\n' + '\u2500'.repeat(16) + '\n\n' + 'outro',
   'divider replaces the ASCII dashes and keeps the exact one-row height budget: ' +
     JSON.stringify(plain(hrStd)))
 assert.ok(hrStd.includes('38;2'), 'divider is subtle-styled')
@@ -109,13 +107,13 @@ assert.ok(!plain(hrStd).endsWith('\n'), 'divider adds no trailing blank row')
 
 // Bad baseline: `---` had no trailing newline and nothing inserted the row
 // break, so a rule directly before a heading rendered `---H`. The join
-// guard (appendBlockText) now keeps them on separate rows.
+// policy now gives each block its own row and one blank separator.
 const hrThenHeading = applyMarkdown('---' + '\n' + '# H' + '\n')
-assert.equal(plain(hrThenHeading), '\u2500\u2500\u2500' + '\n' + 'H',
+assert.equal(plain(hrThenHeading), '\u2500'.repeat(16) + '\n\n' + 'H',
   'divider never merges into the next block: ' + JSON.stringify(plain(hrThenHeading)))
 
 const doubleHr = applyMarkdown('---' + '\n' + '***' + '\n')
-assert.equal(plain(doubleHr), '\u2500\u2500\u2500' + '\n' + '\u2500\u2500\u2500',
+assert.equal(plain(doubleHr), '\u2500'.repeat(16) + '\n\n' + '\u2500'.repeat(16),
   'two adjacent rules stay on separate rows')
 
 // -- 3. Lists: hanging indent, steady ladder, loose-item markers --------
@@ -294,7 +292,8 @@ const expectedRows = [
   '\u258e quoted one',
   '\u258e \u258e quoted two',
   '',
-  '\u2500\u2500\u2500',
+  '\u2500'.repeat(16),
+  '',
   '[img] chart',
 ]
 for (const width of [56, 34]) {

@@ -112,8 +112,10 @@ const channelStub = {
   listWorkspaceRegistry: async () => [],
 }
 
-async function mount({ columns = 124, chat = false, fullscreen = true } = {}) {
-  applyPageMargin('normal')
+async function mount({ columns = 124, chat = false, fullscreen = true, normalMargin = false } = {}) {
+  // Keep the exhaustive upstream gesture coordinates independent of preset changes.
+  applyPageMargin(normalMargin ? 'normal' : '2x1')
+  const inset = normalMargin ? 3 : INSET
   applySidePanelRatio(0.68)
   applySidePanelPanels('todo')
   applySidePanelOpen(true)
@@ -144,11 +146,11 @@ async function mount({ columns = 124, chat = false, fullscreen = true } = {}) {
   const frameAt = (chatWidth: number): boolean => {
     for (let row = 0; row < ROWS - 2; row += 1) {
       const glyph = row === 1 || row === ROWS - 4 ? '├' : '│'
-      if (cell(INSET + chatWidth, 1 + row)?.getChars() !== glyph) return false
+      if (cell(inset + chatWidth, 1 + row)?.getChars() !== glyph) return false
     }
     // The fixture body is blank: an old divider left behind by the diff
     // would produce a second glyph on this row.
-    return chat || viewportLines(term)[POINTER_ROW]?.trimEnd() === ' '.repeat(INSET + chatWidth) + '│'
+    return chat || viewportLines(term)[POINTER_ROW]?.trimEnd() === ' '.repeat(inset + chatWidth) + '│'
   }
   const mouse = (button: number, col: number, row = POINTER_ROW, suffix = 'M') =>
     stdin.write('\x1b[<' + button + ';' + (col + 1) + ';' + (row + 1) + suffix)
@@ -282,9 +284,18 @@ try {
   await s.close()
 }
 
+const normal = await mount({ normalMargin: true })
+try {
+  check('normal margin: 118 content columns split 80/37 at screen column 83', await settled(() => normal.frameAt(80) && normal.controller().chatColumns === 80 && normal.controller().panelColumns === 37))
+  normal.press(83); normal.motion(75); normal.release(75)
+  check('normal margin: dragging eight cells preserves the three-column inset', await settled(() => normal.frameAt(72) && normal.controller().chatColumns === 72 && normal.controller().panelColumns === 45))
+} finally {
+  await normal.close()
+}
+
 const chat = await mount({ chat: true })
 try {
-  check('real Chat renders the draggable seam', await settled(() => chat.frameAt(81)))
+  check('real Chat renders the draggable seam', await settled(() => chat.frameAt(81)), JSON.stringify(chat.lines()))
   chat.stdin.write('keep-this-draft')
   check('real Chat accepts an unsent draft', await settled(() => chat.lines().some(line => line.includes('keep-this-draft'))))
   chat.press(83); chat.motion(78); chat.release(78)

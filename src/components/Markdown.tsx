@@ -1,9 +1,8 @@
 import React from 'react'
 import { marked, type Token, type Tokens } from 'marked'
 import { Box, Text, useTheme } from '../ui.js'
-import type { TextDecoration } from '../ink/styles.js'
-import { getTheme } from '../theme.js'
-import { appendBlockText, configureMarked, formatToken, stripPromptXMLTags } from '../terminal-utils/markdown.js'
+import { getTheme, type Theme } from '../theme.js'
+import { configureMarked, formatMarkdownBlockWithLayout, markdownBlocks, joinFormattedMarkdown, trimFormattedMarkdown, stripPromptXMLTags, type FormattedMarkdown } from '../terminal-utils/markdown.js'
 import { getCliHighlightPromise, type CliHighlight } from '../terminal-utils/cliHighlight.js'
 import { isMermaidLang } from '../terminal-utils/mermaid.js'
 import { isMathBlockToken, isMathToken } from '../terminal-utils/math.js'
@@ -40,14 +39,6 @@ type Props = {
    */
   inlineMathImages?: boolean
 }
-
-/**
- * Hang decoration for the ANSI text runs: a terminal-wrapped continuation
- * lines up under its line's quote rails, list marker or indentation
- * instead of falling back to column 0. One shared object, because the
- * style diff and the measure/paint caches compare it by reference.
- */
-const HANG_DECORATION: TextDecoration = { hang: true }
 
 // ---- token 缓存 ----
 //
@@ -157,89 +148,90 @@ function renderTokensToNodes(
   highlight: CliHighlight | null,
   dimColor: boolean,
   inlineMathImages: boolean,
+  palette: Theme,
 ): React.ReactNode[] {
   const nodes: React.ReactNode[] = []
-  let ansiText = ''
-  let textParts: string[] = []
-  let afterOwnNode = false
+  let ansiText: FormattedMarkdown = { text: '', continuationIndent: [0] }
+  let textParts: FormattedMarkdown[] = []
+  let textGap = 0
 
   const flushAnsiText = (): void => {
-    if (!ansiText && textParts.length === 0) return
+    if (!ansiText.text && textParts.length === 0) return
     if (textParts.length === 0) {
-      nodes.push(<Text key={nodes.length} dimColor={dimColor} decoration={HANG_DECORATION}>{ansiText.trim()}</Text>)
+      const part = trimFormattedMarkdown(ansiText, true, true)
+      nodes.push(<Box key={nodes.length} marginTop={textGap}><Text dimColor={dimColor} continuationIndent={part.continuationIndent.some(indent => indent > 0) ? part.continuationIndent : undefined}>{part.text}</Text></Box>)
     } else {
       textParts.push(ansiText)
       let first = 0
       let last = textParts.length - 1
-      while (first < last && textParts[first]!.trimStart() === '') first++
-      while (last > first && textParts[last]!.trimEnd() === '') last--
-      textParts[first] = textParts[first]!.trimStart()
-      textParts[last] = textParts[last]!.trimEnd()
+      while (first < last && textParts[first]!.text.trimStart() === '') first++
+      while (last > first && textParts[last]!.text.trimEnd() === '') last--
+      textParts[first] = trimFormattedMarkdown(textParts[first]!, true, false)
+      textParts[last] = trimFormattedMarkdown(textParts[last]!, false, true)
       // Each internal boundary replaces exactly one source newline with a
       // column-child boundary. Only the whole text span trims outer space.
       nodes.push(
-        <Box key={nodes.length} flexDirection="column">
-          {textParts.slice(first, last + 1).map((part, index) => (
-            <Text key={index} dimColor={dimColor} decoration={HANG_DECORATION}>{index + first < last ? part.slice(0, -1) : part}</Text>
-          ))}
+        <Box key={nodes.length} flexDirection="column" marginTop={textGap}>
+          {textParts.slice(first, last + 1).map((part, index) => {
+            const internal = index + first < last
+            const text = internal ? part.text.slice(0, -1) : part.text
+            const indents = internal ? part.continuationIndent.slice(0, -1) : part.continuationIndent
+            return <Text key={index} dimColor={dimColor} continuationIndent={indents.some(indent => indent > 0) ? indents : undefined}>{text}</Text>
+          })}
         </Box>,
       )
     }
-    ansiText = ''
+    ansiText = { text: '', continuationIndent: [0] }
     textParts = []
   }
 
-  for (const token of tokens) {
-    const ownNodeBefore = afterOwnNode
-    afterOwnNode = false
+  for (const { token, gap } of markdownBlocks(tokens)) {
     if (token.type === 'table') {
       flushAnsiText()
       nodes.push(
-        <MarkdownTable
-          key={nodes.length}
-          token={token as Tokens.Table}
-          highlight={highlight}
-        />,
+        <Box key={nodes.length} marginTop={gap}>
+          <MarkdownTable token={token as Tokens.Table} highlight={highlight} />
+        </Box>,
       )
     } else if (inlineMathImages && token.type === 'paragraph' && hasInlineMath(token)) {
       flushAnsiText()
-      nodes.push(<InlineMathParagraph key={nodes.length} token={token as Tokens.Paragraph} highlight={highlight} />)
-      afterOwnNode = true
-    } else if (ownNodeBefore && token.type === 'space') {
-      // The blank line after a paragraph that became its own node is the
-      // column gap now; as text it would flush as an empty node (an extra
-      // gap row). In a text run the same newline is trimmed at the flush.
+      nodes.push(<Box key={nodes.length} marginTop={gap}><InlineMathParagraph token={token as Tokens.Paragraph} highlight={highlight} /></Box>)
     } else if (isMathBlockToken(token)) {
       flushAnsiText()
-      nodes.push(<MathBlock key={nodes.length} token={token} dimColor={dimColor} />)
+      nodes.push(<Box key={nodes.length} marginTop={gap}><MathBlock token={token} dimColor={dimColor} /></Box>)
     } else if (isMermaidToken(token)) {
       flushAnsiText()
       nodes.push(
-        <MermaidDiagram
-          key={nodes.length}
-          token={token}
-          highlight={highlight}
-          dimColor={dimColor}
-        />,
+        <Box key={nodes.length} marginTop={gap}>
+          <MermaidDiagram token={token} highlight={highlight} dimColor={dimColor} />
+        </Box>,
       )
     } else if (token.type === 'code') {
       // Top-level fences get the CodeBlockFrame (header/rail/padding);
       // the mermaid branch above keeps diagram fences routed to
       // MermaidDiagram (whose fallback re-enters the frame), and code
-      // nested in lists/quotes keeps formatToken's ANSI path.
+      // nested in lists/quotes keeps formatToken's ANSI path. The frame
+      // carries the block gap as marginTop like every other standalone
+      // node — the outer Box has no gap; spacing is per-node.
       flushAnsiText()
       nodes.push(
-        <CodeBlockFrame key={nodes.length} token={token as Tokens.Code} highlight={highlight} dimColor={dimColor} />,
+        <Box key={nodes.length} marginTop={gap} flexDirection="column">
+          <CodeBlockFrame token={token as Tokens.Code} highlight={highlight} dimColor={dimColor} />
+        </Box>,
       )
     } else {
-      // appendBlockText inserts the row break after the (newline-free) hr
-      // divider when the next block does not open its own line.
-      ansiText = appendBlockText(ansiText, formatToken(token, 0, null, null, highlight))
+      if (ansiText.text === '' && textParts.length === 0) textGap = gap
+      const separator: FormattedMarkdown = { text: '\n'.repeat(gap), continuationIndent: Array(gap + 1).fill(0) }
+      ansiText = joinFormattedMarkdown([
+        ansiText,
+        ...(ansiText.text !== '' || textParts.length > 0 ? [separator] : []),
+        formatMarkdownBlockWithLayout(token, highlight, palette),
+      ])
       // A top-level token boundary keeps inline formatting and code fences
       // intact while letting the painter cull finished offscreen text blocks.
-      if (ansiText.length >= TEXT_BLOCK_BUDGET && ansiText.endsWith('\n')) {
+      if (ansiText.text.length >= TEXT_BLOCK_BUDGET && ansiText.text.endsWith('\n')) {
         textParts.push(ansiText)
-        ansiText = ''
+        ansiText = { text: '', continuationIndent: [0] }
       }
     }
   }
@@ -291,11 +283,12 @@ function MarkdownImpl({ children, dimColor = false, cacheTokens = true, inlineMa
       dimColor,
       // Dimmed text (thinking) cannot dim an image, so it keeps Unicode.
       inlineMathImages && mathRendering === 'image' && !dimColor,
+      palette,
     )
   }, [children, dimColor, highlight, cacheTokens, mathRendering, inlineMathImages, palette])
 
   return (
-    <Box flexDirection="column" gap={1}>
+    <Box flexDirection="column">
       {renderedNodes}
     </Box>
   )

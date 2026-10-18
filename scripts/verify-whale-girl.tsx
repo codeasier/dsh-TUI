@@ -164,7 +164,9 @@ async function renderHeader(props: Record<string, unknown>, expect?: (plain: str
   const stdout = new FakeStdout(typeof props.columns === 'number' ? props.columns as number : 120)
   const { columns, ...logoProps } = props
   const instance = await render(
-    React.createElement(ThemeProvider, { theme: 'dark' }, React.createElement(LogoHeader, logoProps)),
+    // This fixture tests art selection, not the daily font ladder. Shadow's
+    // 88-cell wordmark legitimately hides art at 120 columns.
+    React.createElement(ThemeProvider, { theme: 'dark' }, React.createElement(LogoHeader, { fontId: 'bold', ...logoProps })),
     { stdout, stderr: new FakeStderr(), stdin: new FakeStdin(), exitOnCtrlC: false, patchConsole: false },
   )
   const ready = expect ?? ((plain: string) => plain.includes('dsh-TUI') && plain.includes('whale-model-probe'))

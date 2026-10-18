@@ -1,5 +1,5 @@
 import indentString from 'indent-string'
-import { applyTextStyles } from './colorize.js'
+import { applyTextStyles, backgroundOpenCode } from './colorize.js'
 import type { DOMElement } from './dom.js'
 import { GEOMETRY_TRACE_ENABLED, noteScrollGeometry } from './geometry-trace.js'
 import getMaxWidth from './get-max-width.js'
@@ -36,6 +36,13 @@ import { lineWidth } from './line-width-cache.js'
 import { stringWidth } from './stringWidth.js'
 import { widestLine } from './widest-line.js'
 import wrapText from './wrap-text.js'
+import { addSyntheticIndents, hangingWrap } from './hanging-wrap.js'
+
+const hangingPaintMetadata = new WeakMap<DOMElement, {
+  prepared: object
+  continuationIndent: readonly number[]
+  syntheticIndents: readonly number[]
+}>()
 
 // Matches detectXtermJsWheel() in ScrollKeybindingHandler.tsx — the curve
 // and drain must agree on terminal detection. TERM_PROGRAM check is the sync
@@ -751,12 +758,37 @@ function pushNoSelectRuns(
   y: number,
   runs: readonly TextNoSelectRun[] | undefined,
 ): void {
-  if (runs === undefined) return
+  if (runs === undefined || runs.length === 0) return
   const bx = Math.floor(x)
   const by = Math.floor(y)
-  for (const run of runs) {
+  // Runs are sorted and disjoint. A wrapped code block can alternate
+  // masks on every row: cached viewport paint must not scan its history.
+  const last = runs[runs.length - 1]!
+  const band = output.getVisibleRect(0, by, output.width, last.offset + last.height)
+  if (band === undefined) return
+  const from = band.y - by
+  const to = from + band.height
+  let lo = 0
+  let hi = runs.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    const run = runs[mid]!
+    if (run.offset + run.height <= from) lo = mid + 1
+    else hi = mid
+  }
+  for (let index = lo; index < runs.length; index++) {
+    const run = runs[index]!
+    if (run.offset >= to) break
     if (run.width <= 0 || run.height <= 0) continue
     output.noSelect({ x: bx, y: by + run.offset, width: run.width, height: run.height })
+    // The decoration is its own source plane when a gesture starts on it:
+    // repeated rails keep physical row breaks, independently of body wraps.
+    const visible = output.getVisibleRect(bx, by + run.offset, run.hardBreakWidth ?? run.width, run.height)
+    if (visible !== undefined) {
+      for (let row = visible.y; row < visible.y + visible.height; row++) {
+        output.softWrapRow(row, 0, visible.x, visible.width)
+      }
+    }
   }
 }
 
@@ -893,12 +925,21 @@ function paintDecoratedTextNode(
   }
 
   if (prefixWidth > 0 && prefix !== undefined) {
+    let run: TextNoSelectRun | undefined
     for (let r = headerOffset; r < rows.length; r++) {
       rows[r] = prefix.text + rows[r]!
-    }
-    const ns = prefix.noSelect ?? 0
-    if (ns > 0) {
-      noSelectRuns.push({ offset: headerOffset, height: rows.length - headerOffset, width: ns })
+      const ns = flags[r]
+        ? prefix.noSelectContinuation ?? prefix.noSelect ?? 0
+        : prefix.noSelect ?? 0
+      const hardBreakWidth = Math.max(0, Math.min(ns, prefix.noSelect ?? 0))
+      if (ns <= 0) {
+        run = undefined
+      } else if (run?.width === ns && run.hardBreakWidth === hardBreakWidth) {
+        run.height++
+      } else {
+        run = { offset: r, height: 1, width: ns, hardBreakWidth }
+        noSelectRuns.push(run)
+      }
     }
   } else if (decoration.hang === true) {
     // Continuation rows get their source line's leading structure: rails
@@ -1205,7 +1246,7 @@ function renderNodeToOutput(
       // style re-application — output.write() parses ANSI directly into cells.
       const text = node.attributes['rawText'] as string
       if (text) {
-        output.write(x, y, text)
+        output.write(x, y, text, undefined, undefined, width)
       }
     } else if (node.nodeName === 'ink-text') {
       // A partially visible long block moves on every scroll/stream frame.
@@ -1218,15 +1259,19 @@ function renderNodeToOutput(
       const paddingTop = paddingNode?.getComputedTop() ?? 0
       const decoration = node.style.decoration
       const prepared = textPaintCache.get(node)
+      const continuationIndent = node.attributes['continuationIndent'] as readonly number[] | undefined
+      const hangingPrepared = hangingPaintMetadata.get(node)
       if (
         prepared !== undefined &&
         prepared.maxWidth === maxWidth &&
         prepared.background === inheritedBackgroundColor &&
         prepared.paddingLeft === paddingLeft &&
         prepared.paddingTop === paddingTop &&
-        prepared.decoration === decoration
+        prepared.decoration === decoration &&
+        (continuationIndent === undefined ||
+          (hangingPrepared?.prepared === prepared && hangingPrepared.continuationIndent === continuationIndent))
       ) {
-        output.write(x, y, prepared.text, prepared.softWrap, prepared.lines)
+        output.write(x, y, prepared.text, prepared.softWrap, prepared.lines, width)
         pushNoSelectRuns(output, x, y, prepared.noSelectRuns)
       } else if (decoration !== undefined) {
         paintDecoratedTextNode(
@@ -1261,10 +1306,12 @@ function renderNodeToOutput(
 
           let text: string
           let softWrap: SoftWrapFlag[] | undefined
+          const hanging = continuationIndent === undefined ? undefined
+            : hangingWrap(plainText, maxWidth, textWrap, continuationIndent)
           if (needsWrapping && segments.length === 1) {
             // Single segment: wrap plain text first, then apply styles to each line
             const segment = segments[0]!
-            const w = wrapWithSoftWrap(plainText, maxWidth, textWrap)
+            const w = hanging ?? wrapWithSoftWrap(plainText, maxWidth, textWrap)
             softWrap = w.softWrap
             text = w.wrapped
               .split('\n')
@@ -1284,7 +1331,7 @@ function renderNodeToOutput(
             // Multiple segments with wrapping: wrap plain text first, then re-apply
             // each segment's styles based on character positions. This preserves
             // per-segment styles even when text wraps across lines.
-            const w = wrapWithSoftWrap(plainText, maxWidth, textWrap)
+            const w = hanging ?? wrapWithSoftWrap(plainText, maxWidth, textWrap)
             softWrap = w.softWrap
             const charToSegment = buildCharToSegmentMap(segments)
             text = applyStylesToWrappedText(
@@ -1310,6 +1357,10 @@ function renderNodeToOutput(
               .join('')
           }
 
+          // Restore source-indexed styles before introducing non-source cells.
+          // Each output line starts with default styles. Synthetic spaces must
+          // keep the parent surface instead of punching terminal-default holes.
+          if (hanging) text = addSyntheticIndents(text, hanging.syntheticIndents, backgroundOpenCode(inheritedBackgroundColor))
           text = applyPaddingToText(node, text, softWrap)
 
           const lines = text.split('\n')
@@ -1318,7 +1369,30 @@ function renderNodeToOutput(
             text, lines, softWrap,
             decoration: undefined, noSelectRuns: undefined,
           })
-          output.write(x, y, text, softWrap, lines)
+          if (hanging && continuationIndent) {
+            hangingPaintMetadata.set(node, {
+              prepared: textPaintCache.get(node)!, continuationIndent,
+              syntheticIndents: hanging.syntheticIndents,
+            })
+          } else {
+            hangingPaintMetadata.delete(node)
+          }
+          output.write(x, y, text, softWrap, lines, width)
+        }
+      }
+      const indents = hangingPaintMetadata.get(node)
+      if (continuationIndent && indents && indents.prepared === textPaintCache.get(node)) {
+        const textY = y + paddingTop
+        const visible = output.getVisibleRect(x, textY, width, indents.syntheticIndents.length)
+        // Index directly into the visible window, including ScrollBox's
+        // blit+shift edge clip. Filtering a full scan still costs O(history).
+        const from = visible === undefined ? 0 : Math.max(0, visible.y - textY)
+        const to = visible === undefined ? 0 : Math.min(indents.syntheticIndents.length, visible.y + visible.height - textY)
+        for (let row = from; row < to; row++) {
+          const indent = indents.syntheticIndents[row]!
+          if (indent > 0) output.noSelect({
+            x: x + paddingLeft, y: textY + row, width: indent, height: 1,
+          })
         }
       }
     } else if (
@@ -1903,11 +1977,12 @@ function renderNodeToOutput(
               y1: edgeTop,
               y2: edgeBottom + 1,
             })
-            // Snapshot dirty children before the first pass — the first
-            // pass clears dirty flags, and edge-spanning children would be
-            // missed by the second pass without this snapshot.
+            // Snapshot dirty children and their previous heights before the
+            // edge pass overwrites their dirty flags and layout cache.
             const dirtyChildren = content.dirty
-              ? new Set(content.childNodes.filter(c => (c as DOMElement).dirty))
+              ? new Map(content.childNodes
+                  .filter(c => (c as DOMElement).dirty)
+                  .map(c => [c, nodeCache.get(c as DOMElement)?.height ?? 0]))
               : null
             renderScrolledChildren(
               content,
@@ -1954,7 +2029,7 @@ function renderNodeToOutput(
               // shift the topSpacer shrink + new-item heights self-balance
               // to zero before reaching the clean block. Middle-growth
               // leaves shift non-zero → clean children after the growth
-              // point fall through to yoga + the fine-grained check below,
+              // point fall through to yoga and repaint their visible rows,
               // preserving the ghost-box fix.
               let cumHeightShift = 0
               for (const childNode of content.childNodes) {
@@ -1972,8 +2047,11 @@ function renderNodeToOutput(
                 const childH = cy.getComputedHeight()
                 const childBottom = childTop + childH
                 if (isDirty) {
-                  const prev = nodeCache.get(childElem)
-                  cumHeightShift += childH - (prev ? prev.height : 0)
+                  // The edge pass may already have replaced this child's
+                  // cache with its new height. Compare against the snapshot,
+                  // or middle growth incorrectly looks like zero and clean
+                  // siblings keep pixels shifted from their old positions.
+                  cumHeightShift += childH - dirtyChildren.get(childNode)!
                 }
                 // Skip culled children (outside viewport)
                 if (
@@ -1985,21 +2063,10 @@ function renderNodeToOutput(
                 if (childTop >= edgeTopLocal && childBottom <= edgeBottomLocal)
                   continue
                 const screenY = Math.floor(contentY + childTop)
-                // Clean children reaching here have cumHeightShift ≠ 0 OR
-                // no cache. Re-check precisely: cached.y − delta is where
-                // the shift left old pixels; if it equals new screenY the
-                // blit is correct (shift re-balanced at this child, or
-                // yogaTop happens to net out). No cache → blit never
-                // painted it → render.
-                if (!isDirty) {
-                  const childCached = nodeCache.get(childElem)
-                  if (
-                    childCached &&
-                    Math.floor(childCached.y) - delta === screenY
-                  ) {
-                    continue
-                  }
-                }
+                // Clean children reaching here follow a middle-height change
+                // (or have no cache). Repaint them: stable rows from earlier
+                // pure scrolls deliberately keep their old cached screen y,
+                // so cached.y - delta is not a valid previous-frame position.
                 // Wipe this child's region with spaces to overwrite stale
                 // blitted content — output.clear() only expands damage and
                 // cannot zero cells that the blit already wrote.
@@ -2213,7 +2280,7 @@ function renderNodeToOutput(
       if (node.style.softWrapContinuation !== undefined) {
         const continuation = node.style.softWrapContinuation
         const contentEnd = Math.floor(x) + Math.abs(continuation)
-        output.softWrapRow(Math.floor(y), continuation < 0 ? -contentEnd : contentEnd)
+        output.softWrapRow(Math.floor(y), continuation < 0 ? -contentEnd : contentEnd, Math.floor(x), Math.floor(width))
       }
     } else if (node.nodeName === 'ink-root') {
       renderChildren(

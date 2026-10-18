@@ -70,11 +70,12 @@ function check(name: string, ok: boolean, extra = '') {
   if (!ok) failed += 1
 }
 
-// Fixture: eleven plain prompts, three lines each (4 rows with the block
-// margin, 3 for the first). The whole list lands just past the viewport so the
-// mount window covers all of it — see the header note.
+// Fixture: seven plain prompts, three source lines each plus the fork
+// prompt surface padding (6 rows with the block margin, 5 for the first).
+// Keep the whole list just past the viewport so the mount window covers all
+// of it. Eleven prompts fit this isolation before padded prompt surfaces.
 const rows: ChatRow[] = []
-for (let i = 0; i < 11; i++) {
+for (let i = 0; i < 7; i++) {
   rows.push({
     id: i + 1,
     kind: 'user',

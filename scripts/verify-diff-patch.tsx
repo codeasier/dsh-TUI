@@ -108,7 +108,7 @@ class FakeStdin extends PassThrough {
   unref() { return this }
 }
 async function mountCard(cols: number) {
-  const rows = 40
+  const rows = 60
   const term = new XTerm({ cols, rows, scrollback: 0, allowProposedApi: true })
   class FakeStdout extends Writable {
     columns = cols
@@ -141,6 +141,8 @@ async function mountCard(cols: number) {
   return { app, lines, text, fgOf, show }
 }
 const row = (all: string[], needle: string): string => all.find(line => line.includes(needle)) ?? ''
+// The custom card owns a left border; content assertions ignore only that chrome.
+const bodyText = (line: string): string => line.replace(/^\s*│/u, '').trim()
 
 // ── 2. the unified card body ────────────────────────────────────────────
 for (const cols of [80, 40]) {
@@ -148,30 +150,34 @@ for (const cols of [80, 40]) {
   const at = `@${cols}`
   await card.show([patch('a.ts', CODEX)], 'unified', () => card.text().includes('TWO'))
   let all = card.lines()
-  check(`2${at} the stat line opens the body`, row(all, '(+1 -1)').includes('⎿') && !row(all, '(+1 -1)').includes('a.ts'), card.text())
+  check(`2${at} the stat line opens the body`, bodyText(row(all, '(+1 -1)')) === '(+1 -1)', card.text())
   check(`2${at} numbered rows share one gutter`, row(all, 'one').trim().endsWith('1   one') && row(all, 'two').trim().endsWith('2 - two') && row(all, 'TWO').trim().endsWith('2 + TWO') && row(all, 'three').trim().endsWith('3   three'), card.text())
   check(`2${at} removed / added rows keep their diff colours`, card.fgOf('2 - two') !== card.fgOf('2 + TWO') && card.fgOf('2 - two') !== 'default' && card.fgOf('2 + TWO') !== 'default', `${card.fgOf('2 - two')} / ${card.fgOf('2 + TWO')}`)
 
   await card.show([patch('m.ts', '@@ -1,2 +1,2 @@\n-a\n+A\n b\n@@ -98,3 +98,4 @@\n c\n+new\n d\n e\n')], 'unified', () => card.text().includes('101'), true)
   all = card.lines()
-  check(`2${at} hunks are separated by ⋯ and keep their numbers`, all.some(line => line.trim() === '⋯') && /\s99 \+ new$/u.test(row(all, 'new').trimEnd()) && row(all, '  1 - a').length > 0, card.text())
+  check(`2${at} hunks are separated by ⋯ and keep their numbers`, all.some(line => bodyText(line) === '⋯') && /\s99 \+ new$/u.test(row(all, 'new').trimEnd()) && row(all, '  1 - a').length > 0, card.text())
 
   await card.show([patch('src/a.ts', CODEX, { movePath: 'src/b.ts' }), patch('src/new.ts', '@@ -0,0 +1,2 @@\n+x\n+y\n', { change: 'add' })], 'unified', () => card.text().includes('new.ts'))
   all = card.lines()
   check(`2${at} several files: path rows with their stat`, row(all, 'src/a.ts → src/b.ts').includes('(+1 -1)') && row(all, 'src/new.ts').includes(`${t('diff-patch-added')} (+2 -0)`), card.text())
 
   const cjk = '中文内容测试'.repeat(5)
-  await card.show([patch('c.md', `@@ -1,1 +1,1 @@\n-${cjk}\n+${cjk}改\n`)], 'unified', () => card.text().includes('改'))
+  await card.show([patch('c.md', `@@ -1,1 +1,1 @@\n-${cjk}\n+${cjk}改\n`)], 'unified', () => card.text().includes('改'), true)
   all = card.lines()
-  check(`2${at} CJK lines render whole (wrapped by cells, no half glyph)`, all.every(line => stringWidth(line.trimEnd()) <= cols) && card.text().replace(/\s+/gu, '').includes(`${cjk}改`.slice(-8)), card.text())
+  check(`2${at} expanded CJK lines render whole (wrapped by cells, no half glyph)`, all.every(line => stringWidth(line.trimEnd()) <= cols) && card.text().replace(/\s+/gu, '').includes(`${cjk}改`.slice(-8)), card.text())
 
   const long = `${'x'.repeat(3000)}TAIL`
   await card.show([patch('l.ts', `@@ -1,1 +1,1 @@\n-short\n+${long}\n`)], 'unified', () => card.text().includes('short'))
   all = card.lines()
   check(`2${at} a very long line is clipped (bounded rows)`, !card.text().includes('TAIL') && all.filter(line => line.includes('xxxxx')).length < 3000 / cols, `${all.filter(line => line.includes('xxx')).length} rows`)
 
-  await card.show([patch('big.ts', `@@ -1,20 +1,20 @@\n${Array.from({ length: 20 }, (_, index) => `-old ${index + 1}\n+new ${index + 1}`).join('\n')}\n`)], 'unified', () => card.text().includes('new'))
+  const largePatch = [patch('big.ts', `@@ -1,20 +1,20 @@\n${Array.from({ length: 20 }, (_, index) => `-old ${index + 1}\n+new ${index + 1}`).join('\n')}\n`)]
+  await card.show(largePatch, 'unified', () => card.text().includes('new'))
   check(`2${at} the collapsed body keeps the 8-row cap with its fold hint`, card.lines().filter(line => /\d+ [-+] (old|new) \d+/u.test(line)).length === 7 && card.text().includes('lines'), card.text())
+  await card.show(largePatch, 'unified', () => card.text().includes('20 + new 20'), true)
+  check(`2${at} expansion restores every old/new patch row`, Array.from({ length: 20 }, (_, index) => index + 1)
+    .every(n => card.lines().some(line => bodyText(line) === `${n} - old ${n}`) && card.lines().some(line => bodyText(line) === `${n} + new ${n}`)), card.text())
   await card.app.unmount()
 }
 
@@ -184,7 +190,7 @@ for (const [cols, layout] of [[80, 'split'], [120, 'auto']] as const) {
   const pair = row(all, 'two')
   check(`3${at} a change row numbers each pane with its own side`, /1 {3}one.*│ +1 {3}one/u.test(row(all, 'one')) && /2 − two.*│ +2 \+ TWO/u.test(pair), `${row(all, 'one')}\n${pair}`)
   check(`3${at} an add-only row leaves the old pane unnumbered`, /│ +41 \+ added/u.test(row(all, 'added')) && !/\d+ − /u.test(row(all, 'added')), row(all, 'added'))
-  check(`3${at} the header separator carries the stat; hunks split by ⋯`, row(all, '(+2 -1)').trimEnd().endsWith(' (+2 -1)') && !row(all, '(+2 -1)').includes('a.ts') && all.some(line => line.trim() === '⋯'), card.text())
+  check(`3${at} the header separator carries the stat; hunks split by ⋯`, row(all, '(+2 -1)').trimEnd().endsWith(' (+2 -1)') && !row(all, '(+2 -1)').includes('a.ts') && all.some(line => bodyText(line) === '⋯'), card.text())
   check(`3${at} every row fits the width`, all.every(line => stringWidth(line.trimEnd()) <= cols))
 
   await card.show([patch('src/a.ts', CODEX, { movePath: 'src/b.ts' }), patch('src/n.ts', '@@ -0,0 +1,1 @@\n+fresh\n', { change: 'add' })], layout, () => card.text().includes('fresh'))

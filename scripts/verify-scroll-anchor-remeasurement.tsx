@@ -146,17 +146,17 @@ async function mixedRemeasurement(): Promise<string> {
     scroll.scrollTo(0)
     assert.ok(await settled(() => app.frames.length > warmMark && parsed() &&
       !scroll.isSticky() && scroll.getPendingDelta() === 0 && app.timeline()?.activeId === 1 &&
-      screen()[0]?.includes('V-01') === true && height(1) === 7 && height(2) === 4 && height(3) === 20 &&
-      top(1) === 0 && top(2) === 7 && top(3) === 11),
-    `warm V/J/K at real heights 7/4/20, got ${height(1)}/${height(2)}/${height(3)}`)
+      screen()[1]?.includes('V-01') === true && height(1) === 9 && height(2) === 4 && height(3) === 22 &&
+      top(1) === 0 && top(2) === 9 && top(3) === 13),
+    `warm V/J/K at padded prompt heights 9/4/22, got ${height(1)}/${height(2)}/${height(3)}`)
     const vHeight = height(1), jHeight = height(2), kHeight = height(3), kTop = top(3)
     const warmedVMounts = app.mounts.get(1) ?? 0, parkMark = app.frames.length
-    scroll.scrollTo(16)
-    assert.ok(await settled(() => app.frames.length > parkMark && parsed() && scroll.getScrollTop() === 16 &&
+    scroll.scrollTo(18)
+    assert.ok(await settled(() => app.frames.length > parkMark && parsed() && scroll.getScrollTop() === 18 &&
       !scroll.isSticky() && scroll.getPendingDelta() === 0 && !mounted.has(1) &&
-      height(2) === jHeight && height(3) === kHeight && top(2) === 7 && top(3) === kTop &&
-      app.timeline()?.activeId === 3 && screen()[0]?.includes('K-05') === true),
-    'committed park excludes V, retains measured J/K, and paints K-05 at the viewport top')
+      height(2) === jHeight && height(3) === kHeight && top(2) === 9 && top(3) === kTop &&
+      app.timeline()?.activeId === 3 && screen()[0]?.includes('K-04') === true),
+    'committed park excludes V, retains measured J/K, and paints K-04 at the viewport top')
     const beforeTop = scroll.getScrollTop()
     assert.ok(scroll.getScrollHeight() - scroll.getViewportHeight() > beforeTop + 10,
       'long tail keeps the reader far from bottom clamping')
@@ -171,7 +171,7 @@ async function mixedRemeasurement(): Promise<string> {
     'real Ctrl+O folds J and remounts/re-measures unchanged V while K stays unchanged')
     const realShrink = jHeight - height(2), expectedTop = beforeTop - realShrink
     assert.equal(realShrink, 2, 'only the assistant metadata removed two actual rows')
-    assert.equal(expectedTop, 14, 'fixture position minus its real shrink is 14')
+    assert.equal(expectedTop, 16, 'fixture position minus its real shrink is 16')
     assert.ok(await settled(() => parsed() && !scroll.isSticky() && scroll.getPendingDelta() === 0 &&
       height(1) === vHeight && height(2) === 2 && height(3) === kHeight &&
       top(3) === kTop - realShrink && scroll.getScrollTop() === expectedTop &&
@@ -187,7 +187,8 @@ async function mixedRemeasurement(): Promise<string> {
 const growthRows: ChatRow[] = [
   { id: 1, kind: 'assistant', text: userText('PREFIX', 8), time: 0 },
   { id: 2, kind: 'user', text: userText('K', 19) },
-  ...Array.from({ length: 3 }, (_, i): ChatRow => ({ id: i + 3, kind: 'user', text: `TAIL-${i}` })),
+  // Two padded tails keep the near-bottom prefix inside the eight-row overscan.
+  ...Array.from({ length: 2 }, (_, i): ChatRow => ({ id: i + 3, kind: 'user', text: `TAIL-${i}` })),
 ]
 async function nearBottomGrowth(): Promise<string> {
   const app = await createHarness(growthRows, false)
@@ -198,18 +199,18 @@ async function nearBottomGrowth(): Promise<string> {
     assert.ok(await settled(() => app.frames.length > warmMark && parsed() &&
       !scroll.isSticky() && scroll.getPendingDelta() === 0 && app.timeline()?.activeId === 2 &&
       app.timeline()?.downId === 2 && screen()[0]?.includes('PREFIX-01') === true &&
-      height(1) === 8 && height(2) === 20 && [3, 4, 5].every(id => app.measuredHeights.get(id) === 2) &&
-      top(1) === 0 && top(2) === 8 && scroll.getFreshScrollHeight() === 34 && scroll.getViewportHeight() === 24),
-    'growth fixture measured all tails and committed the prefix-first 34-row content')
+      height(1) === 8 && height(2) === 22 && [3, 4].every(id => app.measuredHeights.get(id) === 4) &&
+      top(1) === 0 && top(2) === 8 && scroll.getFreshScrollHeight() === 38 && scroll.getViewportHeight() === 24),
+    'growth fixture measured all tails and committed the prefix-first 38-row content (including prompt padding)')
     const prefixHeight = height(1), kHeight = height(2), kTop = top(2)
     const oldMax = scroll.getFreshScrollHeight() - scroll.getViewportHeight(), parkMark = app.frames.length
     scroll.scrollTo(oldMax - 1)
     assert.ok(await settled(() => app.frames.length > parkMark && parsed() &&
       !scroll.isSticky() && scroll.getPendingDelta() === 0 && app.timeline()?.activeId === 2 &&
-      app.timeline()?.downId === null && screen()[0]?.includes('K-01') === true &&
+      app.timeline()?.downId === null && screen()[0]?.includes('K-04') === true &&
       scroll.getScrollTop() === oldMax - 1 && height(1) === prefixHeight &&
       top(1) + prefixHeight <= scroll.getScrollTop()),
-    'committed reader is one row above bottom, with the mounted prefix wholly above K-01')
+    'committed reader is one row above bottom, with the mounted prefix wholly above K-04')
     const beforeTop = scroll.getScrollTop()
     const anchorRow = screen().findIndex(line => /K-\d{2}/.test(line))
     assert.ok(anchorRow >= 0, 'near-bottom K supplies a visible body-line anchor')
@@ -220,7 +221,7 @@ async function nearBottomGrowth(): Promise<string> {
     'real Ctrl+O adds two metadata rows above the unchanged reader')
     const realGrowth = height(1) - prefixHeight, expectedTop = beforeTop + realGrowth
     assert.equal(realGrowth, 2, 'the prefix really grew by two rows')
-    assert.equal(expectedTop, 11, 'one row above the newly measured bottom is 11')
+    assert.equal(expectedTop, 15, 'one row above the newly measured bottom is 15')
     assert.ok(await settled(() => parsed() && !scroll.isSticky() && scroll.getPendingDelta() === 0 &&
       scroll.getScrollTop() === expectedTop && top(2) === kTop + realGrowth &&
       scroll.getScrollHeight() - scroll.getViewportHeight() - scroll.getScrollTop() === 1 &&
@@ -270,13 +271,13 @@ async function largePrefixGrowth(): Promise<string> {
     scroll.scrollTo(0)
     assert.ok(await settled(() => app.frames.length > warmMark && parsed() &&
       !scroll.isSticky() && scroll.getPendingDelta() === 0 && app.timeline()?.activeId === 1 &&
-      screen()[0]?.includes('PPP') === true && height(1) > 0 && height(2) === 40 && top(1) === 0 &&
+      screen()[1]?.includes('PPP') === true && height(1) > 0 && height(2) === 42 && top(1) === 0 &&
       top(2) === height(1) && !mounted.has(3)), 'folded prefix/K are measured and their head-first paint committed')
     const prefixHeight = height(1), kHeight = height(2), kTop = top(2), parkMark = app.frames.length
-    scroll.scrollTo(kTop + 1)
+    scroll.scrollTo(kTop + 2)
     assert.ok(await settled(() => app.frames.length > parkMark && parsed() &&
       !scroll.isSticky() && scroll.getPendingDelta() === 0 && app.timeline()?.activeId === 2 &&
-      screen()[0]?.includes('K-01') === true && scroll.getScrollTop() === kTop + 1 &&
+      screen()[0]?.includes('K-01') === true && scroll.getScrollTop() === kTop + 2 &&
       height(1) === prefixHeight && height(2) === kHeight &&
       top(1) + prefixHeight <= scroll.getScrollTop() && !mounted.has(3)),
     'committed park paints K-01 at row zero, with the mounted prefix above and streaming tail outside the window')

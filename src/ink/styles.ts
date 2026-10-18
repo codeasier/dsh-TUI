@@ -481,12 +481,15 @@ export type TextDecoration = {
   /**
    * Prefix painted before every row (the code frame's rail and padding).
    * `width` is its display width; the wrap budget shrinks by it. The
-   * first `noSelect` columns are excluded from selection.
+   * first `noSelect` columns are excluded from selection. Soft-wrap rows
+   * may exclude a different width via `noSelectContinuation`, so injected
+   * padding is not copied into the middle of the source line.
    */
   readonly prefix?: {
     readonly text: string
     readonly width: number
     readonly noSelect?: number
+    readonly noSelectContinuation?: number
   }
 
   /**

@@ -15,6 +15,7 @@ import {
   DOWN_ARROW,
   MULTIPLICATION_X,
   POINTER,
+  THINKING_EXPANDED_MARKER,
   THINKING_SETTLED_MARKER,
   THINKING_SPINNER_FRAMES,
   THINKING_SPINNER_INTERVAL_MS,
@@ -49,6 +50,7 @@ const expectedFigureExports = [
   'THINKING_SPINNER_FRAMES',
   'THINKING_SPINNER_INTERVAL_MS',
   'THINKING_SETTLED_MARKER',
+  'THINKING_EXPANDED_MARKER',
 ].sort()
 const figureSource = fs.readFileSync(path.join(repoRoot, 'src/terminal-utils/figures.ts'), 'utf8')
 const actualFigureExports = [...figureSource.matchAll(/^export const ([A-Z0-9_]+)/gm)]
@@ -58,6 +60,11 @@ assert.deepEqual(actualFigureExports, expectedFigureExports, 'figures should con
 assert.equal(THINKING_SPINNER_INTERVAL_MS, 80)
 assert.ok(THINKING_SPINNER_FRAMES.length > 0)
 assert.ok(THINKING_SPINNER_FRAMES.every(frame => stringWidth(frame) === stringWidth(THINKING_SETTLED_MARKER)))
+assert.equal(
+  stringWidth(THINKING_EXPANDED_MARKER),
+  stringWidth(THINKING_SETTLED_MARKER),
+  'the collapsed/expanded thinking marks must share one footprint',
+)
 assert.ok([BLACK_CIRCLE, POINTER, TICK, BULLET, MULTIPLICATION_X, UP_ARROW, DOWN_ARROW].every(Boolean))
 
 assert.deepEqual(getStallState(3000), { isStalled: false, intensity: 0 })

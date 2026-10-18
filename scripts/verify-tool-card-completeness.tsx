@@ -119,13 +119,16 @@ async function paint(tool: Record<string, unknown>, opts: { verbose?: boolean, s
   check('3. 退出码 0 不渲染（零不是信息）', !screen.includes('退出码'))
 }
 
+// Quiet read/search cards intentionally hide their bodies when folded.
+// Use terminal output to exercise shared fold-hint semantics.
 // ── 4. Fold hint aggregates clipped characters of hidden rows ────────────
 {
   const long = 'x'.repeat(1200)
   const result = `short-a\nshort-b\nshort-c\n${long}\n${long}`
   const screen = await paint({
-    name: 'read',
-    callView: { card: 'generic', title: 'Read /tmp/blob.txt' },
+    name: 'bash',
+    callView: { card: 'terminal', title: 'cat /tmp/blob.txt' },
+    resultView: { card: 'terminal', output: result },
     resultFull: result,
   })
   check('4a. 行+字符组合折叠提示', screen.includes('已折叠 2 行 · 400 字符（ctrl+o 展开）'))
@@ -133,7 +136,7 @@ async function paint(tool: Record<string, unknown>, opts: { verbose?: boolean, s
 }
 {
   // Lines-only fold keeps the historical hint byte-identical.
-  const screen = await paint({ name: 'read', resultFull: 'l1\nl2\nl3\nl4\nl5' })
+  const screen = await paint({ callView: { card: 'terminal', title: 'printf lines' }, resultView: { card: 'terminal', output: 'l1\nl2\nl3\nl4\nl5' }, resultFull: 'l1\nl2\nl3\nl4\nl5' })
   check('5. 纯行折叠保持既有提示', screen.includes('… +2 行（ctrl+o 展开）'))
 }
 
