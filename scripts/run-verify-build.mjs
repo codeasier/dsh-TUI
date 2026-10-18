@@ -42,6 +42,8 @@ import { availableParallelism, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const GATES = [
+  'verify:local-install-ownership',
+  'verify:local-install-rollback',
   'verify:boundary',
   'verify:agent-domain',
   'verify:contract',
