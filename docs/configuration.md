@@ -304,6 +304,62 @@ DeepSeek 品牌下，开启标题图形（`whale`）时，`companion.skin` 与�
 > 与梁神模式内置的 `custom-bash` 注册同名工具 `bash`：同一 profile 只挂其一。
 > 同时使用梁神 preset 时把本行 `disabled` 置 `true`（梁神内置那份为前台版）。
 
+### 自建搜索 provider（ag-search）
+
+`presets/ag-search.mjs` 是随包分发的 `ctx.web` 搜索 provider：把 DSH 原生
+`web_search` 接到自建 9Router 类网关的 `POST {baseURL}/search`。挂在 host 层后
+**对任意 Agent preset 生效**（与梁神模式无关、不进 `/preset` 名单）。
+
+为什么需要它：DSH 默认的 `web-search-deepseek` provider 要求上游实现 Anthropic 的
+`web_search_20250305` **服务端**搜索工具；9Router 这类 OpenAI 兼容网关只把该工具定义
+当普通函数下发给模型、不代为执行搜索，所以原生 `web_search` 在那条链路上走不通。
+
+挂载（`cordis.patch.yml`；路径直接指向包内那份，升包即升级插件）：
+
+```yaml
+- insert:
+    - id: ag-search
+      name: './node_modules/@deepseek-harness-tui/dsh-tui/presets/ag-search.mjs'
+      config:
+        opencodeProvider: unraid-wg   # 省略则不读 opencode.json
+
+# web 行整体覆盖：匹配的 override 会替换整个 config，两个字段都要写
+- id: web
+  name: '@deepseek-ai/dsh-web'
+  config:
+    searchProvider: ag-search
+    fetchProvider: http
+```
+
+配置项（挂载行的 `config`）：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `baseURL` | — | 网关地址（含 `/v1`），请求发往 `{baseURL}/search` |
+| `provider` | `ag` | 网关侧的搜索 provider（实测可用的是 `ag`，响应回报 `antigravity`） |
+| `model` | `gemini-2.5-flash` | 随请求下发的模型名 |
+| `searchType` | `web` | 请求里的 `search_type` |
+| `defaultMaxResults` | `8` | 请求未给 `maxResults` 时的条数（接缝仍按请求值截断） |
+| `timeoutMs` | `45000` | 单次搜索截止时间（毫秒） |
+| `apiKey` | — | 字面量 key |
+| `apiKeyEnv` | `NINE_ROUTER_API_KEY` | 取 key 的环境变量名 |
+| `opencodeConfig` | `~/.config/opencode/opencode.json` | 复用既有认证的配置文件 |
+| `opencodeProvider` | — | 写了才从该文件 `provider[<名字>].options` 取 `baseURL`/`apiKey` |
+
+- 端点解析顺序：行 `baseURL` → `NINE_ROUTER_BASE_URL` → opencode 条目的 `baseURL`；
+  凭证：行 `apiKey` → `apiKeyEnv` → opencode 条目的 `apiKey`。都没有就**明确报错**
+  （凭证类错误点名三个来源），无端点即不可用——不静默回落任何端点。
+- 响应映射：`answer.text` → 接缝的 `content`（综述正文），`results[]` 去重、丢弃非
+  http(s) URL 后 → `sources`（`title`/`snippet`/`published_at`）。
+- 失败分类：网关 `errors[]`、非 2xx（401/403 归入凭证类）、响应体不可解析、外部取消
+  （`WEB_ABORTED`）、截止时间（`WEB_TIMEOUT`）。
+- fetch 不归本插件：`ag` 不支持 `/v1/web/fetch`，`fetchProvider` 保持官方 `http`。
+- 单次搜索是一次 grounding LLM 调用（3–6 秒量级），不是纯检索；结果 URL 常为上游
+  grounding 的跳转链接（`vertexaisearch.cloud.google.com/...`），**有时效**，别当永久链接存。
+
+> 一个 `web` 行只选中一个 `searchProvider`，本插件生效即替换内置的
+> `deepseek-official`；要换回把该行改回去即可。
+
 ### 自定义 preset
 
 0.1.7 通过 profile/bundle 声明 `@deepseek-ai/dsh-agent-preset`，配置包含 `id`、

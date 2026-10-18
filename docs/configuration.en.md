@@ -350,6 +350,70 @@ Configuration (the mount row's `config`):
 > mount at most one of them per profile. When running the Liangshen preset, set this
 > row's `disabled` to `true` (the Liangshen copy is foreground-only).
 
+### Self-hosted search provider (ag-search)
+
+`presets/ag-search.mjs` is a bundled `ctx.web` search provider that routes DSH's native
+`web_search` tool to a self-hosted 9Router-style gateway's `POST {baseURL}/search`.
+Mounted at the host layer it serves **every Agent preset** (unrelated to Liangshen mode;
+it is not a `/preset` entry).
+
+Why it exists: DSH's default `web-search-deepseek` provider requires the upstream to
+implement Anthropic's `web_search_20250305` **server-side** search tool. An
+OpenAI-compatible gateway such as 9Router only hands that definition to the model as a
+regular function and never executes searches, so native `web_search` cannot work through it.
+
+Mounting (`cordis.patch.yml`; the path points into the installed package, so updating the
+package updates the plugin):
+
+```yaml
+- insert:
+    - id: ag-search
+      name: './node_modules/@deepseek-harness-tui/dsh-tui/presets/ag-search.mjs'
+      config:
+        opencodeProvider: unraid-wg   # omit to leave opencode.json unread
+
+# Whole-row override: a matching override replaces the complete config, so both
+# fields must be restated.
+- id: web
+  name: '@deepseek-ai/dsh-web'
+  config:
+    searchProvider: ag-search
+    fetchProvider: http
+```
+
+Configuration (the mount row's `config`):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `baseURL` | — | Gateway address (including `/v1`); requests go to `{baseURL}/search` |
+| `provider` | `ag` | Gateway-side search provider (the usable one is `ag`, reported as `antigravity`) |
+| `model` | `gemini-2.5-flash` | Model name sent with the request |
+| `searchType` | `web` | The request's `search_type` |
+| `defaultMaxResults` | `8` | Result count when the request gives no `maxResults` (the seam still truncates to the request's value) |
+| `timeoutMs` | `45000` | Per-search deadline (ms) |
+| `apiKey` | — | Literal key |
+| `apiKeyEnv` | `NINE_ROUTER_API_KEY` | Environment variable the key is read from |
+| `opencodeConfig` | `~/.config/opencode/opencode.json` | Config file reused for existing credentials |
+| `opencodeProvider` | — | Only when set: read `baseURL`/`apiKey` from that file's `provider[<name>].options` |
+
+- Endpoint resolution: row `baseURL` → `NINE_ROUTER_BASE_URL` → the opencode entry's
+  `baseURL`. Credential: row `apiKey` → `apiKeyEnv` → the opencode entry's `apiKey`.
+  With neither, the provider fails loudly (the credential error names all three sources)
+  or reports itself unavailable — there is no implicit fallback endpoint.
+- Response mapping: `answer.text` → the seam's `content` (the synthesized summary);
+  `results[]` deduped with non-http(s) URLs dropped → `sources`
+  (`title`/`snippet`/`published_at`).
+- Failure taxonomy: gateway `errors[]`, non-2xx (401/403 map to the credential code), an
+  unprocessable body, external cancellation (`WEB_ABORTED`), deadline (`WEB_TIMEOUT`).
+- Fetch stays out of this plugin: `ag` does not support `/v1/web/fetch`, so
+  `fetchProvider` keeps the shipped `http` provider.
+- One search is a grounding LLM turn (3–6 s), not a plain retrieval; result URLs are
+  usually upstream grounding redirects (`vertexaisearch.cloud.google.com/...`) that
+  expire — do not store them as permanent links.
+
+> A `web` row selects exactly one `searchProvider`, so this plugin replaces the built-in
+> `deepseek-official` while it is mounted; point the row back to switch back.
+
 ### Custom presets
 
 On 0.1.7, declare `@deepseek-ai/dsh-agent-preset` through a profile/bundle with
