@@ -875,6 +875,11 @@ const GROUPS = {
 // 两态）、前台执行、后台准入、取消杀进程、超时转后台、参数校验与卡片呈现；mock
 // registry + 真子进程、零依赖免编译（Linux 上 bash 解析为系统 bash 同样可跑）。
     ['verify-winbash', ['node', 'scripts/verify-winbash.mjs']],
+// ag-search 插件（presets/ag-search.mjs——同为平铺单文件）：注册形状、端点与凭证的
+// 三级解析（行 config → 环境变量 → opencode.json 的 provider 条目）、请求体与响应映射
+// （answer.text → 接缝的 content、results 去重后进 sources）、失败分类（errors[]、
+// HTTP 状态、不可解析响应体、外部取消与截止时间）；stub fetch、零网络、零依赖免编译。
+    ['verify-ag-search', ['node', 'scripts/verify-ag-search.mjs']],
 // 随包用户手册（guide/）：副本与 docs/ 逐字节一致 + SKILL.md 能被内核加载 +
 // 发布面与启动器真的把它带上。npm 包原本不含任何用户文档，用户机器上的 AI
 // 无从"查手册回答"；这条门禁保证手册在包内且没漂移。
