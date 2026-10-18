@@ -104,6 +104,8 @@ export interface MigrationDiscovery {
   /** Absolute roots that were scanned (reported to the user). */
   readonly roots: readonly string[]
   readonly sessions: readonly MigrationSession[]
+  /** Unsupported or unreadable source data skipped during discovery. */
+  readonly diagnostics?: readonly string[]
 }
 
 /** Change token of one source artifact: unchanged means reuse its summary. */
@@ -112,8 +114,8 @@ export interface Fingerprint {
   readonly size: number
 }
 
-/** A foreign conversation as listed, derived from the head (and tail) of
- *  its artifact and stat alone — never from a full parse. */
+/** A foreign conversation as listed, derived from file head/tail metadata or
+ *  database session rows — never from a full transcript parse. */
 export interface ForeignSessionSummary {
   readonly agentId: string
   /** Stable source id; always equals the `sourceId` a full parse yields, so
@@ -168,12 +170,15 @@ export interface MigrationAdapter {
   roots(): readonly string[]
   /** Scan the roots and normalize every readable conversation. */
   discover(): MigrationDiscovery
-  /** Cheap per-root file count for list mode (no parsing). Implementations
-   *  that cannot count by name alone may omit this and fall back to
-   *  discover() — the count then equals the parsed session total. */
+  /** Cheap candidate-session count for list mode (no full parsing).
+   *  Sources without it fall back to discover().sessions.length. */
   count?(): number
-  /** The name-only walk scan() follows; lets a caller count candidates and
-   *  find the newest activity without parsing. Present with scan(). */
+  /** Storage-aware presence probe for sources without a file walk. */
+  hasSessions?(): boolean | Promise<boolean>
+  /** Storage-aware activity sample; null when absent or unreadable. */
+  newestActivity?(): number | null
+  /** The name-only walk file-backed sources follow. Database sources instead
+   *  provide hasSessions() and newestActivity(). */
   readonly walk?: WalkSpec
   /** Asynchronous, abortable summary scan for browsing (head/tail reads,
    *  fingerprint reuse). Sources without it are not browsable. */

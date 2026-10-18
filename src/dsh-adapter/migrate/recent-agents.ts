@@ -9,7 +9,9 @@
  * sources). Parent-directory mtimes would miss appends to existing
  * conversations, so the scan is file-level — bounded by the same
  * name-matching walk as the list-mode counter (sub-second at ~3000 files)
- * and meant for a BACKGROUND pass, never the render path.
+ * and meant for a BACKGROUND pass, never the render path. Database sources
+ * provide a row-based newestActivity() hook instead: WAL activity need not
+ * change the main database file's mtime.
  *
  * Split: `recentAgentsFrom` is a pure judgment over collected samples
  * (directly testable with fixture mtimes); `collectNewestMtime` is the IO
@@ -107,8 +109,8 @@ export interface AdapterScanSpec {
 }
 
 /**
- * Collect one sample per adapter that can describe its scan; adapters
- * without count() (no name-only scan shape) are skipped, not guessed.
+ * Collect one sample per adapter using its storage-specific activity hook or
+ * name-only file scan. Sources with neither are skipped, not guessed.
  */
 export function collectActivitySamples(
   adapters: readonly MigrationAdapter[],
@@ -116,6 +118,10 @@ export function collectActivitySamples(
 ): ActivitySample[] {
   const samples: ActivitySample[] = []
   for (const adapter of adapters) {
+    if (adapter.newestActivity !== undefined) {
+      samples.push({ agentId: adapter.id, label: adapter.label, newestMtimeMs: adapter.newestActivity() })
+      continue
+    }
     const spec = scanOf(adapter)
     if (spec === undefined) continue
     samples.push({

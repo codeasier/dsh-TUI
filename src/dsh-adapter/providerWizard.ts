@@ -20,6 +20,20 @@ export type { ProviderSetupHost, CatalogProviderCandidate, ConfiguredProvider, P
  */
 
 import { t } from '../i18n.js'
+import {
+  catalogLiveTarget,
+  derivedCatalogRoutes,
+  inspectCatalogRoutes,
+  readVendorCatalog,
+  requiresAnthropicLiveProtocol,
+  syncableCatalogRoutes,
+  vendorMetadataFor,
+  writeCatalogSyncSelection,
+  type CatalogSyncStatus,
+  type CatalogSyncWrite,
+  type VendorCatalogDocument,
+  type VendorModelMetadata,
+} from './catalogSync.js'
 import { isReservedCredentialRef } from './credentialRefGuard.js'
 import {
   UserQuestionError,
@@ -66,9 +80,15 @@ export interface ProviderWizardDeps {
   /** Live turn state; the model-switch question is skipped while working. */
   readonly working: () => boolean
   readonly switchModel: (provider: string, model: string) => Promise<boolean>
+  /**
+   * Vendor-catalog source for model metadata (models.dev by default). Absent
+   * means the real read; a failure anywhere degrades to bare ids, never to a
+   * failed pass. Tests inject a stub.
+   */
+  readonly readVendorCatalog?: (signal?: AbortSignal) => Promise<VendorCatalogDocument | undefined>
 }
 
-export type ProviderWizardOutcome = 'added' | 'updated' | 'deleted' | 'signed-out' | 'cancelled' | 'failed'
+export type ProviderWizardOutcome = 'added' | 'updated' | 'synced' | 'deleted' | 'signed-out' | 'cancelled' | 'failed'
 
 /** Max attempts for validated free-text prompts before giving up. */
 const MAX_RETRY = 3
@@ -138,14 +158,15 @@ function textQuestion(
 }
 
 /**
- * Run the provider wizard. Opens with an action choice (add / edit); the
- * add path runs the guided config flow, and edit picks a configured route
- * then opens a menu of targeted edits (API key, base URL, wire protocol,
- * model list, delete this provider) with the route locked. Each menu item
- * applies immediately and exits — no confirmation between picking an edit
- * and writing it — and patches only the picked field, leaving every other
- * stored setting (including fields the wizard does not model) in place.
- * For built-in (catalog) routes the menu is limited to API
+ * Run the provider wizard. Opens with an action choice (add / edit, plus
+ * "sync official models" while a configured catalog route has a known vendor
+ * listing); the add path runs the guided config flow, and edit picks a
+ * configured route then opens a menu of targeted edits (API key, base URL,
+ * wire protocol, model list, delete this provider) with the route locked.
+ * Each menu item applies immediately and exits — no confirmation between
+ * picking an edit and writing it — and patches only the picked field, leaving
+ * every other stored setting (including fields the wizard does not model) in
+ * place. For built-in (catalog) routes the menu is limited to API
  * key, model list, and delete; base URL and wire protocol are only
  * meaningful for custom endpoints. Resolves 'cancelled' when the user
  * dismisses any question (Esc) — nothing has been written at that point.
@@ -154,13 +175,23 @@ export async function runProviderWizard(
   deps: ProviderWizardDeps,
 ): Promise<ProviderWizardOutcome> {
   const { ask, notify } = deps
-  let action: 'add' | 'edit' = 'add'
+  let action: 'add' | 'edit' | 'sync' = 'add'
   try {
+    const actionOptions = [
+      { label: t('provider-opt-action-add'), description: t('provider-opt-action-add-desc') },
+      { label: t('provider-opt-action-edit'), description: t('provider-opt-action-edit-desc') },
+    ]
+    // The sync branch exists only while a configured catalog route has a
+    // known vendor listing; without one the action question stays two options
+    // (same optional-branch contract as the OAuth mode below).
+    if (syncableCatalogRoutes(deps.host).length > 0) {
+      actionOptions.push({
+        label: t('provider-opt-action-sync'),
+        description: t('provider-opt-action-sync-desc'),
+      })
+    }
     const actionAnswer = await ask({
-      questions: [optionQuestion('action', t('provider-q-action'), [
-        { label: t('provider-opt-action-add'), description: t('provider-opt-action-add-desc') },
-        { label: t('provider-opt-action-edit'), description: t('provider-opt-action-edit-desc') },
-      ], { hideCustomInput: true })],
+      questions: [optionQuestion('action', t('provider-q-action'), actionOptions, { hideCustomInput: true })],
     })
     const pickedAction = answerSelected(actionAnswer, 'action')[0]
     if (pickedAction === t('provider-opt-action-edit')) {
@@ -170,12 +201,18 @@ export async function runProviderWizard(
       // a bare `return promise` would bypass the catch below.
       return await runEditWizard(deps)
     }
+    if (pickedAction === t('provider-opt-action-sync')) {
+      action = 'sync'
+      return await runCatalogSyncWizard(deps)
+    }
     return await runAddFlow(deps)
   } catch (error) {
     if (error instanceof UserQuestionError) {
       notify(action === 'edit'
         ? t('provider-edit-cancelled')
-        : t('provider-cancelled'))
+        : action === 'sync'
+          ? t('provider-sync-cancelled')
+          : t('provider-cancelled'))
       return 'cancelled'
     }
     const err = error instanceof Error ? error.message : String(error)
@@ -185,10 +222,233 @@ export async function runProviderWizard(
 }
 
 /**
+ * The management branch behind `/provider`'s "Manage official models": pick
+ * one eligible catalog route, read the vendor's own listing, and edit the set
+ * of vendor-only models ENABLED on the derived route (see `catalogSync.ts`).
+ *
+ * Read-only against the picked route — its own `models` selection is the
+ * user's and stays exactly as they left it. Enablement is the user's too: the
+ * currently enabled ids arrive pre-checked and nothing is enabled or disabled
+ * that the user did not tick, so a newly advertised model only ever shows up
+ * here (and in the add flow's question detail) until they enable it.
+ */
+async function runCatalogSyncWizard(deps: ProviderWizardDeps): Promise<ProviderWizardOutcome> {
+  const { host, ask, notify, pushLocal } = deps
+  const candidates = syncableCatalogRoutes(host)
+  if (candidates.length === 0) {
+    notify(t('provider-sync-no-route'), { color: 'warning', timeoutMs: 8000 })
+    return 'cancelled'
+  }
+  let route = candidates[0]!.route
+  if (candidates.length > 1) {
+    const pickAnswer = await ask({
+      questions: [optionQuestion('sync-route', t('provider-q-sync-route'), candidates.map(candidate => ({
+        label: candidate.route,
+        description: candidate.displayName === candidate.route ? undefined : candidate.displayName,
+      })), { hideCustomInput: true })],
+    })
+    const picked = candidates.find(candidate => candidate.route === answerSelected(pickAnswer, 'sync-route')[0])
+    if (picked === undefined) return 'cancelled'
+    route = picked.route
+  }
+  notify(t('provider-sync-running'))
+  let status: CatalogSyncStatus | undefined
+  try {
+    [status] = await inspectCatalogRoutes(host, { route })
+  } catch (error) {
+    const err = error instanceof Error ? error.message : String(error)
+    notify(t('provider-write-failed', { err }), { color: 'error', timeoutMs: 8000 })
+    return 'failed'
+  }
+  if (status === undefined) {
+    notify(t('provider-sync-no-route'), { color: 'warning', timeoutMs: 8000 })
+    return 'cancelled'
+  }
+  if (status.reason !== undefined) {
+    notify(t(catalogSyncReasonKey(status), {
+      route: status.route,
+      derived: status.conflictedDerived ?? status.derived,
+    }), { color: 'warning', timeoutMs: 8000 })
+    return status.failed === true ? 'failed' : 'cancelled'
+  }
+
+  // Metadata is what makes the rows readable and the enabled entries usable:
+  // the vendor listing carries ids only, so name, capacities, modalities and
+  // thinking tiers come from the vendor catalog (models.dev). Best effort —
+  // without it the rows fall back to ids and the written entries stay bare.
+  const catalog = await (deps.readVendorCatalog ?? readVendorCatalog)()
+  const ids = [...(status.vendorOnly ?? []).map(row => row.id), ...status.enabled]
+  const metadata = catalog === undefined
+    ? new Map<string, VendorModelMetadata>()
+    : vendorMetadataFor(status.route, ids, catalog)
+  if (catalog === undefined) {
+    notify(t('provider-sync-meta-unavailable'), { color: 'warning', timeoutMs: 8000 })
+  }
+
+  const vendorRows = status.vendorOnly ?? []
+  const vendorIds = new Set(vendorRows.map(row => row.id))
+  const retiredRows = status.enabled.filter(id => !vendorIds.has(id))
+  const derivedList = status.derivedAnthropic === undefined
+    ? status.derived
+    : `${status.derived}, ${status.derivedAnthropic}`
+  const modelsAnswer = await ask({
+    questions: [optionQuestion('sync-models', t('provider-q-sync-models', { route: status.route }), [
+      ...vendorRows.map(row => ({
+        label: row.id,
+        description: vendorRowDescription(row.id, metadata.get(row.id)),
+      })),
+      ...retiredRows.map(id => ({ label: id, description: t('provider-sync-row-retired') })),
+    ], {
+      multiSelect: true,
+      defaultSelected: status.enabled,
+      detail: t('provider-sync-detail', {
+        total: vendorRows.length,
+        enabled: status.enabled.length,
+        unenabled: status.unenabled?.length ?? 0,
+        derived: derivedList,
+      }),
+    })],
+  })
+  const selected = mergeModelIds(
+    answerSelected(modelsAnswer, 'sync-models'),
+    answerText(modelsAnswer, 'sync-models'),
+  )
+
+  let write: CatalogSyncWrite
+  try {
+    write = await writeCatalogSyncSelection(host, status, selected, metadata)
+  } catch (error) {
+    const err = error instanceof Error ? error.message : String(error)
+    notify(t('provider-write-failed', { err }), { color: 'error', timeoutMs: 8000 })
+    return 'failed'
+  }
+  if (write.status === 'unchanged' || write.status === 'nothing') {
+    notify(t('provider-sync-unchanged', { route: status.route, derived: derivedList }))
+    return 'cancelled'
+  }
+  if (write.status === 'removed') {
+    pushLocal('/provider', [
+      t('provider-sync-transcript-route', { route: status.route, derived: derivedList }),
+      t('provider-sync-line-pruned', { n: write.removed.length }),
+    ])
+    notify(t('provider-sync-removed', { route: status.route, derived: derivedList }), { color: 'success' })
+    return 'synced'
+  }
+  pushLocal('/provider', [
+    t('provider-sync-transcript-route', { route: status.route, derived: derivedList }),
+    modelsSummaryLine(write.models, { added: write.added, removed: write.removed }),
+    ...splitSummaryLines(write),
+  ])
+  notify(t('provider-sync-success', {
+    route: status.route,
+    derived: derivedList,
+    n: write.models.length,
+    added: write.added.length,
+    removed: write.removed.length,
+  }), { color: 'success' })
+  return 'synced'
+}
+
+/**
+ * One transcript line per active derived route when the selection spans
+ * protocols (e.g. `opencode-go-live: …` plus
+ * `opencode-go-live-anthropic: …`). Single-protocol selections report the
+ * aggregate only, preserving the historical single-line shape.
+ */
+function splitSummaryLines(write: CatalogSyncWrite): readonly string[] {
+  const perRoute = write.perRoute
+  if (perRoute === undefined) return []
+  const active = perRoute.filter(entry => entry.models.length > 0)
+  if (active.length <= 1) return []
+  return active.map(entry =>
+    t('provider-sync-transcript-split', { derived: entry.derived, models: entry.models.join(', ') }),
+  )
+}
+
+/**
+ * The panel description for one vendor-only model: what the vendor catalog
+ * says about it, in the wizard's own words. An id the catalog does not
+ * describe says so instead of pretending to know. A Claude id notes its
+ * anthropic-only routing, since the vendor answers it over
+ * openai-completions with `ModelProtocolUnsupported`.
+ */
+function vendorRowDescription(id: string, metadata: VendorModelMetadata | undefined): string | undefined {
+  const suffix = requiresAnthropicLiveProtocol(id) ? ` · ${t('provider-sync-row-anthropic')}` : undefined
+  if (metadata === undefined) {
+    const base = t('provider-sync-row-no-meta')
+    return suffix === undefined ? base : `${base}${suffix}`
+  }
+  const parts = [metadata.name ?? id]
+  if (metadata.contextWindow !== undefined) {
+    parts.push(t('provider-row-meta-ctx', { value: formatCapacity(metadata.contextWindow) }))
+  }
+  if (metadata.maxTokens !== undefined) {
+    parts.push(t('provider-row-meta-out', { value: formatCapacity(metadata.maxTokens) }))
+  }
+  if (metadata.input !== undefined) {
+    parts.push(t('provider-row-meta-input', { value: metadata.input.join('+') }))
+  }
+  const efforts = metadata.reasoningEfforts
+  if (efforts === false) parts.push(t('provider-row-meta-no-reasoning'))
+  else if (efforts !== undefined) {
+    const levels = Object.keys(efforts)
+    if (levels.length > 0) parts.push(t('provider-row-meta-effort', { value: levels.join('/') }))
+  }
+  const base = parts.join(' · ')
+  return suffix === undefined ? base : `${base}${suffix}`
+}
+
+/**
+ * The message key one refusal reports under, so every branch names the same
+ * cause for the same condition.
+ */
+function catalogSyncReasonKey(status: CatalogSyncStatus): Parameters<typeof t>[0] {
+  const reason = status.reason
+  return reason === 'no-credential' ? 'provider-sync-no-credential'
+    : reason === 'derived-conflict' ? 'provider-sync-derived-conflict'
+      : reason === 'not-catalog' ? 'provider-sync-not-catalog'
+        : reason === 'catalog-failed' ? 'provider-sync-catalog-failed'
+          : status.failed === true && reason === 'listing-empty'
+            ? 'provider-sync-listing-empty'
+            : 'provider-sync-listing-failed'
+}
+
+/**
+ * The question detail for the model list of a catalog route: which extra
+ * models the vendor publishes (and the route they are managed on), else the
+ * installed-snapshot origin when there is nothing live to report.
+ */
+function modelsQuestionDetail(
+  isCatalog: boolean,
+  discovery: RouteDiscovery,
+  discoveredCount: number,
+): string | undefined {
+  if (!isCatalog) return undefined
+  const vendorOnly = discovery.vendorOnly
+  if (vendorOnly !== undefined && vendorOnly.length > 0 && discovery.vendorDerived !== undefined) {
+    return t('provider-catalog-vendor-note', {
+      n: vendorOnly.length,
+      models: vendorOnly.slice(0, VENDOR_NOTE_IDS).map(model => model.id).join(', ')
+        + (vendorOnly.length > VENDOR_NOTE_IDS ? ', …' : ''),
+      derived: discovery.vendorDerived,
+    })
+  }
+  return discovery.reason === 'no-base-url'
+    ? t('provider-catalog-snapshot-note', { n: discoveredCount })
+    : undefined
+}
+
+/** Vendor-only ids named in the model question before the list is elided. */
+const VENDOR_NOTE_IDS = 6
+
+/**
  * The guided add flow behind `/provider`'s "Add a new provider" branch:
  * mode (catalog / custom / optional OAuth), route, API key, endpoint /
  * protocol, model discovery + selection, confirm, then persist with
- * credential rollback. Esc anywhere cancels with nothing written.
+ * credential rollback. A catalog route with a vendor listing then gets one
+ * sync pass, so the models the installed snapshot lacks are enabled under the
+ * derived route before the flow ends (see `catalogSync.ts`). Esc anywhere
+ * cancels with nothing written.
  */
 async function runAddFlow(
   deps: ProviderWizardDeps,
@@ -301,6 +561,9 @@ async function runAddFlow(
     discoveredById,
   )
   if (discovered.length > 0) {
+    // The id→model map is already built above; the fork's re-assignment is
+    // redundant in the merged shape (upstream hoisted the construction).
+    const modelsDetail = modelsQuestionDetail(isCatalog, discovery, discovered.length)
     const modelsAnswer = await ask({
       questions: [optionQuestion('models', t('provider-q-models'),
         discovered.map(model => ({
@@ -313,9 +576,7 @@ async function runAddFlow(
         {
           multiSelect: true,
           modelEditor: capabilities.editor,
-          ...(isCatalog && discovery.reason === 'no-base-url'
-            ? { detail: t('provider-catalog-snapshot-note', { n: discovered.length }) }
-            : {}),
+          ...(modelsDetail === undefined ? {} : { detail: modelsDetail }),
         },
       )],
     })
@@ -415,6 +676,9 @@ async function runAddFlow(
   }
 
   // ── 9. success: transcript summary + optional live switch ──────────
+  // Nothing is enabled on the derived route here: the model question only
+  // reports the vendor's extras (their route is <route>-live), and turning one
+  // on is the user's call through the management branch.
   pushLocal('/provider', [
     ...summaryLines,
     ...(deps.working() || models.length === 0
@@ -745,6 +1009,7 @@ async function editModelList(
         label: id,
         description: t('provider-row-model-missing'),
       }))
+    const editModelsDetail = modelsQuestionDetail(isCatalog, discovery, discovered.length)
     const modelsAnswer = await ask({
       questions: [optionQuestion('models', t('provider-q-models'),
         [...optionRows, ...missingRows],
@@ -752,9 +1017,7 @@ async function editModelList(
           multiSelect: true,
           defaultSelected: previous,
           modelEditor: capabilities.editor,
-          ...(isCatalog && discovery.reason === 'no-base-url'
-            ? { detail: t('provider-catalog-snapshot-note', { n: discovered.length }) }
-            : {}),
+          ...(editModelsDetail === undefined ? {} : { detail: editModelsDetail }),
         },
       )],
     })
@@ -1140,6 +1403,16 @@ export interface RouteDiscovery {
   readonly catalog: RouteDiscoveryCatalog
   readonly live: RouteDiscoveryLive
   readonly reason?: RouteDiscoveryReason
+  /**
+   * Ids the route's own vendor listing advertises and the installed catalog
+   * does not describe — present only when this build knows that listing (a
+   * live target) and the probe succeeded. They are NOT selectable rows: the
+   * catalog route cannot carry them (see `catalogSync.ts`), so they are
+   * reported as a question detail and enabled under {@link vendorDerived}.
+   */
+  readonly vendorOnly?: readonly LlmDiscoveredModel[]
+  /** The derived route {@link vendorOnly} ids are enabled under. */
+  readonly vendorDerived?: string
 }
 
 /**
@@ -1152,6 +1425,12 @@ export interface RouteDiscovery {
  * seam cannot carry the named route's headers into an anonymous request).
  * The listings merge: an id present in both resolves to its catalog row,
  * endpoint-only ids append — those are the new models the wizard can surface.
+ *
+ * A route with a known live target gets one more probe even when it stores no
+ * baseURL: the vendor's own endpoint is a fact of the route (not of the
+ * profile), and its extras are what the sync enables under the derived route.
+ * Those rows stay OUT of `rows` — the catalog route cannot serve them — and
+ * travel as {@link RouteDiscovery.vendorOnly} for the question detail.
  *
  * The `apiKey` field is omitted rather than sent empty when no key is
  * knowable: an empty string is a hard invalid-credential upstream, while an
@@ -1176,13 +1455,38 @@ async function discoverRouteModels(
     : { rows: [] as const, catalog: 'unavailable' as const }
   const catalogRows = catalogResult.rows
   const catalogIds = new Set(catalogRows.map(row => row.id))
+  const provider = draft.provider
+  const target = provider === undefined ? undefined : catalogLiveTarget(provider)
   if (draft.baseURL === undefined || draft.baseURL === '') {
+    if (target === undefined || provider === undefined || draft.hasCustomHeaders) {
+      return {
+        rows: catalogRows,
+        catalogIds,
+        catalog: catalogResult.catalog,
+        live: 'unavailable',
+        reason: 'no-base-url',
+      }
+    }
+    const vendor = await host.discoverModels({
+      baseURL: target.baseURL,
+      api: target.api,
+      ...(draft.apiKey !== undefined && draft.apiKey !== '' ? { apiKey: draft.apiKey } : {}),
+    }).then(
+      rows => ({ rows, live: 'fetched' as const }),
+      () => ({ rows: [] as const, live: 'failed' as const }),
+    )
     return {
       rows: catalogRows,
       catalogIds,
       catalog: catalogResult.catalog,
-      live: 'unavailable',
+      live: vendor.live,
       reason: 'no-base-url',
+      ...(vendor.live === 'fetched'
+        ? {
+          vendorOnly: vendor.rows.filter(row => !catalogIds.has(row.id)),
+          vendorDerived: derivedCatalogRoutes(provider).join(', '),
+        }
+        : {}),
     }
   }
   if (draft.hasCustomHeaders) {
@@ -1247,10 +1551,16 @@ function notifyDiscoveryStatus(
   }
 }
 
-/** Compact capacity rendering for picker rows: 1000000 → 1M, 384000 → 384k. */
+/**
+ * Compact capacity rendering for picker rows: 1000000 → 1M, 384000 → 384k,
+ * and binary-ish windows round to the k they are read as (131072 → 131k,
+ * 262144 → 262k) instead of printing six digits.
+ */
 function formatCapacity(n: number): string {
   if (n >= 1_000_000 && n % 1_000_000 === 0) return `${n / 1_000_000}M`
   if (n >= 1_000 && n % 1_000 === 0) return `${n / 1_000}k`
+  if (n >= 1_000 && n % 1_024 === 0) return `${n / 1_024}k`
+  if (n >= 10_000) return `${Math.round(n / 1_000)}k`
   return `${n}`
 }
 

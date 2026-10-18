@@ -9,8 +9,9 @@ import type { ProviderSetupHost, OAuthProviderStatus, OAuthSetupHost, SettingsHo
 
 /** One backend session's sign-in surface (`ChannelUi.backendAuth`). */
 export interface BackendAuthHost {
-  /** Report status, present OAuth, then reconnect after sign-in or sign-out. */
-  login(present: (oauth: OAuthSetupHost, provider: string) => Promise<'added' | 'updated' | 'deleted' | 'signed-out' | 'cancelled' | 'failed'>): Promise<void>
+  /** Report status, present OAuth, then reconnect after sign-in or sign-out.
+   *  `synced` mirrors the provider wizard's catalog-sync outcome. */
+  login(present: (oauth: OAuthSetupHost, provider: string) => Promise<'added' | 'updated' | 'synced' | 'deleted' | 'signed-out' | 'cancelled' | 'failed'>): Promise<void>
   /** Remove only this backend's host OAuth credential, never its native login. */
   logout?(): Promise<boolean>
 }
@@ -266,8 +267,8 @@ export interface ChannelUi {
    *  the expandEditor shortcut. */
   readonly expandEditor: boolean
   /** Smooth streaming reveal (settings `dsh-tui.smoothStreaming`; on by
-   *  default): live-arriving assistant text, expanded thinking, and tool
-   *  call bodies paint through a ~30fps reveal instead of jumping per
+   *  default): live-arriving assistant text and expanded thinking
+   *  paint through a ~30fps reveal instead of jumping per
    *  provider burst. */
   readonly smoothStreaming: boolean
   /** Live status-footer visibility and compactness preferences. */

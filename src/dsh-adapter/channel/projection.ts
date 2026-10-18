@@ -43,6 +43,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     scope: () => deps.agent(),
     attachments: () => deps.attachments(),
   })
+
   const projector = createSharedProjection(state, {
     rowIds: deps.rowIds,
     resetContextWarning: () => deps.resetContextWarning(),

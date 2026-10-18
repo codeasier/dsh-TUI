@@ -25,6 +25,8 @@ import { createStartingSession } from '../agent/starting-session.js'
 import { mountFailureText } from '../sessions/resumeFailure.js'
 import { createChannelSceneOutlet } from './channel-scene-outlet.js'
 import { mountChannelUi } from './channel-ui.js'
+import type { ChannelUi } from '../adapter/ports/channel-ui.js'
+import { CATALOG_SYNC_TIMEOUT_MS, reportCatalogRoutesQuietly } from './catalogSync.js'
 import { bindChannelCommands } from './channel/commands.js'
 import { registerTuiChannel } from '../adapter/channel/host-registry.js'
 import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
@@ -40,6 +42,7 @@ import { ApprovalStore, bindApprovalStore } from './approvals.js'
 import { PermissionStore } from '../channel/permissions.js'
 import { registerPromptDebug } from './promptDebug.js'
 import { readActivityFrames } from '../activityPrefs.js'
+import { DEFAULT_PRESET } from '../components/activityFrames.js'
 import { commitFullscreenFactoryMigration, planFullscreenFactoryMigration, readAppliedMigrations } from '../migrationPrefs.js'
 import { readModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
@@ -60,6 +63,7 @@ import { DSH_BACKEND_ID, HOST_NOTICE_ENV, KERNEL_SWITCH_HANDOFF_ENV, RESUME_BACK
 import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { LAUNCH_PROMPT_SENT_ENV, beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions } from '../update.js'
+import { pokeRawMode } from '../utils/ttyMode.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
 import { applyBtwContextBudget, applyBtwContextTurns, applyCodeFrameStyle, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, applyPageMargin, applySidePanelOpen, applySidePanelRatio, applySidePanelSplitEnabled, BTW_CONTEXT_BUDGET_MAX, BTW_CONTEXT_BUDGET_MIN, BTW_CONTEXT_TURNS_MAX, BTW_CONTEXT_TURNS_MIN, DEFAULT_PAGE_MARGIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, resolveMathRendering, SIDE_PANEL_ID_PATTERN, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
@@ -275,6 +279,24 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     sampleAt(2000, 'stdin state +2s')
     sampleAt(5000, 'stdin state +5s')
     sampleAt(12000, 'stdin state +12s')
+    // The exiting parent used to stdin.destroy() ~15s after spawn. libuv
+    // then restored cooked echo on this shared tty while isRaw stayed true,
+    // so mouse reports and DECRPM/DA1 replies were painted into the prompt
+    // as `^[...`. A setRawMode(true) while the handle already believes it is
+    // raw is a libuv no-op; repair toggles only after tcgetattr says cooked.
+    // The window covers a slow boot (destroy is spawn+15s, apply may be late).
+    const repairTimer = setInterval(() => {
+      pokeRawMode(probedStdin, () => {
+        logRestartEvent('boot: reasserted raw mode after shared tty reset')
+      })
+    }, 500)
+    repairTimer.unref?.()
+    const stopRepair = setTimeout(() => clearInterval(repairTimer), 22000)
+    stopRepair.unref?.()
+    ctx.effect(() => () => {
+      clearInterval(repairTimer)
+      clearTimeout(stopRepair)
+    })
   }
   const hostMode = resolveTuiHostMode()
   if (hostMode === 'invalid-explicit-launch') {
@@ -455,10 +477,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // Child-process stderr guard (issue #17): MCP servers spawned with an
   // inherited stderr (the MCP SDK's stdio default) write straight to the
   // terminal device from the child process, bypassing the renderer's own
-  // stderr patch and corrupting the alt-screen. Take over those spawns and
-  // surface their stderr as deduplicated notifications instead. Installed
-  // before agent resolution so servers spawned during startup are covered;
-  // notices posted before the channel exists are buffered and flushed then.
+  // stderr patch and corrupting the alt-screen. Take over those spawns, keep
+  // every line in the debug log, and turn the ones that announce a problem
+  // into deduplicated notifications — a server's start-up banner (every MCP
+  // server logs one to stderr on each boot) stays out of the notice area.
+  // Installed before agent resolution so servers spawned during startup are
+  // covered; notices posted before the channel exists are buffered and flushed
+  // then.
   const stderrBacklog: Array<[string, { color?: 'error' | 'warning' | 'success'; timeoutMs?: number }?]> = []
   let notifyStderr: ((text: string, options?: { color?: 'error' | 'warning' | 'success'; timeoutMs?: number }) => void) | undefined
   const stderrReporter = createChildStderrReporter((text, options) => {
@@ -467,6 +492,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   })
   ctx.effect(() => {
     const restoreSpawn = installChildStderrGuard(line => {
+      // The debug log is the retention channel for silenced lines: the
+      // reporter only notifies what announces a problem.
       logForDebugging(`[child-stderr] ${line}`)
       stderrReporter.push(line)
     })
@@ -981,7 +1008,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     activity: config.activity,
     // Explicit cordis.yml value (static deployment choice) wins over the
     // runtime `/activity` preference, which wins over the default.
-    activityFrames: config.activityFrames ?? readActivityFrames() ?? 'moon8',
+    activityFrames: config.activityFrames ?? readActivityFrames() ?? DEFAULT_PRESET,
     // Static footer preference: cordis.yml `contextBar` (schema default on).
     contextBar: config.contextBar,
     // Same precedence for the agent preset: cordis.yml `preset` over the
@@ -1160,7 +1187,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
         thinkingFold: Schema.union(['preview', 'full']).default('preview'),
         jobGroupFold: Schema.union(['auto', 'always', 'never']).default('auto'),
-        toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
+        // Leave the legacy user layer unset so explicit cordis choices (including
+        // `none`) survive; applyDisplay normalizes an absent value to `subtle`.
+        toolBackground: Schema.union(['none', 'subtle', 'strong']),
         scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
         // Preset names AND custom `NxM` specs (the settings field's parse
         // gate keeps junk out of the user layer; the transform normalizes
@@ -1641,6 +1670,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         },
         {
           ...settingField('toolBackground'),
+          format(value: unknown): string {
+            return normalizeToolBackground(value ?? config.toolBackground)
+          },
         },
         {
           ...settingField('scrollGutter'),
@@ -2603,6 +2635,35 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     return ref.backendId === 'dsh' ? [] : [formatSessionRef(ref)]
   }))
 
+  // Official-model report for catalog routes (see catalogSync.ts; opt out
+  // with cordis.yml `catalogModelSync: false`). The installed pi-ai snapshot
+  // is the only catalog a settings profile can serve, and a profile carries
+  // protocol/endpoint per ROUTE, so a model the vendor added after that
+  // snapshot can never join the catalog route itself — such models live on the
+  // derived `<route>-live` route, where the USER decides which are enabled.
+  //
+  // This pass therefore only reports (debug log): what the vendor publishes
+  // and the user has not enabled, and what the vendor retired. It only repairs
+  // routing headers/protocol placement for already-enabled derived models;
+  // it never enables additional models or changes the user's selection. Fire-and-forget: the first frame never waits on the network, an
+  // offline or unauthenticated host is silent, and the pass is bounded
+  // (CATALOG_SYNC_TIMEOUT_MS) so a hung socket cannot outlive the mount.
+  // Observational modes are exempt: a shadow/replay mount has no business
+  // reporting on settings a real session owns.
+  if (config.catalogModelSync !== false && !shadow) {
+    const logCatalogSync = (message: string, level: 'debug' | 'warn'): void => {
+      const line = `dsh-tui: catalog model report — ${message}`
+      if (level === 'warn') ctx.logger.warn(line)
+      else ctx.logger.debug(line)
+    }
+    // An async helper, never an inline call: even the synchronous
+    // `providerSetup()` policy check must land as a rejection, not as a boot
+    // failure, when the mount is malformed.
+    void reportCatalogModelsAtBoot(channel, logCatalogSync).catch((error: unknown) => {
+      ctx.logger.warn(`dsh-tui: catalog model report failed — ${error instanceof Error ? error.message : String(error)}`)
+    })
+  }
+
   // Check in the background so registry latency never delays the first frame.
   // A failed/offline check is intentionally silent; the manual `/update`
   // command remains available regardless of network access.
@@ -2770,6 +2831,32 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
 
 function unsupportedWorkspaceTarget(target: string): string {
   return `dsh-tui: unsupported or unavailable workspace target: ${target}`
+}
+
+/**
+ * One boot pass of the official-model report (see `catalogSync.ts`): read the
+ * vendor-published models of every configured catalog route that has a live
+ * target and log what the user has not enabled (and what the vendor retired).
+ *
+ * Nothing here is required for a frame to render, and nothing is written: an
+ * absent provider-setup host (bare `cordis.yml` start) returns silently, and an
+ * unreachable or unauthenticated vendor is reported by the engine as a result,
+ * not as a throw. No model cache is dropped either — the enabled set can only
+ * change through the wizard, which invalidates on its own.
+ * @param channel - the mounted UI channel (its provider-setup seam).
+ * @param log - one line per real event; the caller picks level and prefix.
+ */
+async function reportCatalogModelsAtBoot(
+  channel: Pick<ChannelUi, 'providerSetup'>,
+  log: (message: string, level: 'debug' | 'warn') => void,
+): Promise<void> {
+  const host = channel.providerSetup()
+  if (host === undefined) return
+  await reportCatalogRoutesQuietly(
+    host,
+    log,
+    { signal: AbortSignal.timeout(CATALOG_SYNC_TIMEOUT_MS) },
+  )
 }
 
 /**

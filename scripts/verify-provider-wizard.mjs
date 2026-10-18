@@ -88,6 +88,37 @@
  * 43–52. Tab capability drafts: add/edit commits, cancellation, unchanged
  * selections, unchecked edits, whole-catalog overrides, override migration,
  * offline editing, inheritance resets, validation and no-op saves.
+ * 63. managing official models: the vendor's extra ids are the selectable
+ *    rows (enabled ones pre-checked), nothing is enabled that the user did not
+ *    tick, and the derived route is written with exactly that set — enriched
+ *    with the vendor catalog's name, capacities, modalities and thinking tiers.
+ * 43b. without the vendor catalog (models.dev unreachable) the same pass still
+ *    works: rows say so, entries stay bare, and the user is told.
+ * 64. un-checking an enabled model removes it while a kept id re-enters its
+ *    stored entry, hand-tuned fields beating the catalog.
+ * 65. a selection that already matches writes nothing, while a bare stored
+ *    entry gains the catalog fields exactly once.
+ * 66. no resolvable key refuses by name and never probes.
+ * 67. a failed vendor listing changes nothing.
+ * 68. clearing every row retires the derived route; with no derived route it
+ *    is a plain no-op.
+ * 69. a derived route repointed at another endpoint/protocol is refused,
+ *    never overwritten.
+ * 70. the boot pass only REPORTS (un-enabled and retired ids, one debug line
+ *    each), writes nothing, stays silent on a no-op, and neither throws nor
+ *    writes when the vendor listing is unreachable.
+ * 71. the action question gains the management option only while a configured
+ *    catalog route has a vendor listing.
+ * 72. connecting a catalog route reports the vendor's extras (and their
+ *    derived route) in the model question and enables nothing by itself.
+ * 73. an unreachable vendor listing while connecting keeps the snapshot note
+ *    and surfaces the live-probe failure once.
+ * 74. editing that route's model list shows the same note and keeps
+ *    vendor-only ids unselectable.
+ *
+ * The route picker (several eligible routes) cannot be exercised yet: exactly
+ * one route in `CATALOG_LIVE_TARGETS` has a vendor listing, so every pass has
+ * a single candidate. The branch stays for the next registered target.
  *
  * Run with plain node against the compiled lib (after `pnpm build`):
  * `node scripts/verify-provider-wizard.mjs`
@@ -97,6 +128,7 @@ import {
   deriveKeyRef,
   runProviderWizard,
 } from '../lib/types/dsh-adapter/providerWizard.js'
+import { reportCatalogRoutesQuietly } from '../lib/types/dsh-adapter/catalogSync.js'
 import { t } from '../lib/types/i18n.js'
 
 let failed = 0
@@ -134,6 +166,8 @@ function makeDeps(script, options = {}) {
     asks: [],
     /** every discoverModels request, in order (shape regressions). */
     discoverRequests: [],
+    /** the per-request options bag (signal forwarding). */
+    discoverSignals: [],
     /** question id → hideCustomInput flag as submitted (panel contract). */
     hideFlags: {},
     /** question id → option descriptions, for catalog row-shape regressions. */
@@ -152,7 +186,7 @@ function makeDeps(script, options = {}) {
     return raw[index]
   }
   const host = {
-    listCatalogProviders: () => [
+    listCatalogProviders: () => options.catalogProviders ?? [
       { provider: 'deepseek', displayName: 'DeepSeek' },
       { provider: 'openai', displayName: 'OpenAI' },
       { provider: 'same-name', displayName: 'same-name' },
@@ -173,9 +207,10 @@ function makeDeps(script, options = {}) {
           && row.ref === ref)
         .map(row => row.route)
     },
-    routeExists: () => false,
-    discoverModels: async request => {
+    routeExists: route => options.routeExists ?? (options.configured ?? []).some(row => row.route === route),
+    discoverModels: async (request, discoverOptions) => {
       calls.discoverRequests.push(request)
+      calls.discoverSignals.push(discoverOptions?.signal)
       if (options.discover) return options.discover(request)
       if (options.discoverThrows) throw new Error('connection refused')
       return options.discovered ?? []
@@ -200,11 +235,18 @@ function makeDeps(script, options = {}) {
       calls.profiles.push([route, profile])
     },
     mutateProfile: async (route, ops) => {
-      if (options.profileThrows) throw new Error('settings-rejected: unserviceable')
+      // `mutateThrows` names ONE route (the derived route) so the connect-time
+      // sync can fail while the catalog profile write still succeeds.
+      if (options.profileThrows || options.mutateThrows === route) throw new Error('settings-rejected: unserviceable')
       calls.mutations.push([route, ops])
     },
     ...(options.oauth ? { oauth: options.oauth } : {}),
   }
+  // Vendor metadata source: the fixture by default, `null` to simulate an
+  // offline/unreachable models.dev.
+  const readVendorCatalog = options.vendorCatalog === null
+    ? async () => undefined
+    : async () => options.vendorCatalog ?? VENDOR_CATALOG
   const deps = {
     host,
     ask: async request => {
@@ -237,6 +279,7 @@ function makeDeps(script, options = {}) {
     },
     notify: (text, opts) => { calls.notifications.push({ text, color: opts?.color }) },
     pushLocal: (title, lines) => { calls.pushed.push({ title, lines }) },
+    readVendorCatalog,
     working: () => options.working ?? false,
     switchModel: async (provider, model) => {
       calls.switches.push([provider, model])
@@ -253,6 +296,49 @@ const CONFIRM_WRITE = { selected: [t('provider-opt-confirm-write')] }
 const KEEP_MODEL = { selected: [t('provider-opt-switch-keep')] }
 const ACTION_ADD = { selected: [t('provider-opt-action-add')] }
 const ACTION_EDIT = { selected: [t('provider-opt-action-edit')] }
+const ACTION_SYNC = { selected: [t('provider-opt-action-sync')] }
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+/** The vendor routing header op one derived-route write carries. */
+const sessionHeaderOp = ops => ops.find(op => eq(op.path, ['headers']))
+// models.dev-shaped fixture: the fields the wizard maps onto a model entry.
+const VENDOR_CATALOG = {
+  'opencode-go': {
+    models: {
+      'grok-4.5': {
+        name: 'Grok 4.5',
+        limit: { context: 500000, output: 500000 },
+        modalities: { input: ['text', 'image'] },
+        reasoning: true,
+        reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high'] }],
+      },
+      'longcat-2.5-preview-free': {
+        name: 'LongCat 2.5 Preview Free',
+        limit: { context: 1000000, output: 131072 },
+        modalities: { input: ['text', 'image'] },
+        reasoning: true,
+        reasoning_options: [{ type: 'toggle' }],
+      },
+      'claude-haiku-5-5': {
+        name: 'Claude Haiku 5.5',
+        limit: { context: 1000000, output: 128000 },
+        modalities: { input: ['text', 'image'] },
+        reasoning: true,
+        reasoning_options: [{ type: 'toggle' }],
+      },
+    },
+  },
+  'opencode': {
+    models: {
+      'glm-5': {
+        name: 'GLM-5',
+        limit: { context: 204800, output: 131072 },
+        modalities: { input: ['text'] },
+        reasoning: true,
+        reasoning_options: [{ type: 'toggle' }],
+      },
+    },
+  },
+}
 // Edit-menu picks (asked exactly once per edit session).
 const MENU_KEY = { selected: [t('provider-opt-edit-key')] }
 const MENU_BASEURL = { selected: [t('provider-opt-edit-baseurl')] }
@@ -1742,6 +1828,711 @@ for (const invalid of [
     ...CUSTOM_EDIT, models: { selected: ['chosen'], edits: { chosen: {} } },
   }, { configured: [CAPABILITY_PROVIDER], discovered: [{ id: 'chosen', contextWindow: 800000 }] })
   check('52 no-op capability save: zero writes', await runProviderWizard(deps) === 'cancelled' && calls.mutations.length === 0)
+}
+
+// 43. Managing official models: only the vendor's extra ids are selectable
+// (the catalog route cannot carry them), nothing is pre-checked on a first
+// pass, and the write carries exactly what the user ticked — enriched with the
+// vendor catalog's name, capacities, modalities and thinking tiers.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['longcat-2.5-preview-free'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }, { id: 'longcat-2.5-preview-free' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('43 manage: outcome synced', outcome === 'synced', outcome)
+  check('43 manage: one candidate skips the route question', !calls.asks.includes('sync-route'), JSON.stringify(calls.asks))
+  check('43 manage: probes the installed catalog, then the vendor listing',
+    eq(calls.discoverRequests, [
+      { provider: 'opencode-go' },
+      { baseURL: 'https://opencode.ai/zen/go/v1', api: 'openai-completions', apiKey: 'sk-zen' },
+    ]), JSON.stringify(calls.discoverRequests))
+  check('43 manage: only vendor-only ids are rows, nothing pre-checked',
+    eq(Object.keys(calls.optionDescriptions['sync-models'] ?? {}).sort(), ['grok-4.5', 'longcat-2.5-preview-free'])
+      && eq(calls.defaults['sync-models'], []),
+    JSON.stringify({ rows: Object.keys(calls.optionDescriptions['sync-models'] ?? {}), defaults: calls.defaults['sync-models'] }))
+  check('43 manage: rows describe the catalog metadata (name, capacities, modalities, tiers)',
+    calls.optionDescriptions['sync-models']?.['longcat-2.5-preview-free']
+      === [
+        'LongCat 2.5 Preview Free',
+        t('provider-row-meta-ctx', { value: '1M' }),
+        t('provider-row-meta-out', { value: '128k' }),
+        t('provider-row-meta-input', { value: 'text+image' }),
+        t('provider-row-meta-effort', { value: 'off/high' }),
+      ].join(' · ')
+      && calls.optionDescriptions['sync-models']?.['grok-4.5']
+        === [
+          'Grok 4.5',
+          t('provider-row-meta-ctx', { value: '500k' }),
+          t('provider-row-meta-out', { value: '500k' }),
+          t('provider-row-meta-input', { value: 'text+image' }),
+          t('provider-row-meta-effort', { value: 'low/medium/high' }),
+        ].join(' · '),
+    JSON.stringify(calls.optionDescriptions['sync-models']))
+  check('43 manage: the detail counts enabled versus un-enabled',
+    calls.details['sync-models'] === t('provider-sync-detail', {
+      total: 2,
+      enabled: 0,
+      unenabled: 2,
+      derived: 'opencode-go-live, opencode-go-live-anthropic',
+    }), JSON.stringify(calls.details['sync-models']))
+  const written = calls.mutations[0]?.[1]?.[0]?.value ?? []
+  check('43 manage: the derived route enables exactly the ticked id, enriched',
+    calls.mutations.length === 1 && calls.mutations[0]?.[0] === 'opencode-go-live'
+      && written.length === 1 && written[0].id === 'longcat-2.5-preview-free'
+      && written[0].name === 'LongCat 2.5 Preview Free'
+      && written[0].contextWindow === 1000000
+      && written[0].maxTokens === 131072
+      && eq(written[0].input, ['text', 'image'])
+      && eq(written[0].reasoningEfforts, { off: 'none', high: 'high' }),
+    JSON.stringify(calls.mutations))
+  check('43 manage: the route identity rides the same write',
+    eq(calls.mutations[0]?.[1]?.slice(1, 5), [
+      { op: 'set', path: ['api'], value: 'openai-completions' },
+      { op: 'set', path: ['baseURL'], value: 'https://opencode.ai/zen/go/v1' },
+      { op: 'set', path: ['apiKeyEnv'], value: 'OPENCODE_GO_API_KEY' },
+      { op: 'set', path: ['displayName'], value: 'OpenCode Go (live)' },
+    ]), JSON.stringify(calls.mutations[0]?.[1]))
+  check('43 manage: the vendor routing header is generated for the declared route',
+    UUID.test(sessionHeaderOp(calls.mutations[0]?.[1])?.value?.['x-opencode-session'] ?? ''),
+    JSON.stringify(sessionHeaderOp(calls.mutations[0]?.[1])))
+  check('43 manage: the catalog route profile is untouched',
+    calls.profiles.length === 0 && calls.credentials.length === 0,
+    JSON.stringify({ profiles: calls.profiles, credentials: calls.credentials }))
+  check('43 manage: transcript reports the enabled set',
+    calls.pushed.some(entry => entry.title === '/provider'
+      && entry.lines[0] === t('provider-sync-transcript-route', { route: 'opencode-go', derived: 'opencode-go-live, opencode-go-live-anthropic' })
+      && entry.lines[1].includes('longcat-2.5-preview-free')),
+    JSON.stringify(calls.pushed))
+  check('43 manage: success toast counts the enabled set',
+    calls.notifications.some(n => n.color === 'success'
+      && n.text === t('provider-sync-success', {
+        route: 'opencode-go',
+        derived: 'opencode-go-live, opencode-go-live-anthropic',
+        n: 1,
+        added: 1,
+        removed: 0,
+      })),
+    JSON.stringify(calls.notifications))
+}
+
+// 43b. Without the vendor catalog (models.dev unreachable) the same pass still
+// works: rows say so, entries stay bare, and the user is told.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['longcat-2.5-preview-free'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    vendorCatalog: null,
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'longcat-2.5-preview-free' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  const written = calls.mutations[0]?.[1]?.[0]?.value ?? []
+  check('43b manage without metadata: outcome synced with a bare entry',
+    outcome === 'synced' && eq(written, [{ id: 'longcat-2.5-preview-free' }]),
+    JSON.stringify({ outcome, mutations: calls.mutations }))
+  check('43b manage without metadata: the routing header still lands',
+    UUID.test(sessionHeaderOp(calls.mutations[0]?.[1])?.value?.['x-opencode-session'] ?? ''),
+    JSON.stringify(sessionHeaderOp(calls.mutations[0]?.[1])))
+  check('43b manage without metadata: the row and the toast say so',
+    calls.optionDescriptions['sync-models']?.['longcat-2.5-preview-free'] === t('provider-sync-row-no-meta')
+      && calls.notifications.some(n => n.color === 'warning' && n.text === t('provider-sync-meta-unavailable')),
+    JSON.stringify({ rows: calls.optionDescriptions['sync-models'], notifications: calls.notifications }))
+}
+
+// 43c. A Claude id splits to the anthropic derived route: the vendor serves
+// `claude-*` over anthropic-messages only, and an openai-completions request
+// for it fails the first turn with 400 ModelProtocolUnsupported.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['claude-haiku-5-5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'claude-haiku-5-5' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('43c claude split: outcome synced', outcome === 'synced', outcome)
+  check('43c claude split: the row notes its anthropic-only routing',
+    (calls.optionDescriptions['sync-models']?.['claude-haiku-5-5'] ?? '').includes(t('provider-sync-row-anthropic')),
+    JSON.stringify(calls.optionDescriptions['sync-models']))
+  const anthropicMutation = calls.mutations.find(([route]) => route === 'opencode-go-live-anthropic')
+  check('43c claude split: the anthropic derived route carries the Claude id',
+    calls.mutations.length === 1 && anthropicMutation !== undefined
+      && anthropicMutation[1].find(op => op.path.join('.') === 'models')?.value?.[0]?.id === 'claude-haiku-5-5',
+    JSON.stringify(calls.mutations))
+  check('43c claude split: the anthropic route declares its protocol and endpoint',
+    eq(anthropicMutation?.[1]?.slice(1, 5), [
+      { op: 'set', path: ['api'], value: 'anthropic-messages' },
+      { op: 'set', path: ['baseURL'], value: 'https://opencode.ai/zen/go' },
+      { op: 'set', path: ['apiKeyEnv'], value: 'OPENCODE_GO_API_KEY' },
+      { op: 'set', path: ['displayName'], value: 'OpenCode Go (live-anthropic)' },
+    ]), JSON.stringify(anthropicMutation?.[1]))
+  check('43c claude split: the primary derived route is untouched',
+    !calls.mutations.some(([route]) => route === 'opencode-go-live')
+      && !calls.removedProfiles.includes('opencode-go-live'),
+    JSON.stringify({ mutations: calls.mutations, removed: calls.removedProfiles }))
+}
+
+// 43d. A mixed selection splits across both derived routes, with one
+// transcript line per active route.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['longcat-2.5-preview-free', 'claude-haiku-5-5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'longcat-2.5-preview-free' }, { id: 'claude-haiku-5-5' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  const byRoute = new Map(calls.mutations.map(([route, ops]) => [route, ops]))
+  check('43d mixed split: outcome synced', outcome === 'synced', outcome)
+  check('43d mixed split: each protocol lands on its own derived route',
+    calls.mutations.length === 2
+      && byRoute.get('opencode-go-live')?.find(op => op.path.join('.') === 'models')?.value?.[0]?.id === 'longcat-2.5-preview-free'
+      && byRoute.get('opencode-go-live-anthropic')?.find(op => op.path.join('.') === 'models')?.value?.[0]?.id === 'claude-haiku-5-5',
+    JSON.stringify(calls.mutations))
+  check('43d mixed split: transcript names both derived routes',
+    calls.pushed.some(entry => entry.title === '/provider'
+      && entry.lines.some(line => /^opencode-go-live[:：]\s*longcat-2\.5-preview-free$/u.test(line))
+      && entry.lines.some(line => /^opencode-go-live-anthropic[:：]\s*claude-haiku-5-5$/u.test(line))),
+    JSON.stringify(calls.pushed))
+}
+
+// 43e. A Claude id stranded on the primary route by an older build migrates
+// on the next write: the primary route drops it, the anthropic route gains it.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['claude-haiku-5-5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['claude-haiku-5-5'], modelEntries: [{ id: 'claude-haiku-5-5' }], headers: { 'x-opencode-session': 'session-abc' } },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'claude-haiku-5-5' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('43e stranded migration: outcome synced', outcome === 'synced', outcome)
+  check('43e stranded migration: the primary route is removed, the anthropic route gains the id',
+    calls.removedProfiles.includes('opencode-go-live')
+      && calls.mutations.some(([route, ops]) => route === 'opencode-go-live-anthropic'
+        && ops.find(op => op.path.join('.') === 'models')?.value?.[0]?.id === 'claude-haiku-5-5'),
+    JSON.stringify({ removed: calls.removedProfiles, mutations: calls.mutations }))
+}
+
+// 44. Un-checking an enabled model disables it, while a kept id keeps the
+// fields its stored entry states (hand-tuned values beat the catalog).
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['grok-4.5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      {
+        route: 'opencode-go-live',
+        ref: 'OPENCODE_GO_API_KEY',
+        shadowed: false,
+        isCatalog: false,
+        api: 'openai-completions',
+        baseURL: 'https://opencode.ai/zen/go/v1',
+        models: ['grok-4.5', 'longcat-2.5-preview-free'],
+        modelEntries: [{ id: 'grok-4.5', contextWindow: 1000000, compat: { supportsStore: false } }, { id: 'longcat-2.5-preview-free' }],
+      },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }, { id: 'longcat-2.5-preview-free' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  const written = calls.mutations[0]?.[1]?.[0]?.value ?? []
+  check('44 manage disable: outcome synced', outcome === 'synced', outcome)
+  check('44 manage disable: the enabled ids arrive pre-checked',
+    eq(calls.defaults['sync-models'], ['grok-4.5', 'longcat-2.5-preview-free']),
+    JSON.stringify(calls.defaults['sync-models']))
+  check('44 manage disable: the disabled id leaves, the kept entry keeps its hand-tuned field',
+    written.length === 1 && written[0].id === 'grok-4.5'
+      && written[0].contextWindow === 1000000
+      && eq(written[0].compat, { supportsStore: false })
+      && written[0].name === 'Grok 4.5'
+      && written[0].maxTokens === 500000
+      && eq(written[0].reasoningEfforts, { low: 'low', medium: 'medium', high: 'high' }),
+    JSON.stringify(written))
+  check('44 manage disable: the toast counts the change',
+    calls.notifications.some(n => n.color === 'success'
+      && n.text === t('provider-sync-success', {
+        route: 'opencode-go',
+        derived: 'opencode-go-live, opencode-go-live-anthropic',
+        n: 1,
+        added: 0,
+        removed: 1,
+      })),
+    JSON.stringify(calls.notifications))
+}
+
+// 45. Re-applying the current enabled set writes nothing — but a stored entry
+// that predates the metadata (a bare id) is enriched exactly once.
+{
+  const ENRICHED_GROK = {
+    name: 'Grok 4.5',
+    contextWindow: 500000,
+    maxTokens: 500000,
+    input: ['text', 'image'],
+    reasoningEfforts: { low: 'low', medium: 'medium', high: 'high' },
+    id: 'grok-4.5',
+  }
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['grok-4.5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], modelEntries: [ENRICHED_GROK], headers: { 'x-opencode-session': 'session-abc' } },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('45 manage no-op: outcome cancelled (nothing written)', outcome === 'cancelled', outcome)
+  check('45 manage no-op: no profile mutation', eq(calls.mutations, []), JSON.stringify(calls.mutations))
+  check('45 manage no-op: toast says it already matches',
+    calls.notifications.some(n => n.text === t('provider-sync-unchanged', { route: 'opencode-go', derived: 'opencode-go-live, opencode-go-live-anthropic' })),
+    JSON.stringify(calls.notifications))
+
+  // Same selection over a bare stored entry: the catalog fields are added once.
+  const bare = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['grok-4.5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], modelEntries: [{ id: 'grok-4.5' }] },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const bareOutcome = await runProviderWizard(bare.deps)
+  const enriched = bare.calls.mutations[0]?.[1]?.[0]?.value ?? []
+  check('45 manage enrichment: a bare entry gains the catalog fields once',
+    bareOutcome === 'synced' && enriched.length === 1 && enriched[0].id === 'grok-4.5'
+      && enriched[0].name === 'Grok 4.5' && enriched[0].contextWindow === 500000
+      && eq(enriched[0].reasoningEfforts, { low: 'low', medium: 'medium', high: 'high' }),
+    JSON.stringify({ outcome: bareOutcome, mutations: bare.calls.mutations }))
+
+  // A route written before the header existed is repaired by the next submit,
+  // and an existing routing id is never replaced.
+  const legacy = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['grok-4.5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], modelEntries: [ENRICHED_GROK] },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const legacyOutcome = await runProviderWizard(legacy.deps)
+  check('45 header repair: a missing routing header is added without touching the models',
+    legacyOutcome === 'synced'
+      && eq(legacy.calls.mutations[0]?.[1]?.[0]?.value, [ENRICHED_GROK])
+      && UUID.test(sessionHeaderOp(legacy.calls.mutations[0]?.[1])?.value?.['x-opencode-session'] ?? ''),
+    JSON.stringify({ outcome: legacyOutcome, mutations: legacy.calls.mutations }))
+
+  const kept = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['grok-4.5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], modelEntries: [ENRICHED_GROK], headers: { 'x-opencode-session': 'session-abc' } },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const keptOutcome = await runProviderWizard(kept.deps)
+  check('45 header repair: an existing routing id is reused, not regenerated',
+    keptOutcome === 'cancelled' && eq(kept.calls.mutations, []),
+    JSON.stringify({ outcome: keptOutcome, mutations: kept.calls.mutations }))
+}
+
+// 46. No resolvable key: refused by name, and no probe is attempted.
+{
+  const { deps, calls } = makeDeps({ 'action': ACTION_SYNC }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: '', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    discover: () => { throw new Error('must not probe without a key') },
+  })
+  const outcome = await runProviderWizard(deps)
+  check('46 manage without key: outcome cancelled', outcome === 'cancelled', outcome)
+  check('46 manage without key: no discovery request at all',
+    eq(calls.discoverRequests, []), JSON.stringify(calls.discoverRequests))
+  check('46 manage without key: refusal names the route',
+    calls.notifications.some(n => n.color === 'warning'
+      && n.text === t('provider-sync-no-credential', { route: 'opencode-go', derived: 'opencode-go-live' })),
+    JSON.stringify(calls.notifications))
+}
+
+// 47. The vendor listing fails: reported as failed, nothing written.
+{
+  const { deps, calls } = makeDeps({ 'action': ACTION_SYNC }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'] },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : Promise.reject(new Error('connection refused')),
+  })
+  const outcome = await runProviderWizard(deps)
+  check('47 manage offline: outcome failed', outcome === 'failed', outcome)
+  check('47 manage offline: nothing written and nothing removed',
+    eq(calls.mutations, []) && eq(calls.removedProfiles, []),
+    JSON.stringify({ mutations: calls.mutations, removed: calls.removedProfiles }))
+  check('47 manage offline: the warning names the fetch failure',
+    calls.notifications.some(n => n.color === 'warning'
+      && n.text === t('provider-sync-listing-failed', { route: 'opencode-go', derived: 'opencode-go-live' })),
+    JSON.stringify(calls.notifications))
+}
+
+// 48. Clearing every row disables everything: the derived route is retired.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: [] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5', 'longcat-2.5-preview-free'] },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }, { id: 'longcat-2.5-preview-free' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('48 manage disable-all: outcome synced', outcome === 'synced', outcome)
+  check('48 manage disable-all: the derived profile is removed',
+    eq(calls.removedProfiles, ['opencode-go-live']) && eq(calls.mutations, []),
+    JSON.stringify({ removed: calls.removedProfiles, mutations: calls.mutations }))
+  check('48 manage disable-all: transcript reports the pruned route',
+    calls.pushed.some(entry => entry.title === '/provider'
+      && entry.lines[1] === t('provider-sync-line-pruned', { n: 2 })),
+    JSON.stringify(calls.pushed))
+
+  const second = makeDeps({ 'action': ACTION_SYNC, 'sync-models': { selected: [] } }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined ? [{ id: 'glm-5.3' }] : [{ id: 'glm-5.3' }],
+  })
+  const secondOutcome = await runProviderWizard(second.deps)
+  check('48 manage disable-all: nothing enabled and no derived route means no write',
+    secondOutcome === 'cancelled'
+      && eq(second.calls.mutations, []) && eq(second.calls.removedProfiles, []),
+    JSON.stringify({ outcome: secondOutcome, mutations: second.calls.mutations }))
+}
+
+// 49. A derived route pointing at another endpoint/protocol is a human's
+// route: refused, never overwritten.
+{
+  const { deps, calls } = makeDeps({ 'action': ACTION_SYNC }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'anthropic-messages', baseURL: 'https://relay.example/v1', models: ['my-model'] },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('49 manage repurposed route: outcome cancelled', outcome === 'cancelled', outcome)
+  check('49 manage repurposed route: nothing written',
+    eq(calls.mutations, []) && eq(calls.removedProfiles, []),
+    JSON.stringify({ mutations: calls.mutations, removed: calls.removedProfiles }))
+  check('49 manage repurposed route: refusal names the derived route',
+    calls.notifications.some(n => n.color === 'warning'
+      && n.text === t('provider-sync-derived-conflict', { route: 'opencode-go', derived: 'opencode-go-live' })),
+    JSON.stringify(calls.notifications))
+}
+
+// 50. The boot pass only reports: one debug line per un-enabled and retired
+// group, never a write, silence on a no-op, and no throw when offline.
+{
+  const BOOT = options => makeDeps({}, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    ...options,
+  })
+  const pending = BOOT({
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }, { id: 'longcat-2.5-preview-free' }],
+  })
+  const lines = []
+  await reportCatalogRoutesQuietly(pending.deps.host, (message, level) => lines.push([level, message]))
+  check('50 boot report: one debug line names the un-enabled models',
+    eq(lines, [[
+      'debug',
+      'opencode-go: 2 official model(s) not enabled (grok-4.5, longcat-2.5-preview-free) — enable them from /provider',
+    ]]), JSON.stringify(lines))
+  check('50 boot report: nothing is written',
+    eq(pending.calls.mutations, []) && eq(pending.calls.removedProfiles, []),
+    JSON.stringify({ mutations: pending.calls.mutations, removed: pending.calls.removedProfiles }))
+
+  const retired = BOOT({
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5', 'longcat-2.5-preview-free'], headers: { 'x-opencode-session': 'session-abc' } },
+    ],
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const retiredLines = []
+  await reportCatalogRoutesQuietly(retired.deps.host, (message, level) => retiredLines.push([level, message]))
+  check('50 boot report: an enabled id the vendor dropped is reported',
+    eq(retiredLines, [['debug', 'opencode-go: 1 enabled model(s) the endpoint no longer advertises (longcat-2.5-preview-free)']]),
+    JSON.stringify(retiredLines))
+
+  const clean = BOOT({
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], headers: { 'x-opencode-session': 'session-abc' } },
+    ],
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const cleanLines = []
+  await reportCatalogRoutesQuietly(clean.deps.host, (message, level) => cleanLines.push([level, message]))
+  check('50 boot report: an in-sync route is silent', eq(cleanLines, []), JSON.stringify(cleanLines))
+
+  const offline = BOOT({
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : Promise.reject(new Error('connection refused')),
+  })
+  const offlineLines = []
+  let threw = false
+  try {
+    await reportCatalogRoutesQuietly(
+      offline.deps.host,
+      (message, level) => offlineLines.push([level, message]),
+      { signal: AbortSignal.timeout(5000) },
+    )
+  } catch {
+    threw = true
+  }
+  check('50 boot report: an offline listing neither throws nor writes',
+    threw === false && eq(offline.calls.mutations, [])
+      && eq(offlineLines, [['debug', 'opencode-go: listing-failed']])
+      && offline.calls.discoverSignals.every(signal => signal instanceof AbortSignal),
+    JSON.stringify({ threw, lines: offlineLines, mutations: offline.calls.mutations }))
+
+  // The one write the boot pass owns: a route enabled before the vendor's
+  // routing-header requirement cannot serve a request, so the header is added
+  // — without enabling or disabling a single model.
+  const legacy = BOOT({
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], modelEntries: [{ id: 'grok-4.5' }] },
+    ],
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const legacyLines = []
+  await reportCatalogRoutesQuietly(legacy.deps.host, (message, level) => legacyLines.push([level, message]))
+  check('50 boot repair: a missing routing header is added and reported',
+    legacyLines.some(([, message]) => message === 'opencode-go: added the x-opencode-session routing header to opencode-go-live')
+      && UUID.test(sessionHeaderOp(legacy.calls.mutations[0]?.[1])?.value?.['x-opencode-session'] ?? '')
+      && eq(legacy.calls.mutations[0]?.[1]?.[0]?.value, [{ id: 'grok-4.5' }]),
+    JSON.stringify({ lines: legacyLines, mutations: legacy.calls.mutations }))
+
+  const healthy = BOOT({
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], headers: { 'x-opencode-session': 'session-abc' } },
+    ],
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const healthyLines = []
+  await reportCatalogRoutesQuietly(healthy.deps.host, (message, level) => healthyLines.push([level, message]))
+  check('50 boot repair: a route that already has the header is left alone',
+    eq(healthyLines, []) && eq(healthy.calls.mutations, []),
+    JSON.stringify({ lines: healthyLines, mutations: healthy.calls.mutations }))
+}
+
+// 51. Without a configured catalog route that has a vendor listing, the
+// action question stays exactly two options (the optional-branch contract).
+{
+  const { deps, calls } = makeDeps({ 'action': ACTION_ADD, 'mode': MODE_CATALOG, 'catalog': { selected: ['deepseek'] } }, {
+    configured: [{ route: 'deepseek', ref: 'DEEPSEEK_API_KEY', shadowed: false, isCatalog: true }],
+  })
+  await runProviderWizard(deps)
+  check('51 action menu: no management option without a live target route',
+    !calls.optionDescriptions.action?.[t('provider-opt-action-sync')]
+      && Boolean(calls.optionDescriptions.action?.[t('provider-opt-action-add')]),
+    JSON.stringify(calls.optionDescriptions.action))
+
+  const syncable = makeDeps({ 'action': ACTION_SYNC, 'sync-models': { selected: [] } }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined ? [{ id: 'glm-5.3' }] : [{ id: 'glm-5.3' }],
+  })
+  await runProviderWizard(syncable.deps)
+  check('51 action menu: a live-target catalog route adds the management option',
+    syncable.calls.optionDescriptions.action?.[t('provider-opt-action-sync')] === t('provider-opt-action-sync-desc'),
+    JSON.stringify(syncable.calls.optionDescriptions.action))
+}
+
+// 52. Connecting a catalog route reports the vendor's extras (and their
+// derived route) in the model question, and enables nothing by itself.
+{
+  const { deps, calls } = makeDeps({
+    'mode': MODE_CATALOG,
+    'catalog': { selected: ['opencode-go'] },
+    'apikey': { custom: 'sk-zen' },
+    'baseurl-choice': SKIP_BASEURL,
+    'models': { selected: ['glm-5.3'] },
+    'confirm': CONFIRM_WRITE,
+    'switch': KEEP_MODEL,
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'longcat-2.5-preview-free' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('52 connect: outcome added', outcome === 'added', outcome)
+  check('52 connect: the catalog route probes its vendor listing without a stored baseURL',
+    eq(calls.discoverRequests, [
+      { provider: 'opencode-go' },
+      { baseURL: 'https://opencode.ai/zen/go/v1', api: 'openai-completions', apiKey: 'sk-zen' },
+    ]), JSON.stringify(calls.discoverRequests))
+  check('52 connect: the vendor-only ids are reported as a question detail, never as options',
+    calls.details.models === t('provider-catalog-vendor-note', {
+      n: 1,
+      models: 'longcat-2.5-preview-free',
+      derived: 'opencode-go-live, opencode-go-live-anthropic',
+    }) && calls.optionDescriptions.models?.['longcat-2.5-preview-free'] === undefined,
+    JSON.stringify({ detail: calls.details.models, options: Object.keys(calls.optionDescriptions.models ?? {}) }))
+  check('52 connect: the catalog profile pins only the selected snapshot model',
+    eq(calls.profiles, [['opencode-go', { apiKeyEnv: 'OPENCODE_GO_API_KEY', models: [{ id: 'glm-5.3' }] }]]),
+    JSON.stringify(calls.profiles))
+  check('52 connect: nothing is enabled on the derived route behind the user\'s back',
+    eq(calls.mutations, []), JSON.stringify(calls.mutations))
+}
+
+// 53. The vendor listing is unreachable while connecting: the snapshot note
+// stays, the live-probe failure is surfaced once, and the connect succeeds.
+{
+  const { deps, calls } = makeDeps({
+    'mode': MODE_CATALOG,
+    'catalog': { selected: ['opencode-go'] },
+    'apikey': { custom: 'sk-zen' },
+    'baseurl-choice': SKIP_BASEURL,
+    'models': { selected: ['glm-5.3'] },
+    'confirm': CONFIRM_WRITE,
+    'switch': KEEP_MODEL,
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : Promise.reject(new Error('connection refused')),
+  })
+  const outcome = await runProviderWizard(deps)
+  check('53 connect offline: outcome added', outcome === 'added', outcome)
+  check('53 connect offline: the question falls back to the snapshot note',
+    calls.details.models === t('provider-catalog-snapshot-note', { n: 1 }),
+    JSON.stringify(calls.details.models))
+  check('53 connect offline: the live-probe failure is surfaced',
+    calls.notifications.some(n => n.color === 'warning' && n.text === t('provider-live-fetch-failed'))
+      && eq(calls.mutations, []),
+    JSON.stringify({ notifications: calls.notifications, mutations: calls.mutations }))
+}
+
+// 54. Editing such a route's model list shows the same vendor note, and the
+// vendor-only ids stay unselectable (the catalog route cannot carry them).
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['opencode-go'] },
+    'edit-menu': MENU_MODELS,
+    'models': { selected: ['glm-5.3', 'glm-5.2'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }, { id: 'glm-5.2' }]
+      : [{ id: 'glm-5.3' }, { id: 'glm-5.2' }, { id: 'longcat-2.5-preview-free' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('54 edit with vendor extras: outcome updated', outcome === 'updated', outcome)
+  check('54 edit with vendor extras: the note names the derived route',
+    calls.details.models === t('provider-catalog-vendor-note', {
+      n: 1,
+      models: 'longcat-2.5-preview-free',
+      derived: 'opencode-go-live, opencode-go-live-anthropic',
+    }), JSON.stringify(calls.details.models))
+  check('54 edit with vendor extras: only catalog-covered ids are selectable',
+    eq(Object.keys(calls.optionDescriptions.models ?? {}).sort(), ['glm-5.2', 'glm-5.3']),
+    JSON.stringify(Object.keys(calls.optionDescriptions.models ?? {})))
+  check('54 edit with vendor extras: the catalog route keeps its own shape',
+    eq(calls.mutations, [['opencode-go', [{ op: 'set', path: ['models'], value: [{ id: 'glm-5.3' }, { id: 'glm-5.2' }] }]]]),
+    JSON.stringify(calls.mutations))
 }
 
 console.log(failed === 0 ? '\nAll provider-wizard checks passed' : `\n${failed} check(s) FAILED`)

@@ -29,13 +29,17 @@ export interface ProviderSetupHost {
   listRefUsers(ref: string, exceptRoute?: string): readonly string[]
   /** Whether a profile (any layer) already exists for the route. */
   routeExists(route: string): boolean
-  /** Interrogate a draft endpoint; the draft key is never persisted. */
+  /**
+   * Interrogate a draft endpoint; the draft key is never persisted. The
+   * optional signal cancels the request — the interactive wizard never needs
+   * one, while a background pass must not hold a socket open past its turn.
+   */
   discoverModels(request: {
     provider?: string
     baseURL?: string
     api?: string
     apiKey?: string
-  }): Promise<readonly LlmDiscoveredModel[]>
+  }, options?: { signal?: AbortSignal }): Promise<readonly LlmDiscoveredModel[]>
   /** Whether the process environment already provides this ref (shadow). */
   envShadows(ref: string): boolean
   /** The process-environment value for a shadowed ref; undefined when absent. */
@@ -103,6 +107,13 @@ export interface ConfiguredProvider {
   /** Effective profile needs custom request headers that the anonymous
    *  discovery request cannot inherit from the named route. */
   readonly hasCustomHeaders?: boolean
+  /**
+   * Resolved request headers of the route (`profile.headers`, every layer
+   * merged), string values only. A rewrite that must keep them — the derived
+   * route's sync-owned headers — reads them here instead of assuming it owns
+   * the whole object.
+   */
+  readonly headers?: Readonly<Record<string, string>>
   /** Enabled model ids; undefined means the whole catalog stays served. */
   readonly models?: readonly string[]
   /**

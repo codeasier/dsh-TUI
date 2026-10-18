@@ -1,7 +1,7 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { markChannelReadDirty } from '../../adapter/channel/read-view.js'
 import { t } from '../../i18n.js'
-import { BackgroundJobStore, formatJobDuration, type BackgroundJobState, type JobsRuntime } from '../jobs.js'
+import { BackgroundJobStore, formatJobDuration, jobTitleOf, type BackgroundJobState, type JobsRuntime } from '../jobs.js'
 import type { ChannelOwner } from './owner.js'
 import { toolCommandOf } from './projection-helpers.js'
 import type { ChannelState, ChatRow, JobControl } from './types.js'
@@ -54,7 +54,7 @@ export function createJobProjection(
     if (!attachmentCurrent()) return
     const state = getState()
     const jobs = store.snapshot()
-    state.backgroundJobs = jobs
+    state.backgroundJobs = jobs.filter(job => store.isBackground(job.id))
     for (const job of jobs) {
       if (!jobRowsByJobId.has(job.id)) {
         // A card waits while a call that could own the job is in flight: that
@@ -66,7 +66,7 @@ export function createJobProjection(
           continue
         }
       }
-      materializeRow(state, job)
+      if (store.isBackground(job.id)) materializeRow(state, job)
     }
   }
 
@@ -74,7 +74,7 @@ export function createJobProjection(
   const materializeRow = (state: Pick<ChannelState, 'rows'>, job: BackgroundJobState): void => {
     let row = jobRowsByJobId.get(job.id)
     if (!row) {
-      row = { id: deps.rowIds.value++, kind: 'job', text: job.label, job: undefined }
+      row = { id: deps.rowIds.value++, kind: 'job', text: jobTitleOf(job), job: undefined }
       jobRowsByJobId.set(job.id, row)
       state.rows.push(row)
     }
@@ -82,6 +82,7 @@ export function createJobProjection(
       id: job.id,
       kind: job.kind,
       label: job.label,
+      ...(job.description === undefined ? {} : { description: job.description }),
       status: job.status,
       ...(job.detail === undefined ? {} : { detail: job.detail }),
       ...(job.progress === undefined ? {} : { progress: job.progress }),
@@ -89,7 +90,7 @@ export function createJobProjection(
       ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
       outputLines: job.outputLines,
     }
-    row.text = job.label
+    row.text = jobTitleOf(job)
     markChannelReadDirty(row)
     markChannelReadDirty(state.rows)
   }
@@ -117,11 +118,11 @@ export function createJobProjection(
       // its result in the transcript — the shell tool's own foreground wait —
       // so there is nothing left to announce. The harness's completion
       // notices skip the same settlements.
-      if (collectedSettles.delete(job.id)) return
+      if (collectedSettles.delete(job.id) || !store.isBackground(job.id)) return
       deps.notify(
         t(job.status === 'completed' ? 'jobs-toast-completed' : job.status === 'failed' ? 'jobs-toast-failed' : 'jobs-toast-killed', {
           id: job.id,
-          label: job.label,
+          label: jobTitleOf(job),
           duration: formatJobDuration(job),
           detail: job.detail ?? '',
         }),
@@ -149,7 +150,7 @@ export function createJobProjection(
         return false
       }
       if (job !== undefined && (job.status === 'running' || job.status === 'stopping')) {
-        deps.steer(t('jobs-steer-killed', { id, label: job.label }))
+        deps.steer(t('jobs-steer-killed', { id, label: jobTitleOf(job) }))
       }
       return true
     },
@@ -185,7 +186,7 @@ export function createJobProjection(
     if (!heldJobs.delete(jobId)) return false
     if (!attachmentCurrent()) return false
     const job = store.get(jobId)
-    if (job === undefined) return false
+    if (job === undefined || !store.isBackground(jobId)) return false
     materializeRow(getState(), job)
     return true
   }
@@ -284,7 +285,8 @@ export function createJobProjection(
       // user switched back to), whose job the roster about to be read lists:
       // seed the ledger before that read decides any card.
       seedOpenCalls()
-      store.reset()
+      // Replay has already collected hand-offs for the newly adopted roster.
+      store.reset({ preservePendingStarts: true })
       refresh()
     }
     /** One kernel `output` event: pull the ring increment past our cursor. */
@@ -365,7 +367,12 @@ export function createJobProjection(
               // harness sends its completion notice), so a held card may stop
               // waiting for its call — the waiting CALLER's settlements are
               // exactly the ones that must stay hidden until the record drops.
-              else if (event.type === 'settled' && event.awaited === false) releaseHold(event.job.id)
+              else if (event.type === 'settled' && event.awaited === false) {
+                // The kernel completion notice hands this id to the model even
+                // if its originating call never returned an ack.
+                if (store.get(event.job.id) !== undefined) store.onStarted(event.job.id)
+                releaseHold(event.job.id)
+              }
               refresh()
               if (collected) collectedSettles.delete(event.job.id)
             }

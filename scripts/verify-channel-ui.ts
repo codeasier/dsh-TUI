@@ -259,7 +259,7 @@ for (const mode of ['new', 'passive-shadow', 'replay-shadow'] as const) {
   const jobs = {
     list() {
       lists += 1
-      return [{ id: 'retained-job', kind: 'bash', label: 'before dispose', status: 'running' as const, startedAt: 1 }]
+      return [{ id: 'retained-job', kind: 'pty-send', label: 'before dispose', status: 'running' as const, startedAt: 1 }]
     },
     kill() {},
     onJobsChanged(listener: () => void) {
