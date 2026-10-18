@@ -88,7 +88,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'setup', description: 'Re-run the first-run guide (API key / language + theme / model + workspace / shortcuts)' },
   { name: 'star', description: 'Star this project on GitHub (one-key via the gh CLI)' },
   { name: 'doctor', description: 'Run environment checks' },
-  { name: 'migrate', description: 'Import conversations from other coding agents (claude-code / codex / omp / zcode / grok-build)' },
+  { name: 'migrate', description: 'Import conversations from other coding agents (claude-code / codex / omp / zcode / grok-build / opencode)' },
   { name: 'init', description: 'Create AGENTS.md in the working directory' },
   { name: 'agents', description: 'Show subagents of this session' },
   { name: 'team', description: 'Agent Teams: show status, or switch on / off (the team bundle)' },
@@ -512,13 +512,21 @@ export function completeCommands(
   }
 
   const normalizedPrefix = prefix.toLowerCase()
-  return candidates.flatMap(candidate => {
-    const completionToken = matchingCompletionToken(candidate, normalizedPrefix)
-    // Root candidates are command names (strict charset); everything deeper is
-    // an argument, where a scoped package name must survive.
+  // /model 的模型子节点按三级匹配：路由/别名前缀 > 模型 ID 前缀 > 子序列模糊
+  // （fzf 风格，字符按序出现即可，`dsv4.1` 命中 `volceapi/deepseek-v4.1-flash`）。
+  // 前缀命中排在模糊命中之前；同级保持目录序（stable sort）。
+  const matchModelChildren = canonicalPath.length === 1 && canonicalPath[0] === 'model'
+  const matches: { candidate: CommandCompletionNode; token: string; tier: number }[] = []
+  for (const candidate of candidates) {
+    const match = matchingCompletionToken(candidate, normalizedPrefix, matchModelChildren)
     const tokenOk = tokens.length === 0 ? isCommandCompletionToken : isArgumentCompletionToken
-    if (completionToken === undefined || !tokenOk(completionToken)) return []
-    const path = [...tokens, completionToken]
+    if (match !== undefined && tokenOk(match.token)) {
+      matches.push({ candidate, token: match.token, tier: match.tier })
+    }
+  }
+  matches.sort((a, b) => a.tier - b.tier)
+  return matches.flatMap(({ candidate, token }) => {
+    const path = [...tokens, token]
     const commandLine = `/${path.join(' ')}`
     // An example row accepts nothing of its own: Tab gets back the draft it was
     // given, and Enter runs that same line. Empty argument ⇒ the line is the
@@ -549,7 +557,39 @@ function resolveCompletionNode(
     || candidate.aliases?.some(alias => alias.toLowerCase() === normalized))
 }
 
-function matchingCompletionToken(candidate: CommandCompletionNode, prefix: string): string | undefined {
-  if (candidate.name.toLowerCase().startsWith(prefix)) return candidate.name
-  return candidate.aliases?.find(alias => alias.toLowerCase().startsWith(prefix))
+/**
+ * Match a candidate against the typed prefix. Returns the completion token to
+ * insert plus a ranking tier: 0 = route/alias prefix, 1 = model-ID prefix
+ * (/model children only), 2 = fuzzy subsequence over the whole route
+ * (/model children only). `undefined` = no match.
+ */
+function matchingCompletionToken(candidate: CommandCompletionNode, prefix: string, matchModelId: boolean): { token: string; tier: number } | undefined {
+  if (candidate.name.toLowerCase().startsWith(prefix)) return { token: candidate.name, tier: 0 }
+  const alias = candidate.aliases?.find(value => value.toLowerCase().startsWith(prefix))
+  if (alias !== undefined) return { token: alias, tier: 0 }
+  if (matchModelId) {
+    const tier = modelCompletionMatchTier(candidate.name, prefix)
+    if (tier !== undefined) return { token: candidate.name, tier }
+  }
+  return undefined
+}
+
+/** Shared model-route ranking for inline completion and the searchable picker. */
+export function modelCompletionMatchTier(route: string, query: string): number | undefined {
+  const name = route.toLowerCase()
+  const prefix = query.trim().toLowerCase()
+  if (name.startsWith(prefix)) return 0
+  if (name.slice(name.lastIndexOf('/') + 1).startsWith(prefix)) return 1
+  if (isSubsequence(prefix, name)) return 2
+  return undefined
+}
+
+/** fzf 风格子序列匹配：两侧已小写，query 的字符按顺序出现即命中。 */
+function isSubsequence(query: string, candidate: string): boolean {
+  let index = 0
+  for (const char of candidate) {
+    if (char === query[index]) index += 1
+    if (index === query.length) return true
+  }
+  return index === query.length
 }

@@ -136,7 +136,7 @@ export interface LaunchpadLayout {
   readonly tipGapRows: number
   /** 双角铭牌行（永远画：它是这一屏的底边锚点）。 */
   readonly showCorners: boolean
-  /** 输入框卡片占的行数（边框 2 + 输入 1，恒 3）。 */
+  /** 输入框卡片占的行数（边框 2 + 输入行数，单行草稿恒 3）。 */
   readonly cardRows: number
   /** 头部本体占的行数（不含 LogoV2 根盒的 marginTop）。 */
   readonly heroRows: number
@@ -152,6 +152,9 @@ export interface LaunchpadLayout {
  *   权限全拿不到时为 false，成组行矮一行）；`artRows` 是**当天真正上场的立绘**
  *   占的行数（`splashArtRows.ts` 解，缺省按像素鲸鱼 13 行）；`cornerRows` 是
  *   右下角铭牌自身的行数（第一行 + 内核数，缺省按老口径 2 行）。
+ *   inputRows 是输入框要画几行
+ *   （Shift+Enter 多行草稿，缺省 1）——行数预算与阶梯一起 +N，矮屏时立绘/
+ *   键帽行先让位，绝不把输入框挤出去。
  * @returns 该尺寸下要渲染的部件。
  */
 export function resolveLaunchpadLayout(
@@ -163,6 +166,7 @@ export function resolveLaunchpadLayout(
     font: SplashFont
     params?: boolean
     artRows?: number
+    inputRows?: number
     cornerRows?: number
   },
 ): LaunchpadLayout {
@@ -189,14 +193,15 @@ export function resolveLaunchpadLayout(
   // 头部整块（含根盒 marginTop）实际占的行数：阶梯与 totalRows 都按它算。
   const heroBlockRows = showHero ? heroRows + HERO_TOP_MARGIN : 0
 
-  // 第六版行数预算：输入框（恒 3）+ 框下成组行（参数 1 + 呼吸留白 0/1 +
+  // 第六版行数预算：输入框（边框 2 + 输入行数）+ 框下成组行（参数 1 + 呼吸留白 0/1 +
   // 键帽 1 + Tips 3）+ 双角铭牌（自身行数 + 上方留白）。撤的顺序「从最可省
   // 到最不可省」：新增的两处呼吸（词标↔输入框、入口行↔Tips）→ 参数行呼吸
   // 留白 → Tips 行本身 → 键帽行 → 立绘（**所有留白永远排在 Tips/入口行之
   // 前撤**，绝不让呼吸把输入框挤掉）。
   const paramRows = options.params === true ? PARAM_ROWS : 0
   const gapRows = paramRows > 0 ? PARAM_HINTS_GAP_ROWS : 0
-  const cardRows = CARD_ROWS
+  const inputRows = Math.max(1, Math.floor(options.inputRows ?? 1))
+  const cardRows = CARD_ROWS + (inputRows - 1)
   const cornersBlockRows = (options.cornerRows ?? DEFAULT_CORNER_ROWS) + CORNERS_TOP_GAP_ROWS
   const withArt = artRows > 0 ? artRows + 1 : 0
   const core = heroBlockRows + cardRows + paramRows + cornersBlockRows

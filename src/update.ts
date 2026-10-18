@@ -2364,6 +2364,11 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     //    must never read the shared console again — every keypress belongs to
     //    the replacement, and a resumed pump here is exactly the "restarted
     //    TUI sees dropped or swallowed input" failure (#284/#307).
+    try {
+      detachHandoffStdin(process.stdin)
+    } catch {
+      // Best effort: the child-exit listener still owns the handoff lifetime.
+    }
     let watchdogTicks = 0
     const watchdog = setInterval(() => {
       watchdogTicks += 1

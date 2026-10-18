@@ -37,7 +37,7 @@ const STATUS_BAR_KEYS = Object.keys(DEFAULT_STATUS_BAR) as (keyof StatusBarConfi
 export function normalizeToolBackground(value: unknown): ToolBackground {
   return typeof value === 'string' && TOOL_BACKGROUNDS.has(value as ToolBackground)
     ? value as ToolBackground
-    : 'none'
+    : 'subtle'
 }
 
 /** Same normalize contract as toolBackground; `auto` is the default. */
@@ -93,12 +93,11 @@ export function formatContextUsage(
 }
 
 /** Page inset per preset: `{ x }` = blank columns per side, `{ y }` = blank
- *  rows top/bottom. `normal` is the default and matches the original
- *  hard-coded inset (2 columns / 1 row). */
+ *  rows top/bottom. The default gives the reading column three cells of air. */
 export const PAGE_MARGIN_PRESETS: Readonly<Record<PageMarginMode, { readonly x: number; readonly y: number }>> = Object.freeze({
   none: { x: 0, y: 0 },
   slim: { x: 1, y: 1 },
-  normal: { x: 2, y: 1 },
+  normal: { x: 3, y: 1 },
   roomy: { x: 4, y: 2 },
 })
 

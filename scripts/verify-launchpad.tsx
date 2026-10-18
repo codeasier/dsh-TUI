@@ -75,6 +75,7 @@ const [
   { t },
   { TooltipLayer, getTooltipSnapshot },
   { applyCompanionSkin },
+  { PageMargin },
 ] = await Promise.all([
   import('../src/ui.js'),
   import('../src/screens/Launchpad.js'),
@@ -87,6 +88,7 @@ const [
   ),
   import('../src/components/Tooltip.js'),
   import('../src/tuiDisplayPrefs.js'),
+  import('../src/components/PageMargin.js'),
 ])
 // 本脚本锁的是落地页版面/阶梯契约（WHALE_ART_ROWS=13 那套预算）：吉祥物
 // 皮肤用 store 钉在 'whale'，避免默认 deepy 把立绘换成 15 行字母格宠物
@@ -136,6 +138,8 @@ const VERSION = '9.9.9'
 const PARAM_LINE = 'glm-5.3  ·  Max  ·  Standard  ·  default'
 /** 夹具固定 bold 字面：大字 needle 与阶梯阈值都不随当天轮换的字体漂。 */
 const FONT = splashFontById('bold')
+/** 长中文草稿（Q5 的 IME 预留回归）：比一行内容区还长，逼窗口左滑。 */
+const CJK_LONG = '及光标溢出对话框问题仍未解决，且这不仅仅是启动界面，用户输入框也'
 
 /** 默认夹具与真挂载同源：缺省品牌是 DeepSeek、skin 钉在 whale，铭牌没有内核行。 */
 const atRows = (rows: number) => resolveLaunchpadLayout(COLS, rows, {
@@ -251,6 +255,16 @@ interface OpenOptions {
   kernels?: readonly KernelOption[]
   /** 接上内核区的 onKernelPick（true = 点击/Enter 记一条 'kernel' 事件）。 */
   kernelPick?: boolean
+  /** 接上立绘星标的 onStarClick（true = 记 star 事件；默认不接）。 */
+  starClick?: boolean
+  /** 内核版本（第七版双版本铭牌）。 */
+  kernelVersion?: string
+  /**
+   * 按真实挂载树包一层 PageMargin（plugin.ts: `AlternateScreen > PageMargin >
+   * Chat`）：整页铺 sessionBackground 画布。默认不包（既有断言的孤立夹具
+   * 形态）；Q 段的画布底色回归用它。
+   */
+  canvas?: boolean
 }
 
 async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
@@ -315,6 +329,7 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
         kernels={options.kernels}
         onKernelPick={options.kernelPick === true ? () => { events.push({ type: 'kernel' }) } : undefined}
         onOpenWorkspace={options.cornerWorkspace === true ? () => { events.push({ type: 'workspace' }) } : undefined}
+        onStarClick={options.starClick === true ? () => { events.push({ type: 'star' }) } : undefined}
         cwd={corners ? CWD : undefined}
         branch={corners ? BRANCH : undefined}
         tuiVersion={corners ? VERSION : undefined}
@@ -356,9 +371,9 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
 
   const app = await render(
     <ThemeProvider theme="dark">
-      {options.fullscreen === false ? <Harness /> : (
+      {options.fullscreen === false ? (options.canvas === true ? <PageMargin><Harness /></PageMargin> : <Harness />) : (
         <AlternateScreen>
-          <Harness />
+          {options.canvas === true ? <PageMargin><Harness /></PageMargin> : <Harness />}
         </AlternateScreen>
       )}
     </ThemeProvider>,
@@ -829,6 +844,268 @@ for (const brand of ['claude', 'codex'] as const) {
   s.close()
 }
 
+// ── B20+ 词级/行级编辑（2026-10：升级 0.13.0 后启动页丢掉的编辑键位回补）──
+// 与聊天页 composer（PromptInput，verify-word-jump.mjs 钉的同一批字节）完全
+// 同一套键位与语义：Ctrl/Option/Alt+←→ 与 Alt+B/F 按 Unicode 词边界跳词、
+// Ctrl+W 删光标前一个词、Ctrl+A/E/U/K 行首/行尾/删到行首/删到行尾。曾经
+// Ctrl+W/U/K 被 `composing` 兜底整段吞掉、带修饰的箭头退化成单码位移动
+// （上游 Launchpad 只做了最小单行编辑器）。
+{
+  // Ctrl+W 三种编码（legacy / CSI-u / modifyOtherKeys）删前一个词。
+  for (const [label, key] of [
+    ['legacy 0x17', '\u0017'],
+    ['CSI-u', '\u001b[119;5u'],
+    ['modifyOtherKeys', '\u001b[27;5;119~'],
+  ] as const) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hello world' })
+    await s.send(key)
+    check(`B20 Ctrl+W（${label}）删前一个词、光标落到词边界`,
+      last(ev, 'query')?.value === 'hello ' && last(ev, 'query')?.cursor === 6,
+      JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: '你好世界' })
+    await s.send('\u0017')
+    check('B21 Ctrl+W 无空格中文只删一个词（Unicode 词边界，不整段清空）',
+      last(ev, 'query')?.value === '你好', JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  // 跳词：先跳再打 X 看落点（与 verify-word-jump 的 editCase 同一条思路）。
+  for (const [label, prep, jump, expect, cursor] of [
+    ['Option+Left', '', '\u001b[1;3D', 'hello Xworld', 7],
+    ['Alt+B legacy', '', '\u001bb', 'hello Xworld', 7],
+    ['Alt+B CSI-u', '', '\u001b[98;3u', 'hello Xworld', 7],
+    ['Ctrl+Left', '', '\u001b[1;5D', 'hello Xworld', 7],
+    ['Option+Right', '\u001b[H', '\u001b[1;3C', 'hello Xworld', 7],
+    ['Alt+F CSI-u', '\u001b[H', '\u001b[102;3u', 'hello Xworld', 7],
+    ['Ctrl+Right', '\u001b[H', '\u001b[1;5C', 'hello Xworld', 7],
+  ] as const) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hello world' })
+    if (prep !== '') await s.send(prep)
+    await s.send(jump)
+    await s.send('X')
+    check(`B22 ${label} 按词跳（打 X 落在词边界）`,
+      last(ev, 'query')?.value === expect && last(ev, 'query')?.cursor === cursor,
+      JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  // 行级编辑。
+  for (const [label, prep, key, expect, cursor] of [
+    ['Ctrl+A 行首', '', '\u0001', 'Xhello world', 1],
+    ['Ctrl+E 行尾', '\u001b[H', '\u0005', 'hello worldX', 12],
+    ['Ctrl+U 删到行首', '', '\u0015', '', 0],
+    ['Ctrl+K 删到行尾', '\u001b[H', '\u000b', '', 0],
+    ['Ctrl+K 行中删到行尾', '\u001b[H\u001b[1;3C', '\u000b', 'hello ', 6],
+  ] as const) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hello world' })
+    if (prep !== '') await s.send(prep)
+    if (label.startsWith('Ctrl+A') || label.startsWith('Ctrl+E')) await s.send(key + 'X')
+    else await s.send(key)
+    check(`B23 ${label}`,
+      last(ev, 'query')?.value === expect && last(ev, 'query')?.cursor === cursor,
+      JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  {
+    // 同一批 stdin（discreteUpdates 里没有渲染）：← 与 X 必须合成——
+    // 修复前 X 会落在旧光标处（hello worldX）。
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hello world' })
+    s.input.write('\u001b[DX')
+    await settle(() => last(ev, 'query')?.value === 'hello worlXd', { timeoutMs: 2000 })
+    check('B24 同一批 stdin 里 ← + 打字按新光标合成（同步镜像）',
+      last(ev, 'query')?.value === 'hello worlXd', JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  {
+    // 焦点不在输入框（参数行/入口行）时，编辑键与退格同口径：无操作、不漏字。
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hello world' })
+    await s.send('\u001b[B') // ↓ 落到参数行
+    await settled(() => last(ev, 'focus')?.value === -2)
+    const before = ev.length
+    s.input.write('\u0017')
+    await new Promise(resolve => setTimeout(resolve, 60))
+    check('B25 焦点在参数段时 Ctrl+W 无操作（不删草稿、不漏进别处）',
+      ev.slice(before).every(e => e.type !== 'query'),
+      JSON.stringify(ev.slice(before)))
+    s.close()
+  }
+}
+
+// ── B26+ 换行与多行草稿（2026-10：Shift+Enter 在启动页是死的）──────────────
+// 与聊天页 composer（PromptInput）逐条对齐的换行契约：Shift+Enter /
+// Option+Enter（ESC CR，终端报不出 shift 时的回退）与 Ctrl+J、legacy LF 都在
+// 光标处插换行，草稿从此可以是多行、输入框跟着长高（SearchBox 的多行分支 +
+// resolveLaunchpadLayout 的 inputRows）；↑/↓ 在多行草稿里先归光标，行级键
+// （Home/End/Ctrl+A/E/U/K）只作用于本行。修复前 `isPlainReturn` 之外的
+// `key.return` 全被 `composing || key.return` 的兜底静默吞掉，Shift+Enter
+// 一个字都进不去。
+{
+  // Shift+Enter 三种编码 + Option+Enter 回退（与 verify-keys 钉的同一批字节）。
+  for (const [label, key] of [
+    ['CSI-u 13;2u', '\u001b[13;2u'],
+    ['modifyOtherKeys 27;2;13~', '\u001b[27;2;13~'],
+    ['Option+Enter（ESC CR）', '\u001b\r'],
+  ] as const) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hi' })
+    await s.send(key)
+    check(`B26 ${label} 在光标处插入换行（不再被 key.return 兜底吞掉）`,
+      last(ev, 'query')?.value === 'hi\n' && last(ev, 'query')?.cursor === 3,
+      JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  for (const [label, key] of [
+    ['Ctrl+J（CSI-u 106;5u）', '\u001b[106;5u'],
+    ['legacy LF', '\u000a'],
+  ] as const) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hi' })
+    await s.send(key)
+    check(`B27 ${label} 换行（终端报不出 Enter 修饰时的可移植回退）`,
+      last(ev, 'query')?.value === 'hi\n' && last(ev, 'query')?.cursor === 3,
+      JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  {
+    // 多行上屏：两行草稿画两行，续行按前缀宽度缩进，输入框（卡片）长高一行。
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hi' })
+    await s.send('\u001b[13;2u')
+    await s.send('yo')
+    const screen = s.screen()
+    const lines = viewportLines(s.term)
+    const firstRow = lines.findIndex(line => line.includes('╭'))
+    const lastRow = lines.findIndex(line => line.includes('╰'))
+    check('B28 多行草稿上屏：两行各占一行、续行缩进对齐，卡片高 = 边框 2 + 输入 2',
+      /│\s*❯\s*hi\s*│/u.test(lines[firstRow + 1] ?? '')
+        && /│\s{3}yo\s*│/u.test(lines[firstRow + 2] ?? '')
+        && lastRow === firstRow + 3
+        && screen.includes('hi'),
+      JSON.stringify(lines.slice(firstRow, firstRow + 4)))
+    s.close()
+  }
+  {
+    // ↑/↓ 跨行移动光标（保持显示列）：末行行尾 ↑ 到尾行行尾、再 ↓ 回来。
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hi\nyo' })
+    await s.send('\u001b[A')
+    check('B29a 多行草稿里 ↑ 把光标移到上一行同列（行尾）',
+      last(ev, 'query')?.cursor === 2, JSON.stringify(last(ev, 'query')))
+    await s.send('\u001b[B')
+    check('B29b ↓ 再回到下一行同列（草稿与光标都不动，只换行）',
+      last(ev, 'query')?.cursor === 5 && last(ev, 'query')?.value === 'hi\nyo',
+      JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  {
+    // ↑ 在多行草稿里不再落进焦点环：焦点仍在输入框（-1）。
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hi\nyo' })
+    await s.send('\u001b[A')
+    check('B29c 多行草稿里 ↑/↓ 不抢焦点环（不产生 focus 事件）',
+      ev.every(e => e.type !== 'focus'), JSON.stringify(ev))
+    s.close()
+  }
+  // 行级键在多行草稿里只作用于本行（readline 语义，与聊天页 composer 一致）。
+  for (const [label, key, expect, cursor] of [
+    ['Home 到本行行首', '\u001b[H', 'ab\ncd', 3],
+    ['Ctrl+A 到本行行首', '\u0001', 'ab\ncd', 3],
+  ] as const) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'ab\ncd' })
+    await s.send(key)
+    check(`B30 ${label}（而不是全文行首）`,
+      last(ev, 'query')?.value === expect && last(ev, 'query')?.cursor === cursor,
+      JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'ab\ncd' })
+    await s.send('\u001b[H') // 本行行首（offset 3）
+    await s.send('\u000b') // Ctrl+K：只删本行到行尾
+    check('B31a Ctrl+K 只删本行到行尾（上一行原样保留）',
+      last(ev, 'query')?.value === 'ab\n' && last(ev, 'query')?.cursor === 3,
+      JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'ab\ncd' })
+    await s.send('\u001b[H')
+    await s.send('\u0015') // Ctrl+U：只删本行行首到光标（光标已在行首 → 无操作）
+    check('B31b Ctrl+U 在行首无操作（绝不越过换行吃掉上一行）',
+      last(ev, 'query')?.value === 'ab\ncd' && last(ev, 'query')?.cursor === 3,
+      JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'ab\ncd' })
+    await s.send('\u001b[H')
+    await s.send('\u007f') // Backspace（行首）：合并两行
+    check('B31c 行首退格合并两行（ab|cd → abcd，光标落在接缝）',
+      last(ev, 'query')?.value === 'abcd' && last(ev, 'query')?.cursor === 2,
+      JSON.stringify(last(ev, 'query')))
+    s.close()
+  }
+  {
+    // 行数上限：超过 6 行按光标行开垂直窗口（第 1 行滚出视野、末行在屏上）。
+    const nine = Array.from({ length: 9 }, (_, index) => `第${index + 1}行`).join('\n')
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: nine })
+    await settled(() => s.screen().includes('第9行'))
+    const screen = s.screen()
+    const lines = viewportLines(s.term)
+    const firstRow = lines.findIndex(line => line.includes('╭'))
+    const lastRow = lines.findIndex(line => line.includes('╰'))
+    check('B32 多行草稿最多画 6 行（第 9 行草稿：末 6 行在屏、首行滚出视野）',
+      lastRow === firstRow + 7 && !screen.includes('第1行') && screen.includes('第9行'),
+      `firstRow=${firstRow} lastRow=${lastRow} has9=${screen.includes('第9行')} has1=${screen.includes('第1行')}`)
+    s.close()
+  }
+  {
+    // Tab 在多行草稿下仍走焦点环（换行只借走 ↑/↓，不动 Tab）。
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'ab\ncd' })
+    await s.send('\t')
+    check('B33 多行草稿下 Tab 仍进焦点环（焦点落到第一格）',
+      typeof last(ev, 'focus')?.value === 'number' && last(ev, 'focus')?.value !== -1,
+      JSON.stringify(last(ev, 'focus')))
+    s.close()
+  }
+  {
+    // Ctrl+L（keymap redraw 动作）：这一屏独占键盘，不在这里接就没绑——清屏
+    // 重画是屏幕被外部写花（含本次的输入法黑带）时最通用的恢复键。
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'hello' })
+    const before = s.out.writeCount
+    await s.send('\u000c')
+    await settled(() => s.out.writeCount > before + 1)
+    check('B34 Ctrl+L 触发清屏重画（不往草稿里插字、不提交）',
+      s.out.writeCount > before + 1
+        && ev.every(e => e.type !== 'query' && e.type !== 'submit')
+        && s.screen().includes('hello'),
+      `writes=${before}->${s.out.writeCount} events=${JSON.stringify(ev)}`)
+    s.close()
+  }
+  {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: '', starClick: true })
+    await s.send('\u001bs') // Alt+S（keymap star 动作）
+    check('B35 Alt+S 触发立绘星标（可点目标补上键盘路径）',
+      last(ev, 'star') !== undefined, JSON.stringify(ev))
+    s.close()
+  }
+}
+
 // ── C. 键位标签 ─────────────────────────────────────────────────────────────
 {
   const ev: Ev[] = []
@@ -1048,6 +1325,24 @@ for (const brand of ['claude', 'codex'] as const) {
   check('T4 铭牌行数随内核数走：第一行 + 3 个内核 = 比老口径 2 行多 2 行',
     budget(WHALE_ART_ROWS, 1 + 3, 80).totalRows === budget(WHALE_ART_ROWS, 2, 80).totalRows + 2,
     `kernels4=${budget(WHALE_ART_ROWS, 4, 80).totalRows} old=${budget(WHALE_ART_ROWS, 2, 80).totalRows}`)
+  // Port regression: fork multiline drafts and upstream dynamic art/kernel chrome
+  // must consume the same additive budget before the existing collapse ladder.
+  for (const artRows of [WHALE_ART_ROWS, MASCOT_ART_ROWS, PORTRAIT_ART_ROWS]) {
+    for (const cornerRows of [1, 4]) {
+      const options = { whale: true, font: FONT, params: true, artRows, cornerRows }
+      const single = resolveLaunchpadLayout(COLS, 80, { ...options, inputRows: 1 })
+      const multi = resolveLaunchpadLayout(COLS, 80, { ...options, inputRows: 6 })
+      check(`T-port multiline adds five rows with art=${artRows} corners=${cornerRows}`,
+        multi.cardRows === single.cardRows + 5 && multi.totalRows === single.totalRows + 5)
+      for (const rows of [24, 30, 38, 42]) {
+        const tight = resolveLaunchpadLayout(COLS, rows, { ...options, inputRows: 6 })
+        check(`T-port multiline respects collapse/fallback art=${artRows} corners=${cornerRows} rows=${rows}`,
+          tight.cardRows === 8 && (tight.totalRows <= rows
+            || (tight.stage === 'input-only' && !tight.showWhale && tight.showHero && tight.showCorners)),
+          JSON.stringify(tight))
+      }
+    }
+  }
   const nativeBox = fitSplashImageBox({ width: 301, height: 288 }, { width: 15, height: 34 }, { columns: 31, rows: 15 })
   check('T6 大像元启动页按原生图片占位：301×288 在15×34像元下只需21列9行',
     nativeBox.columns === 21 && nativeBox.rows === 9,
@@ -2302,6 +2597,21 @@ for (const [fullscreen, columns] of [[false, 100], [false, 50], [true, 100]] as 
   s2.close()
 }
 {
+  // 同一个 stdin read 里的 Tab 与后续文字必须组合到补全后的同步草稿。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, {
+    query: '/mo',
+    commands: [{ name: 'model', description: 'Show the active model', commandLine: '/model', replacement: '/model ' }],
+  })
+  await settle(() => s.screen().includes('/mo'))
+  await s.send('\tglm')
+  check('K4b /mo 后同批 Tab + glm 保留补全与新文字，不执行或提交',
+    await settled(() => last(ev, 'query')?.value === '/model glm'
+      && last(ev, 'query')?.cursor === '/model glm'.length
+      && last(ev, 'command') === undefined && last(ev, 'submit') === undefined), JSON.stringify(ev))
+  s.close()
+}
+{
   // Esc 只收面板（草稿不动）；收掉后 Enter 才走 onSubmit 原文。
   const ev: Ev[] = []
   const s = await openLaunchpad(ev, {
@@ -2848,6 +3158,130 @@ await checkPaletteCardGeometry(60, '窄终端（cardWidth = columns - 4）')
     last(ev2, 'action') === undefined && last(ev2, 'query') === undefined,
     JSON.stringify(ev2.slice(before2)))
   s2.close()
+}
+
+// ── Q. 画布底色（2026-10：鲸鱼 sprite 的整段 RESET 曾把页面画布打穿）──────
+// 真实挂载树是 `AlternateScreen > PageMargin > Chat`（plugin.ts）：PageMargin
+// 给整页铺 sessionBackground（暗色 #191919）。鲸鱼 sprite 的预渲染 ANSI 用
+// 整段 `\e[0m` 收尾透明像素，chalk 只给自己的闭合码（`\e[49m`）补开底色、
+// 不管整段重置——那些格子丢掉继承底色，变成「终端默认底」的洞，在用户终端
+// （OSC 11 上报 #111111）上就是英雄区那块黑矩形。修复（colorize.ts 给整段
+// 重置补开继承底色）后的不变量：
+//   Q1 画布之下**任何**格子都不是终端默认底（黑块不再）；
+//   Q2 sessionBackground 真的铺上了；
+//   Q3 选择器浮层（OverlayAbove transparent）的空白行**仍然**是终端默认底
+//      ——那是刻意的镂空（Kitty 立绘从默认背景透出，见 Launchpad 第七版注
+//      释），不得被 Q1 的口径顺手修掉。
+{
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { canvas: true })
+  await settled(() => s.screen().includes('▀▀▀▀▄  ▄▄▀▀▀'))
+  const buf = s.term.buffer.active
+  let holes = 0
+  let canvasCells = 0
+  const holeAt: string[] = []
+  for (let y = 0; y < ROWS; y++) {
+    const line = buf.getLine(y)
+    if (line === undefined) continue
+    for (let x = 0; x < COLS; x++) {
+      const cell = line.getCell(x)
+      if (cell === undefined) continue
+      if (cell.isBgDefault()) {
+        holes++
+        if (holeAt.length < 8) holeAt.push(`${x},${y}`)
+        continue
+      }
+      if (cell.isBgRGB() && cell.getBgColor() === 0x191919) canvasCells++
+    }
+  }
+  check('Q1 画布之下没有「终端默认底」的洞（鲸鱼透明像素继承 sessionBackground）',
+    holes === 0, `holes=${holes} at ${JSON.stringify(holeAt)}`)
+  check('Q2 sessionBackground 铺满整页（rgb 25,25,25 的格子过半）',
+    canvasCells > (COLS * ROWS) / 2, `canvasCells=${canvasCells}/${COLS * ROWS}`)
+  s.close()
+}
+{
+  // Q5 IME 预留（2026-10）：终端/输入法把 preedit 画在**物理光标**处、向右长，
+  // 光标贴着框右缘时合成串与它自己的光标条就溢出输入框（用户截图里的"光标
+  // 溢出对话框"）。窗口化时在光标右侧留出预留格（SearchBox 的
+  // IME_PREEDIT_RESERVE = 4），长文本也不许把光标顶到框边：这里断言渲染后
+  // 终端光标（= 声明/park 的目标，输入法就画在那儿）离框右缘至少 5 格
+  // （预留 4 + 光标自己那一格）。用 park 目标而不是反显格：反显块随闪烁相位
+  // 来去，park 目标与相位无关。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { canvas: true, query: CJK_LONG })
+  await settled(() => s.screen().includes('❯'))
+  const buf = s.term.buffer.active
+  const lines = viewportLines(s.term)
+  const top = lines.findIndex(l => l.includes('╭'))
+  let right = -1
+  for (let x = COLS - 1; x >= 0; x--) {
+    if (buf.getLine(top)?.getCell(x)?.getChars() === '╮') { right = x; break }
+  }
+  const parked = buf.cursorX
+  const slack = right - parked
+  check('Q5 长中文草稿：光标（park 目标）离框右缘 ≥5 格（给输入法合成串留位）',
+    top >= 0 && parked >= 0 && right > 0 && buf.cursorY === top + 1 && slack >= 5,
+    `caret=${parked} caretY=${buf.cursorY} top=${top} right=${right} slack=${slack}`)
+  s.close()
+}
+{
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { canvas: true, overlayPanelTall: true })
+  await settled(() => s.screen().includes('PICKER-PROBE'))
+  const lines = viewportLines(s.term)
+  const probeRow = lines.findIndex(l => l.includes('PICKER-PROBE'))
+  const cardRow = lines.findIndex(l => l.includes('╭'))
+  const overlayRows: number[] = []
+  for (let r = probeRow; r >= 0 && r < cardRow; r++) overlayRows.push(r)
+  const blankRow = overlayRows.find(r => !lines[r]!.includes('PICKER-PROBE')) ?? -1
+  const line = blankRow >= 0 ? s.term.buffer.active.getLine(blankRow) : undefined
+  // 镂空判据按浮层**自己的列区间**：空白行里 default 底的格子必须连成一段
+  // （浮层矩形），段外仍是画布底色（页面自身）。整行扫会把段外的画布也算
+  // 进来——那是页面，不是浮层。
+  const defCols: number[] = []
+  let canvasCols = 0
+  if (line !== undefined) {
+    for (let col = 0; col < COLS; col++) {
+      const cell = line.getCell(col)
+      if (cell === undefined) continue
+      if (cell.isBgDefault()) defCols.push(col)
+      else if (cell.isBgRGB() && cell.getBgColor() === 0x191919) canvasCols++
+    }
+  }
+  const contiguous = defCols.length > 0
+    && defCols.length === Math.max(...defCols) - Math.min(...defCols) + 1
+  check('Q3 浮层空白行在画布之下仍是终端默认底的镂空（段外保持画布底）',
+    blankRow >= 0 && contiguous && defCols.length >= 40 && canvasCols > 0,
+    `row=${blankRow} default=${defCols.length}@${defCols[0]}..${defCols[defCols.length - 1]} canvas=${canvasCols}`)
+  s.close()
+}
+{
+  // Q4：deepy（companion.skin 的默认值）与鲸鱼共用 renderCellRows 编码器
+  // （deepy.ts），同样以整段 RESET 收尾透明像素——默认皮肤的黑块一并钉住。
+  applyCompanionSkin('deepy')
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { canvas: true })
+  await settled(() => s.screen().includes('❯'))
+  const buf = s.term.buffer.active
+  let holes = 0
+  const holeAt: string[] = []
+  for (let y = 0; y < ROWS; y++) {
+    const line = buf.getLine(y)
+    if (line === undefined) continue
+    for (let x = 0; x < COLS; x++) {
+      const cell = line.getCell(x)
+      if (cell === undefined) continue
+      if (cell.isBgDefault()) {
+        holes++
+        if (holeAt.length < 8) holeAt.push(`${x},${y}`)
+      }
+    }
+  }
+  applyCompanionSkin('whale')
+  check('Q4 deepy（默认皮肤）画布之下同样没有「终端默认底」的洞',
+    holes === 0, `holes=${holes} at ${JSON.stringify(holeAt)}`)
+  s.close()
 }
 
 if (failures === 0) console.log(`\nverify-launchpad: ${checks} checks, all passed`)
