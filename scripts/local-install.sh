@@ -49,12 +49,38 @@ command -v dsh >/dev/null 2>&1 || { echo "找不到 dsh CLI" >&2; exit 1; }
 [ -f "$REPO/package.json" ] || { echo "不在仓库里：$REPO" >&2; exit 1; }
 [ -d "$PROFILE_DIR" ] || { echo "找不到 profile：$PROFILE_DIR" >&2; exit 1; }
 
+# Node 25 起 corepack 不再随 node 分发（mac-mini 的 v25.6.1 就是），脚本原来硬写
+# `corepack pnpm`，在这种机器上第 130 行直接 127。版本仍以 package.json 的
+# `packageManager` 为准：有 corepack 交给它；没有就用 npx 取**同一个版本**；最后才退回
+# PATH 上的 pnpm —— 那一档版本可能不同，所以显式警告，别悄悄换一套依赖树。
+pnpm_version="$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"pnpm@\([0-9][^"]*\)".*/\1/p' "$REPO/package.json" | head -1)"
+pnpm_flavor=corepack
+if ! command -v corepack >/dev/null 2>&1; then
+  if [ -n "$pnpm_version" ] && command -v npx >/dev/null 2>&1; then
+    pnpm_flavor=npx
+  elif command -v pnpm >/dev/null 2>&1; then
+    pnpm_flavor=path
+    echo "⚠ 本机没有 corepack 也没有可用的 npx，退回 PATH 上的 pnpm（版本可能不是 ${pnpm_version:-packageManager 声明值}）" >&2
+  else
+    echo "找不到 pnpm：本机没有 corepack，也没有可用的 npx / pnpm。" >&2
+    exit 1
+  fi
+fi
+pnpm_run() {
+  case "$pnpm_flavor" in
+    corepack) corepack pnpm "$@" ;;
+    npx) npx -y "pnpm@$pnpm_version" "$@" ;;
+    *) pnpm "$@" ;;
+  esac
+}
+
 version="$(node -p "require('$REPO/package.json').version")"
 branch="$(cd "$REPO" && git rev-parse --abbrev-ref HEAD)"
 echo "仓库    $REPO"
 echo "分支    $branch @ $(cd "$REPO" && git rev-parse --short HEAD)"
 echo "版本    $version"
 echo "profile $PROFILE"
+echo "pnpm    $pnpm_flavor${pnpm_version:+ @$pnpm_version}"
 echo
 
 case "$branch" in
@@ -127,7 +153,7 @@ echo "==> 1/3 编译 src/ → lib/"
 # ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY 中止（内容其实一模一样）。脚本只负责
 # 构建当前工作树，不管依赖管理；真缺依赖时 tsc 会报得比这清楚。依赖确实变了的话，
 # 自己先跑 `CI=true pnpm install --frozen-lockfile`。
-(cd "$REPO" && corepack pnpm --config.verify-deps-before-run=false compile)
+(cd "$REPO" && pnpm_run --config.verify-deps-before-run=false compile)
 
 echo
 echo "==> 2/3 打 tarball（发布形状 manifest）"
@@ -251,7 +277,7 @@ if tree_mismatch; then
   if [ -e "$entry" ] || [ -L "$entry" ]; then
     mv "$entry" "$backup/entry-before-relink"
   fi
-  (cd "$PROFILE_DIR" && CI=true corepack pnpm install --frozen-lockfile >/dev/null)
+  (cd "$PROFILE_DIR" && CI=true pnpm_run install --frozen-lockfile >/dev/null)
 fi
 # 重链后再验一遍（第一次就可能已经一致；不一致且重链无效则失败）。
 tree_mismatch && { echo "安装产物与 tarball 不一致，放弃。" >&2; exit 1; }
