@@ -131,6 +131,29 @@
 教训：**`local-install.sh` 打印的「完成」只证明 `lib` 被换掉了**。任何随包文件（`presets/`、`guide/`、
 `assets/`）的改动都要在**提交之后**重打包，并用「解包内容 vs 安装内容」比对，不能只看安装日志。
 
+## 三台机器收口（2026-10-20）
+
+修复后发现 linuxmint 与 mac-mini 是**同一个坑的另外两份**：两台的 `.worktrees/v0.16.1-patch` 都还停在
+`1bff6b56`（早于 provider 提交），所以它们的 0.16.1 tarball 同样 0 命中，preset 也同样是 10-18 11:41 的手工副本。
+三台都 ff 到 `7c84a59f` 后各自重打包重装：
+
+| 设备 | 新包 | lib / presets 摘要 | 真网关实测 |
+|---|---|---|---|
+| 本机 mac | `dsh-tui.owybWO` | `c5f9f11d84ff` / `461a530396b7` | 5.3 s / 5 源 / 1109 字 |
+| linuxmint | `dsh-tui.3oDMEV` | 同上 | 4.1 s / 5 源 |
+| mac-mini | `dsh-tui.2aQMgL` | 同上 | 6.0 s / 5 源 / 1244 字 |
+
+环境坑（下次直接照做）：
+
+- **非登录 shell 里 `local-install.sh` 会因缺 `pnpm` 失败**：linuxmint 的 pnpm 在 `~/.local/bin`，ssh 非交互
+  PATH 里没有，表现为 `dsh: pnpm was not found`（exit 127），此时脚本会**回滚并把 manifest 指回旧包**，
+  不会留半装状态。修法：`PATH="$HOME/.local/bin:$PATH" sh scripts/local-install.sh`。
+- **Node 25 不再随附 corepack**：mac-mini 的 `node -v` 是 v25.6.1，`corepack` 不存在，脚本第 130 行直接 127。
+  本次用一次性垫片跑通（不落地）：`/tmp/cp-shim/corepack` → `exec npx -y pnpm@11.21.0 "$@"`（去掉首个 `pnpm` 参数），
+  再 `PATH=/tmp/cp-shim:$PATH sh scripts/local-install.sh`。**长期要么给该机装回 corepack，要么给脚本加
+  「无 corepack 时回退 PATH 上的 pnpm」——但该机 pnpm 是 10.30.3，与 `packageManager: pnpm@11.21.0` 不一致，
+  回退前应校验版本。**
+
 ## 新机器复刻（runbook）
 
 前置：该机能装 dsh、能拿到 dsh-tui 包、`~/.config/opencode/opencode.json` 里有指向网关的 provider 条目
