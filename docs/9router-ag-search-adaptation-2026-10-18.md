@@ -144,15 +144,26 @@
 | mac-mini | `dsh-tui.2aQMgL` | 同上 | 6.0 s / 5 源 / 1244 字 |
 
 环境坑（下次直接照做）：
-
 - **非登录 shell 里 `local-install.sh` 会因缺 `pnpm` 失败**：linuxmint 的 pnpm 在 `~/.local/bin`，ssh 非交互
   PATH 里没有，表现为 `dsh: pnpm was not found`（exit 127），此时脚本会**回滚并把 manifest 指回旧包**，
   不会留半装状态。修法：`PATH="$HOME/.local/bin:$PATH" sh scripts/local-install.sh`。
-- **Node 25 不再随附 corepack**：mac-mini 的 `node -v` 是 v25.6.1，`corepack` 不存在，脚本第 130 行直接 127。
-  本次用一次性垫片跑通（不落地）：`/tmp/cp-shim/corepack` → `exec npx -y pnpm@11.21.0 "$@"`（去掉首个 `pnpm` 参数），
-  再 `PATH=/tmp/cp-shim:$PATH sh scripts/local-install.sh`。**长期要么给该机装回 corepack，要么给脚本加
-  「无 corepack 时回退 PATH 上的 pnpm」——但该机 pnpm 是 10.30.3，与 `packageManager: pnpm@11.21.0` 不一致，
-  回退前应校验版本。**
+- **Node 25 不再随附 corepack**：mac-mini 的 `node -v` 是 v25.6.1，`corepack` 不存在，脚本里硬写的
+  `corepack pnpm` 直接 127。当天先用 `/tmp` 垫片跑通，随后改成脚本自带回退（见下一段），垫片已删。
+
+### corepack 缺失的长期修法（`pnpm_run`，2026-10-20）
+
+`local-install.sh` 不再硬写 `corepack pnpm`，启动时解析一次入口并打印出来（`pnpm    corepack @11.21.0` /
+`pnpm    npx @11.21.0`）：
+
+1. 有 `corepack` → `corepack pnpm`（原行为不变，版本由 `packageManager` 钉住）；
+2. 没有 `corepack` 但有 `npx` → `npx -y pnpm@<packageManager 版本>`，**版本口径不变**；
+3. 两者都没有 → 退回 PATH 上的 `pnpm`，并警告版本可能与声明不符。
+
+mac-mini 复验（删掉垫片、直接 `sh scripts/local-install.sh`）：走 `npx @11.21.0`，exit 0，新包
+`dsh-tui.D3V8Hr`，双摘要一致，真网关 8.6 s / 5 源。开发机同步重装到 `dsh-tui.BSJzF6`（仍走 corepack 分支）。
+
+为什么不直接用 mac-mini PATH 上的 pnpm 10.30.3：`packageManager` 钉的是 `pnpm@11.21.0`，跨大版本换依赖树会让
+profile 的锁文件与实际解析悄悄漂移；`npx` 这一档就是为避开它而存在的。
 
 ## 新机器复刻（runbook）
 
