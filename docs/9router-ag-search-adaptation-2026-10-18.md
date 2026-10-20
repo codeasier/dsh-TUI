@@ -159,8 +159,10 @@
 2. 没有 `corepack` 但有 `npx` → `npx -y pnpm@<packageManager 版本>`，**版本口径不变**；
 3. 两者都没有 → 退回 PATH 上的 `pnpm`，并警告版本可能与声明不符。
 
-mac-mini 复验（删掉垫片、直接 `sh scripts/local-install.sh`）：走 `npx @11.21.0`，exit 0，新包
-`dsh-tui.D3V8Hr`，双摘要一致，真网关 8.6 s / 5 源。开发机同步重装到 `dsh-tui.BSJzF6`（仍走 corepack 分支）。
+mac-mini 复验（删掉垫片、直接 `sh scripts/local-install.sh`）：走 `npx @11.21.0`，exit 0，双摘要一致，
+真网关 8.6 s / 5 源。随后三台各重装一次对齐到本版脚本，最终包号：开发机 `dsh-tui.BSJzF6`（corepack 分支）、
+linuxmint `dsh-tui.TIF3s8`（corepack 分支，dash 下 `sh -n` + 实跑通过）、mac-mini `dsh-tui.D3V8Hr`（npx 分支），
+三台 `lib` / `presets` 摘要仍是 `c5f9f11d84ff` / `461a530396b7`。
 
 为什么不直接用 mac-mini PATH 上的 pnpm 10.30.3：`packageManager` 钉的是 `pnpm@11.21.0`，跨大版本换依赖树会让
 profile 的锁文件与实际解析悄悄漂移；`npx` 这一档就是为避开它而存在的。
