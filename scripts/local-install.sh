@@ -194,15 +194,20 @@ if [ -e "$entry" ] || [ -L "$entry" ]; then
   mv "$entry" "$backup/entry-before-add"
 fi
 dsh plugin --profile "$PROFILE" add "file:$TARBALL"
-# 收口：确认解出来的真的是这次的产物（比对打包与安装后的 lib 树摘要）。不一致就重链一次
-# 再验，仍然不一致直接失败 —— 宁可炸在安装步骤，也别让 /restart 跑旧代码。
-lib_digest() {
+# 收口：确认解出来的真的是这次的产物（比对打包与安装后的 lib、presets 树摘要）。不一致就
+# 重链一次再验，仍然不一致直接失败 —— 宁可炸在安装步骤，也别让 /restart 跑旧代码。
+#
+# presets 也要比：2026-10-18 的 ag-search 就是这么漏的 —— 先 `npm pack`（10:26）、后提交
+# （11:55），于是 tarball 里根本没有 `presets/ag-search.mjs`，安装照样打印「完成」；只在
+# profile 里手塞一份临时副本撑着，下次重装就静默消失。只比 lib 时这类缺失看不出来。
+tree_digest() {
   # 不用可能吞掉 find/sha256sum 错误的 shell 管道；缺文件/读失败必须触发回滚。
-  node --input-type=module - "$1" <<'NODE'
+  node --input-type=module - "$1" "$2" <<'NODE'
 import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 const root = process.argv[2]
+const sub = process.argv[3]
 const files = []
 const walk = path => {
   for (const entry of readdirSync(join(root, path), { withFileTypes: true })) {
@@ -211,8 +216,8 @@ const walk = path => {
     else if (entry.isFile()) files.push(file)
   }
 }
-walk('lib')
-if (!files.length) throw new Error('安装产物缺少 lib 文件')
+walk(sub)
+if (!files.length) throw new Error(`安装产物缺少 ${sub} 文件`)
 const hash = createHash('sha256')
 for (const file of files.sort()) hash.update(file + '\0').update(readFileSync(join(root, file)))
 process.stdout.write(hash.digest('hex'))
@@ -220,20 +225,38 @@ NODE
 }
 tmp_unpack="$(mktemp -d)"
 tar -xzf "$TARBALL" -C "$tmp_unpack" package/lib
-want="$(lib_digest "$tmp_unpack/package")"
-rm -rf "$tmp_unpack"
-tmp_unpack=
-have="$(lib_digest "$PROFILE_DIR/node_modules/@deepseek-harness-tui/dsh-tui")"
-if [ "$want" != "$have" ]; then
-  echo "    profile 里仍是旧构建，强制重链…"
+# 老 tarball 可能没有 presets；有才比，避免把「本来就没有」误判成不一致。
+tar -xzf "$TARBALL" -C "$tmp_unpack" package/presets 2>/dev/null || true
+# 返回 0（真）表示有差异，并打印是哪棵树。
+tree_mismatch() {
+  for sub in lib presets; do
+    [ -d "$tmp_unpack/package/$sub" ] || continue
+    # 安装侧整棵缺失时 tree_digest 会直接抛错退出，这里先判成「不一致」，交给重链流程。
+    if [ ! -d "$PROFILE_DIR/node_modules/@deepseek-harness-tui/dsh-tui/$sub" ]; then
+      echo "    安装产物缺少 $sub 目录"
+      return 0
+    fi
+    want="$(tree_digest "$tmp_unpack/package" "$sub")"
+    have="$(tree_digest "$PROFILE_DIR/node_modules/@deepseek-harness-tui/dsh-tui" "$sub")"
+    if [ "$want" != "$have" ]; then
+      echo "    $sub 与 tarball 不一致（$have ≠ $want）"
+      return 0
+    fi
+    echo "    $sub 摘要一致：$(printf '%s' "$have" | cut -c1-12)…"
+  done
+  return 1
+}
+if tree_mismatch; then
+  echo "    profile 里仍是旧产物，强制重链…"
   if [ -e "$entry" ] || [ -L "$entry" ]; then
     mv "$entry" "$backup/entry-before-relink"
   fi
   (cd "$PROFILE_DIR" && CI=true corepack pnpm install --frozen-lockfile >/dev/null)
-  have="$(lib_digest "$PROFILE_DIR/node_modules/@deepseek-harness-tui/dsh-tui")"
 fi
-[ "$want" = "$have" ] || { echo "安装产物与 tarball 不一致（$have ≠ $want）" >&2; exit 1; }
-echo "    lib 摘要一致：$(printf '%s' "$have" | cut -c1-12)…"
+# 重链后再验一遍（第一次就可能已经一致；不一致且重链无效则失败）。
+tree_mismatch && { echo "安装产物与 tarball 不一致，放弃。" >&2; exit 1; }
+rm -rf "$tmp_unpack"
+tmp_unpack=
 committed=1
 
 echo
