@@ -9,6 +9,7 @@ import { isMathBlockToken, isMathToken } from '../terminal-utils/math.js'
 import { getMathRendering, subscribeMathRendering } from '../tuiDisplayPrefs.js'
 import { MarkdownTable } from './MarkdownTable.js'
 import { CodeBlockFrame } from './CodeBlockFrame.js'
+import { MarkdownCopyButton } from './MarkdownCopyButton.js'
 import { MermaidDiagram } from './MermaidDiagram.js'
 import { InlineMathParagraph } from './InlineMathParagraph.js'
 import { MathBlock } from './MathBlock.js'
@@ -189,7 +190,8 @@ function renderTokensToNodes(
     if (token.type === 'table') {
       flushAnsiText()
       nodes.push(
-        <Box key={nodes.length} marginTop={gap}>
+        <Box key={nodes.length} marginTop={gap} flexDirection="column">
+          <MarkdownCopyButton token={token as Tokens.Table} />
           <MarkdownTable token={token as Tokens.Table} highlight={highlight} />
         </Box>,
       )
@@ -217,6 +219,7 @@ function renderTokensToNodes(
       nodes.push(
         <Box key={nodes.length} marginTop={gap} flexDirection="column">
           <CodeBlockFrame token={token as Tokens.Code} highlight={highlight} dimColor={dimColor} />
+          <MarkdownCopyButton token={token as Tokens.Code} />
         </Box>,
       )
     } else {

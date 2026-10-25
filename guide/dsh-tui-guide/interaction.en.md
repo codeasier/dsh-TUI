@@ -660,6 +660,12 @@ In inline mode, the terminal emulator owns native scrollback and selection.
 - **`Esc`** — Cancel an active drag (or an existing selection) without copying.
 - **Single-click a message row** — Plain text rows (user/assistant) do nothing — the
   transcript is a reading surface, selection is the mouse's job there.
+- **Click `[Copy code]` / `[Copy table]`** — The button in a top-level code header copies
+  the entire body without fences; the button above a table copies its original Markdown.
+  Source indentation, blank lines and trailing spaces survive, without terminal borders or
+  visual wrapping. Streaming blocks copy the content received so far; partial text selection
+  is unchanged. Buttons hide for empty content or when a narrow column/code caption leaves
+  too little room, and are not shown in inline mode.
 - **Single-click a tool card surface** — Expand / collapse the full command and output. The title,
   preview and padding are clickable; file-path links still open the file separately.
 - **Single-click a thinking / compact summary** — Expand / collapse; the header brightens on hover.

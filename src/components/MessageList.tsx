@@ -26,6 +26,7 @@ import { TurnUsageRow } from './TurnUsageRow.js'
 import { LogoV2 } from './LogoV2.js'
 import type { Brand } from '../branding.js'
 import { StreamingMarkdown } from './StreamingMarkdown.js'
+import { MarkdownCopyContext } from './MarkdownCopyButton.js'
 import { MessageMetadata } from './messages/MessageMetadata.js'
 import { stripNarration } from '../utils/narration.js'
 import { foldLongLines } from '../utils/fold-long-lines.js'
@@ -229,6 +230,7 @@ function signatureParts(
   displayTextLen: number,
   sessionCwd: string | undefined,
   fullscreen: boolean,
+  lang: Lang,
 ): Array<string | number | boolean> {
   signatureScratch.length = 0
   // Universal height inputs: width reflows every row; kind switches height
@@ -245,13 +247,14 @@ function signatureParts(
     case 'assistant':
       // Streaming vs settled swaps renderers; Ctrl+O/per-row expand adds the
       // metadata row (model only renders expanded — keeps an idle /model
-      // switch from touching settled rows).
-      signatureScratch.push(row.streaming === true, expanded, expandedRows.has(row.id), expanded ? model : '')
+      // switch from touching settled rows). Fullscreen table-copy rows also
+      // depend on whether the localized button fits the content column.
+      signatureScratch.push(row.streaming === true, expanded, expandedRows.has(row.id), expanded ? model : '', fullscreen, fullscreen ? lang : '')
       break
     case 'reasoning':
       // thinkingFold (preview vs full), its per-row live override, and the
-      // visibility filter all change the card's height.
-      signatureScratch.push(row.streaming === true, row.thinkingOpen === true, expanded, expandedRows.has(row.id), streamViewToggledRows.has(row.id), thinkingVisible, thinkingFold)
+      // visibility filter all change the card's height, as do table-copy rows.
+      signatureScratch.push(row.streaming === true, row.thinkingOpen === true, expanded, expandedRows.has(row.id), streamViewToggledRows.has(row.id), thinkingVisible, thinkingFold, fullscreen, fullscreen ? lang : '')
       break
     case 'tool': {
       const tool = row.tool
@@ -971,6 +974,7 @@ export function MessageList({
         revealDisplayLen(row, smoothStreaming),
         sessionCwd,
         fullscreen,
+        lang,
       )
       const cachedParts = sigs.get(row.id)
       let same = false
@@ -1596,7 +1600,7 @@ export function MessageList({
   }, [registerRowRef])
 
   return (
-    <>
+    <MarkdownCopyContext.Provider value={fullscreen}>
       {(olderHistory === true || rows.some(row => row.folded)) && (
         <ClickableDivider title={t('load-earlier')} onClick={onLoadOlder} />
       )}
@@ -1697,7 +1701,7 @@ export function MessageList({
           )
         })}
       {bottomPad > 0 && <Box height={bottomPad} flexShrink={0} />}
-    </>
+    </MarkdownCopyContext.Provider>
   )
 }
 

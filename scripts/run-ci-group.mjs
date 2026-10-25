@@ -130,6 +130,9 @@ const GROUPS = {
     ['verify-markdown-blocks', ['node', 'scripts/verify-markdown-blocks.mjs']],
     ['verify-markdown-palette', ['node', 'scripts/verify-markdown-palette.mjs']],
     ['verify-code-block-caption', ['node', 'scripts/verify-code-block-caption.mjs']],
+// 整块原文复制：代码正文/表格 Markdown 经 OSC 52 保真，专用按钮不抢局部拖选，
+// 窄表格的复制行不覆盖 key/value 正文；inline 不显示不可点的按钮。
+    ['verify-markdown-copy', ['node', '--import', 'tsx/esm', 'scripts/verify-markdown-copy.tsx']],
     ['verify-hanging-wrap', ['node', '--import', 'tsx/esm', 'scripts/verify-hanging-wrap.tsx']],
     ['verify-markdown-hanging', ['node', '--import', 'tsx/esm', 'scripts/verify-markdown-hanging.tsx']],
     ['verify-text-paint-budget', ['node', '--import', 'tsx/esm', 'scripts/verify-text-paint-budget.tsx']],

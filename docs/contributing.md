@@ -355,6 +355,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 工具卡短预览、展开与截断悬停提示 | `node --import tsx/esm scripts/repro-toolcards.tsx`、`node --import tsx/esm scripts/verify-tool-tooltip-gating.tsx` |
 | 默认/自定义页边距、内容宽度与出血边栏 | `node --import tsx/esm scripts/verify-page-margin.tsx` |
 | Markdown 代码块标题（原始 info 标签、无标签围栏提示与复制边界） | `node scripts/verify-code-block-caption.mjs` |
+| Markdown 整块复制（代码正文/表格原文、鼠标入口、局部选区与 inline 边界） | `node --import tsx/esm scripts/verify-markdown-copy.tsx` |
 | Markdown 独立节点（表格、mermaid 图、公式块）、LaTeX 公式与流式分块间距 | `pnpm verify:table-layout`、`pnpm verify:mermaid-diagram`、`pnpm verify:latex-math`、`node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx` |
 | 跨进程会话占用账本（失败行为、严格读、锁回收、预约） | `pnpm verify:session-mounts` |
 | 未发送草稿的跨屏交接（快照、光标、图片绑定、归属） | `pnpm verify:composer-draft-handoff`；端到端换屏另见 `node scripts/verify-session-browser.mjs` |
