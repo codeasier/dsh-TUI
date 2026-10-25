@@ -459,6 +459,12 @@ const dict = {
   'context-skills': { zh: '技能 {{n}}', en: 'Skills {{n}}' },
   'context-tools': { zh: '工具 {{n}}', en: 'Tools {{n}}' },
 
+  // ── components/MarkdownCopyButton.tsx ───────────────────────────────
+  'markdown-copy-code': { zh: '复制代码', en: 'Copy code' },
+  'markdown-copy-table': { zh: '复制表格', en: 'Copy table' },
+  'markdown-copy-done': { zh: '已复制', en: 'Copied' },
+  'markdown-copy-failed': { zh: '复制失败', en: 'Copy failed' },
+
   // ── screens/Chat.tsx ────────────────────────────────────────────────
   'skill-unavailable': { zh: '技能 {{name}} 已不可用或未开放用户直调', en: 'Skill {{name}} is gone or not user-invocable' },
   'context-loaded': { zh: '已加载上下文', en: 'Context loaded' },

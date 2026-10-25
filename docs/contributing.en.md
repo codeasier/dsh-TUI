@@ -466,6 +466,7 @@ change, also run the closest focused script:
 | Tool-card short previews, expansion and truncated-header tooltips | `node --import tsx/esm scripts/repro-toolcards.tsx`, `node --import tsx/esm scripts/verify-tool-tooltip-gating.tsx` |
 | Default/custom page insets, content width and full-bleed gutters | `node --import tsx/esm scripts/verify-page-margin.tsx` |
 | Markdown code-block captions (original info labels, untagged fence cues and copy boundaries) | `node scripts/verify-code-block-caption.mjs` |
+| Markdown block copy (code bodies/table source, mouse actions, partial selection and inline boundary) | `node --import tsx/esm scripts/verify-markdown-copy.tsx` |
 | Standalone Markdown nodes (tables, mermaid diagrams) and streaming block spacing | `pnpm verify:table-layout`, `pnpm verify:mermaid-diagram`, `node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx` |
 | Cross-process session mount ledger (failure behavior, strict reads, lock recovery, reservations) | `pnpm verify:session-mounts` |
 | Unsent-draft handoff across screens (snapshot, cursor, image bindings, ownership) | `pnpm verify:composer-draft-handoff`; end-to-end screen switching also `node scripts/verify-session-browser.mjs` |
