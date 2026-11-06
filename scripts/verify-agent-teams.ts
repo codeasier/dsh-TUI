@@ -268,6 +268,28 @@ assert.equal(teamToolResultView('team_task_get', '{}', '{"unexpected":true}'), u
     assert.equal(cards[0]!.tool?.name, 'spawn_teammate')
     assert.equal(cards[0]!.tool?.status, 'error')
     assert.match(cards[0]!.tool?.errorText ?? '', /already used in this Team/, 'the upstream reason is on the card')
+    // A migrated tool named spawn_teammate is ordinary foreign history, even
+    // on a host that now recognizes the name as native Agent Teams delegation.
+    const importedMessage = {
+      type: 'assistant/message', seq: 39, time: 0,
+      data: {
+        turn: 1, step: 1,
+        message: { id: 'foreign-spawn', role: 'assistant',
+          source: { kind: 'model', provider: 'migrated:opencode', model: 'fixture' },
+          content: [{ type: 'tool-call', id: 'spawn-1', name: 'spawn_teammate', arguments: spawnArgs }] },
+      },
+    }
+    const foreign = createDshTranslator(deps)
+    const importedEvents = translateAll(foreign, [importedMessage, spawnCall, spawnResult(true)])
+    const importedCalls = importedEvents.filter(event => event.type === 'tool.call')
+    assert.equal(importedCalls.length, 1, 'an imported failed spawn is never reintroduced as a native spawn failure')
+    assert.notEqual(importedCalls[0]?.presentation?.card, 'subagent', 'import provenance keeps the ordinary tool card')
+    const importedView = createProjectorHarness()
+    importedView.apply(importedEvents, replaying)
+    assert.equal(importedView.state.rows.filter(row => row.kind === 'tool').length, 1, 'one imported failure card survives live and replay')
+    foreign.reset()
+    assert.equal(foreign.translateEvent(spawnCall as never).find(event => event.type === 'tool.call')?.presentation?.card,
+      'subagent', 'reset clears imported provenance before a native session reuses the call id')
     const accepted = createProjectorHarness()
     const fresh = createDshTranslator(deps)
     accepted.apply(translateAll(fresh, [spawnCall, spawnResult(false)]), replaying)
