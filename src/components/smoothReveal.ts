@@ -77,7 +77,7 @@ function safeSliceEnd(text: string, end: number): number {
 
 /** Text cursor: `text` doubles as the append basis for replacement checks. */
 type TextCursor = { text: string; revealed: number }
-/** Numeric cursor (tool-card body line counts). */
+/** Numeric cursor for unit-count consumers. */
 type CountCursor = { total: number; revealed: number }
 
 const textCursors = new Map<string, TextCursor>()
@@ -202,7 +202,7 @@ function revealTick(): void {
   }
 }
 
-/** Subscribe to reveal-frame wakeups (MessageList + tool cards). */
+/** Subscribe to reveal-frame wakeups (MessageList). */
 export function subscribeReveal(listener: () => void): () => void {
   revealListeners.add(listener)
   return () => {
@@ -274,7 +274,7 @@ export type RevealReadOptions = {
   enabled: boolean
   /**
    * Whether this content arrived "just now" (live streaming row, freshly
-   * settled row, live-created tool card). The FIRST read with active=true
+   * settled row). The FIRST read with active=true
    * creates the cursor at zero — that is what turns a one-shot non-streaming
    * delivery into a smooth paint. A first TEXT read with active=false
    * (history / replayed content) paints the whole text and registers a
@@ -415,4 +415,9 @@ export function resetRevealForTest(): void {
 /** Whether the shared scheduler currently runs (refcount assertions). */
 export function isRevealTimerRunning(): boolean {
   return revealTimer !== undefined
+}
+
+/** Active store subscriptions (long-session fanout assertions). */
+export function getRevealSubscriberCount(): number {
+  return revealListeners.size
 }

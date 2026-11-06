@@ -144,7 +144,17 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
     const secret = h.fake.request('item/tool/requestUserInput', { threadId: THREAD, turnId: turn, itemId: 'secret', isBlocking: true, questions: [{ id: 'token', header: 'Credential', question: 'Enter test secret', isSecret: true, isOther: true, options: [] }] })
     check(tag + ': secret questionnaire arrives through the real bridge', await settled(() => view().includes('Enter test secret')), view())
     await type('test-private-value')
-    check(tag + ': secret input is masked on screen and scrollback', await settled(() => (view().split('\n').filter(line => !line.trimStart().startsWith('• ')).join('').match(/•/gu)?.length ?? 0) === 18) && !screen().includes('test-private-value'), view())
+    // Scope to this question's answer region, including narrow-screen wraps;
+    // tool-card status dots and the working spinner are unrelated to masking.
+    const secretMaskCount = (): number => {
+      const visible = view()
+      const start = visible.indexOf('Enter test secret')
+      const end = visible.indexOf(t('question-hint-type'), start)
+      return start < 0 || end < 0 ? 0 : (visible.slice(start, end).match(/•/gu) ?? []).length
+    }
+    check(tag + ': secret input is masked on screen and scrollback',
+      await settled(() => secretMaskCount() === 18) && !screen().includes('test-private-value'),
+      JSON.stringify({ expectedMaskCount: 18, actualMaskCount: secretMaskCount() }) + '\n' + view())
     stdin.write('\r')
     check(tag + ': secret answer sends original bytes only to the server', JSON.stringify((await secret).result) === '{"answers":{"token":{"answers":["test-private-value"]}}}')
     await resolveLast()
