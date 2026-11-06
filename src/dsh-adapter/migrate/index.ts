@@ -2,8 +2,9 @@
  * Cross-agent conversation migration: orchestration over the official
  * persistence backend.
  *
- * Discovery is read-only against foreign stores (adapters never write their
- * source). Import goes EXCLUSIVELY through `JsonlSessionPersistence` — the
+ * Discovery does not rewrite foreign session data. SQLite may create/update
+ * coordination sidecars (notably -shm), even for browsing and dry-runs.
+ * Import goes EXCLUSIVELY through `JsonlSessionPersistence` — the
  * same plugin the retired-store migration (scripts/migrate-sessions-to-jsonl.mts)
  * writes through — so physical encoding, `projectKey`/directory layout, zstd
  * frames, atomic writes and Windows path handling are upstream's, not ours.
@@ -21,6 +22,7 @@ import { join } from 'node:path'
 import { claudeCodeAdapter } from './adapters/claude-code.js'
 import { codexAdapter } from './adapters/codex.js'
 import { ompAdapter } from './adapters/omp.js'
+import { opencodeAdapter } from './adapters/opencode.js'
 import { grokBuildAdapter } from './adapters/grok-build.js'
 import { zcodeAdapter } from './adapters/zcode.js'
 import { foreignSessionId, writeImportedSession } from './import-one.js'
@@ -32,6 +34,7 @@ export const MIGRATION_ADAPTERS: readonly MigrationAdapter[] = [
   ompAdapter,
   zcodeAdapter,
   grokBuildAdapter,
+  opencodeAdapter,
 ]
 
 /**

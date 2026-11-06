@@ -109,11 +109,17 @@ type Harness = Awaited<ReturnType<typeof mount>>
 const paste = (app: Harness, text: string) => app.stdin.write(`\x1b[200~${text}\x1b[201~`)
 function composer(app: Harness) {
   const rows = viewportLines(app.term)
-  const bottom = rows.findLastIndex(row => row.includes('╰'))
-  let top = bottom - 1
-  while (top >= 0 && !rows[top]!.includes('╭')) top -= 1
+  // The custom composer uses a heavy left rail, with one padding row at
+  // either end, rather than the upstream rounded box. Anchor on its controls
+  // so transcript rails cannot be mistaken for a mounted composer.
+  const input = rows.findLastIndex(row => row.includes('┃') && row.includes('❯') && row.includes('⛶'))
+  if (input < 0) return null
+  const rail = rows[input]!.indexOf('┃')
+  let top = input
+  let bottom = input
+  while (top > 0 && rows[top - 1]?.[rail] === '┃') top -= 1
+  while (bottom + 1 < rows.length && rows[bottom + 1]?.[rail] === '┃') bottom += 1
   const block = rows.slice(top, bottom + 1).map(row => row.trimEnd())
-  if (top < 0 || !block.some(row => row.includes('❯')) || !block.some(row => row.includes('⛶'))) return null
   // Transcript changes can move the box; compare the caret relative to it.
   return { block, caret: { x: app.term.buffer.active.cursorX, row: app.term.buffer.active.cursorY - top } }
 }
@@ -165,6 +171,8 @@ async function chatCase(fullscreen: boolean, columns: number, parked: boolean) {
     assert.equal(refs.length, 1)
     const stageId = app.fixture.staged[0]!
     const before = composer(app)
+    const beforeText = app.controller.current?.text()
+    assert.ok(beforeText?.includes(TOKEN), 'controller retains the image token')
     await fence(app, 'CONTROL-FRAME')
     assert.deepEqual(composer(app), before, `${label}: neutral render`)
     if (parked) {
@@ -182,6 +190,7 @@ async function chatCase(fullscreen: boolean, columns: number, parked: boolean) {
     await wait('new model painted', () => screenHas(app.term, MODEL_AFTER))
     await fence(app, 'POST-SWITCH-FRAME')
     assert.deepEqual(composer(app), before, `${label}: text and caret survive`)
+    assert.equal(app.controller.current?.text(), beforeText, 'complete draft text survives, including offscreen content')
     assert.deepEqual(images(), refs, 'draft keeps its original image capability')
     assert.equal(app.ui.hasStagedImage(stageId), true)
     assert.equal(tokenIsChip(app), true, 'image remains bound after model switch')

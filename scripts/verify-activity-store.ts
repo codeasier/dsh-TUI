@@ -379,12 +379,16 @@ function fakeRegistry(): ProjectionRegistryLike & {
 
 // ── 10. the REAL registry + REAL projection re-render on read ───────────────
 {
-  const [{ Context }, SessionProjectionRegistry, { Session }, { createActivityProjection }] = await Promise.all([
+  const [{ Context }, SessionProjectionRegistry, { Session }, { createActivityProjection }, { setLangOverride }] = await Promise.all([
     import('@deepseek-ai/cordis'),
     import('@deepseek-ai/dsh-session-projection'),
     import('@deepseek-ai/dsh-session'),
     import('dsh-working-activity/src/projection.ts'),
+    import('dsh-working-activity/src/lang.ts'),
   ])
+  // The projection's lang supplier labels its wire metadata; the tracker
+  // renders copy through the plugin resolver, which needs its own test pin.
+  setLangOverride('zh')
   const ctx = new Context()
   await ctx.plugin(SessionProjectionRegistry.default)
   const registry = ctx.get('sessionProjections') as ProjectionRegistryLike & {
@@ -407,7 +411,7 @@ function fakeRegistry(): ProjectionRegistryLike & {
   store.seed(session)
   const elapsed = (value: ActivityView | undefined): number => {
     const match = /总(\d+)s/u.exec(value?.line ?? '')
-    assert.ok(match !== undefined, `the line carries elapsed time (got: ${value?.line ?? 'none'})`)
+    assert.ok(match !== null, `the line carries elapsed time (got: ${value?.line ?? 'none'})`)
     assert.equal(value?.live, true, 'a running turn counts time')
     return Number(match[1])
   }
@@ -417,6 +421,7 @@ function fakeRegistry(): ProjectionRegistryLike & {
   store.seed(session)
   const second = elapsed(store.get(String(session.id)))
   assert.ok(second > first, `a re-read advances the elapsed text (总${first}s → 总${second}s)`)
+  setLangOverride('auto')
 }
 
 // ── 11. user preferences reach the mounted plugin config ────────────────────
