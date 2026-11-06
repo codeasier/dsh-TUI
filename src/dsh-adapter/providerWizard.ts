@@ -21,6 +21,7 @@ export type { ProviderSetupHost, CatalogProviderCandidate, ConfiguredProvider, P
 
 import { t } from '../i18n.js'
 import {
+  catalogConnectionOverridden,
   catalogLiveTarget,
   derivedCatalogRoutes,
   inspectCatalogRoutes,
@@ -502,6 +503,9 @@ async function runAddFlow(
     route = await promptRouteId(ask, notify)
     if (route === '') return 'cancelled'
   }
+  // Bind the draft to the connection the user selected before asking for its
+  // key. Removing a relay while either prompt is open must not retarget it.
+  const hadConnectionOverrides = isCatalog && catalogConnectionUnverified(host, route)
 
   // ── 3. API key (own batch so redact covers exactly the secret) ─────
   const ref = deriveKeyRef(route)
@@ -549,6 +553,7 @@ async function runAddFlow(
   notify(t('provider-discovery-running'))
   const discovery = await discoverRouteModels(host, {
     ...(isCatalog ? { provider: route } : {}),
+    ...(hadConnectionOverrides ? { hasRoutingOverrides: true } : {}),
     ...(baseURL !== undefined && baseURL !== '' ? { baseURL } : {}),
     ...(api !== undefined ? { api } : {}),
     ...(apiKey !== undefined && apiKey !== '' ? { apiKey } : {}),
@@ -968,6 +973,7 @@ async function editModelList(
     ...(isCatalog ? { provider: provider.route } : {}),
     ...(provider.baseURL !== undefined ? { baseURL: provider.baseURL } : {}),
     ...(provider.api !== undefined ? { api: provider.api } : {}),
+    ...(provider.hasRoutingOverrides ? { hasRoutingOverrides: true } : {}),
     ...(provider.hasCustomHeaders ? { hasCustomHeaders: true } : {}),
     ...(key !== undefined ? { apiKey: key } : {}),
   })
@@ -1397,6 +1403,7 @@ export type RouteDiscoveryReason =
   | 'no-base-url'
   | 'unsupported-catalog'
   | 'custom-headers'
+  | 'connection-overridden'
 
 /** One route-model discovery pass, ready for the selection panel. */
 export interface RouteDiscovery {
@@ -1419,6 +1426,13 @@ export interface RouteDiscovery {
   readonly vendorOnly?: readonly LlmDiscoveredModel[]
   /** The derived route {@link vendorOnly} ids are enabled under. */
   readonly vendorDerived?: string
+}
+
+/** An occupied route without an editable connection cannot authorize a vendor probe. */
+function catalogConnectionUnverified(host: ProviderSetupHost, route: string): boolean {
+  const configured = host.listConfiguredProviders().find(row => row.route === route)
+  return configured === undefined ? host.routeExists(route)
+    : !configured.isCatalog || catalogConnectionOverridden(configured)
 }
 
 /**
@@ -1450,9 +1464,21 @@ async function discoverRouteModels(
     baseURL?: string
     api?: string
     apiKey?: string
+    hasRoutingOverrides?: boolean
     hasCustomHeaders?: boolean
   },
 ): Promise<RouteDiscovery> {
+  const provider = draft.provider
+  const target = provider === undefined ? undefined : catalogLiveTarget(provider)
+  const connectionOverridden = (): boolean => {
+    if (provider === undefined) return false
+    return draft.hasRoutingOverrides === true || (draft.api !== undefined && draft.api !== '')
+      || catalogConnectionUnverified(host, provider)
+  }
+  // Capture a value, not a mutable provider row: removing a relay override
+  // during the catalog await does not authorize sending its draft key away.
+  const connectionWasOverridden = target !== undefined
+    && (draft.baseURL === undefined || draft.baseURL === '') && connectionOverridden()
   const catalogResult = draft.provider !== undefined
     ? await host.discoverModels({ provider: draft.provider }).then(
       rows => ({ rows, catalog: 'fetched' as const }),
@@ -1461,8 +1487,6 @@ async function discoverRouteModels(
     : { rows: [] as const, catalog: 'unavailable' as const }
   const catalogRows = catalogResult.rows
   const catalogIds = new Set(catalogRows.map(row => row.id))
-  const provider = draft.provider
-  const target = provider === undefined ? undefined : catalogLiveTarget(provider)
   if (draft.baseURL === undefined || draft.baseURL === '') {
     if (target === undefined || provider === undefined || draft.hasCustomHeaders) {
       return {
@@ -1471,6 +1495,19 @@ async function discoverRouteModels(
         catalog: catalogResult.catalog,
         live: 'unavailable',
         reason: 'no-base-url',
+      }
+    }
+    // A new draft may reuse a route whose effective connection belongs to a
+    // relay. Recheck after the catalog await, before its typed key can reach
+    // the fixed vendor URL. An inherited-only route is occupied but cannot
+    // prove its connection here, so it is equally unsafe to probe by default.
+    if (connectionWasOverridden || connectionOverridden()) {
+      return {
+        rows: catalogRows,
+        catalogIds,
+        catalog: catalogResult.catalog,
+        live: 'unavailable',
+        reason: 'connection-overridden',
       }
     }
     const vendor = await host.discoverModels({
@@ -1552,7 +1589,8 @@ function notifyDiscoveryStatus(
   }
   if (discovery.live === 'failed') {
     notify(t('provider-live-fetch-failed'), { color: 'warning' })
-  } else if (discovery.reason === 'unsupported-catalog' || discovery.reason === 'custom-headers') {
+  } else if (discovery.reason === 'unsupported-catalog' || discovery.reason === 'custom-headers'
+    || discovery.reason === 'connection-overridden') {
     notify(t('provider-live-fetch-unavailable'), { color: 'warning' })
   }
 }

@@ -290,7 +290,7 @@ export function syncableCatalogRoutes(host: ProviderSetupHost): readonly Catalog
 }
 
 /** Catalog membership does not prove that the profile still uses the vendor's connection. */
-function catalogConnectionOverridden(provider: ConfiguredProvider): boolean {
+export function catalogConnectionOverridden(provider: ConfiguredProvider): boolean {
   return provider.hasRoutingOverrides === true
     || (provider.baseURL !== undefined && provider.baseURL !== '')
     || (provider.api !== undefined && provider.api !== '')
