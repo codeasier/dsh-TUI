@@ -206,6 +206,33 @@ assert.equal(selectTerminalImageProtocol(undefined, [61], undefined), 'none')
 assert.equal(selectTerminalImageProtocol('OK', [61, 4], 'none'), 'none')
 assert.equal(selectTerminalImageProtocol('OK', [61, 4], 'sixel'), 'sixel')
 assert.equal(selectTerminalImageProtocol(undefined, undefined, 'invalid'), 'none')
+// A terminal that paints images as cell content (see
+// terminalImagesBindToCells) cannot move or park a Kitty placement, so Sixel
+// wins there whenever it is on offer; the override still beats the rule.
+assert.equal(
+  selectTerminalImageProtocol('OK', [61, 4], undefined, true),
+  'sixel',
+  'a cell-bound terminal prefers Sixel over a Kitty layer it cannot move images with',
+)
+assert.equal(
+  selectTerminalImageProtocol('OK', [61], undefined, true),
+  'kitty',
+  'a cell-bound terminal without Sixel keeps Kitty',
+)
+assert.equal(
+  selectTerminalImageProtocol(undefined, [61, 4], undefined, true),
+  'sixel',
+)
+assert.equal(
+  selectTerminalImageProtocol(undefined, [61], undefined, true),
+  'none',
+  'a cell-bound terminal with neither protocol falls back to text',
+)
+assert.equal(
+  selectTerminalImageProtocol('OK', [61, 4], 'kitty', true),
+  'kitty',
+  'the override beats the cell-bound preference',
+)
 
 const styles = new StylePool()
 const chars = new CharPool()
@@ -276,6 +303,20 @@ jobs[2].resolve({ ...readyRaster, width: 110, height: 110 })
 await delay(20)
 assert.equal(notifications, beforeClose, 'closed preview must not be resurrected by an old job')
 manager.dispose()
+
+// Disposal can land while the worker path is awaiting the shared sharp loader.
+{
+  let repaints = 0
+  const closing = new SixelGraphicsManager(() => repaints++)
+  closing.beginFrame(40, 16)
+  closing.prepare(placement)
+  closing.reconcile(screen(), screen())
+  assert.ok(Reflect.get(closing, 'active'), 'encoding starts before disposal')
+  closing.dispose()
+  await until(() => Reflect.get(closing, 'active') === undefined, 'pending initialization settles after disposal')
+  assert.equal(Reflect.get(closing, 'worker'), undefined, 'disposal must not resurrect a worker after the await')
+  assert.equal(repaints, 0, 'disposed encoding must not request a repaint')
+}
 
 // The image raster must fit its source aspect, not pad the rounded cell box.
 for (const [sourceWidth, sourceHeight] of [[16, 9], [9, 16], [17, 11], [255, 113]]) {

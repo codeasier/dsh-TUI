@@ -28,6 +28,9 @@ import {
   recordSpacerRunEntry,
   replayCellRun,
   resetScreen,
+  ensureCopyWrap,
+  setCopyWrapSpan,
+  projectCopyWrap,
   type Screen,
   type StylePool,
   setCellAt,
@@ -245,12 +248,13 @@ type WriteOperation = {
    * means line i is a continuation of line i-1 (the `\n` before it was
    * inserted by word-wrap, not in the source). Index 0 is always false.
    * Undefined means the producer didn't track wrapping (e.g. fills,
-   * raw-ansi): the rows it paints are marked "not a continuation", since it
-   * replaced whatever was there — see the write case in `get()`.
-   * 'gap' marks a continuation whose separator space was elided because
-   * line i-1 exactly filled the width; copy re-inserts it.
+   * raw-ansi): only its painted columns invalidate earlier continuation
+   * provenance — see the write case in `get()`.
+   * 'gap' restores an elided separator when copying across the wrap.
    */
   softWrap?: SoftWrapFlag[]
+  /** The Text producer's column ownership, including short row padding. */
+  columnWidth?: number
 }
 
 type ClipOperation = {
@@ -362,6 +366,7 @@ type SoftWrapRowOperation = {
   x: number
   y: number
   contentEnd: number
+  columnWidth?: number
 }
 
 /** A region that copies as `text` (see Screen.copyRegion); paints nothing. */
@@ -645,7 +650,7 @@ export default class Output {
   private readonly imagePlacements: TerminalImagePlacement[] = []
   private readonly imageNodes = new Set<DOMElement>()
   private readonly imageBackingEnds = new Map<DOMElement, number>()
-  private readonly imageClips: Clip[] = []
+  private readonly paintClips: Clip[] = []
   private imageDecodedBytes = 0
   private previousImages: readonly TerminalImagePlacement[]
 
@@ -745,7 +750,7 @@ export default class Output {
     this.imagePlacements.length = 0
     this.imageNodes.clear()
     this.imageBackingEnds.clear()
-    this.imageClips.length = 0
+    this.paintClips.length = 0
     this.imageDecodedBytes = 0
     resetScreen(screen, width, height)
     // Bounds are enforced at insertion time (CharCache.set); nothing to
@@ -774,7 +779,16 @@ export default class Output {
    * @param n - the shift amount; positive moves content up.
    */
   shift(top: number, bottom: number, n: number, columnX?: number, columnWidth?: number): void {
-    this.operations.push({ type: 'shift', top, bottom, n, columnX, columnWidth })
+    // A screen-wide scope has no stationary flanks. Use the whole-row path
+    // so soft-wrap copy boundaries shift/clear alongside cells and noSelect;
+    // genuine partial-column shifts retain the flanks' row metadata.
+    const fullWidth = Math.max(0, Math.floor(columnX ?? 0)) === 0 &&
+      Math.floor(columnWidth ?? this.width) >= this.width
+    this.operations.push({
+      type: 'shift', top, bottom, n,
+      columnX: fullWidth ? undefined : columnX,
+      columnWidth: fullWidth ? undefined : columnWidth,
+    })
   }
 
   /**
@@ -797,20 +811,13 @@ export default class Output {
     this.operations.push({ type: 'shade', region })
   }
 
-  /**
-   * Mark a region as non-selectable (excluded from fullscreen text
-   * selection copy + highlight). Used by <NoSelect> to fence off
-   * gutters (line numbers, diff sigils). Applied AFTER blit/write so
-   * the mark wins regardless of what's blitted into the region.
-   * @param region - the region to mark.
-   */
   /** Mark row `y` as a wrap continuation (see Styles.softWrapContinuation). */
-  softWrapRow(y: number, contentEnd: number, x = 0): void {
-    this.operations.push({ type: 'softWrapRow', x, y, contentEnd })
+  softWrapRow(y: number, contentEnd: number, x = 0, columnWidth?: number): void {
+    this.operations.push({ type: 'softWrapRow', x, y, contentEnd, columnWidth })
   }
 
   selectionPane(region: Rectangle, id: string, viewport = false): void {
-    const clip = this.imageClips.at(-1)
+    const clip = this.paintClips.at(-1)
     const x = Math.ceil(Math.max(0, region.x, clip?.x1 ?? 0))
     const y = Math.ceil(Math.max(0, region.y, clip?.y1 ?? 0))
     const right = Math.floor(Math.min(this.width, region.x + region.width, clip?.x2 ?? this.width))
@@ -820,7 +827,7 @@ export default class Output {
 
   /** A later opaque surface hides both pane ownership and earlier gutters. */
   selectionOcclusion(region: Rectangle, keep: ReadonlySet<string>, source?: Screen): void {
-    const clip = this.imageClips.at(-1)
+    const clip = this.paintClips.at(-1)
     const x = Math.ceil(Math.max(0, region.x, clip?.x1 ?? 0))
     const y = Math.ceil(Math.max(0, region.y, clip?.y1 ?? 0))
     const right = Math.floor(Math.min(this.width, region.x + region.width, clip?.x2 ?? this.width))
@@ -828,11 +835,16 @@ export default class Output {
     if (right > x && bottom > y) this.operations.push({ type: 'selectionOcclusion', keep, source, region: { x, y, width: right - x, height: bottom - y } })
   }
 
+  /**
+   * Mark the visible part of a region as non-selectable (copy + highlight).
+   * Capture the current clip at enqueue time: the final mask pass runs after
+   * all blits/writes, when this region's clip has already been popped.
+   */
   noSelect(region: Rectangle): void {
     // Masks are applied after all paint operations, when the clip stack
     // has unwound. Capture the visible part now so a long decorated run
     // cannot exclude selectable cells on a neighboring surface.
-    const clip = this.imageClips.at(-1)
+    const clip = this.paintClips.at(-1)
     if (clip !== undefined) {
       const x = Math.ceil(Math.max(0, region.x, clip.x1 ?? 0))
       const y = Math.ceil(Math.max(0, region.y, clip.y1 ?? 0))
@@ -886,7 +898,7 @@ export default class Output {
     )) {
       return false
     }
-    const clip = this.imageClips.at(-1)
+    const clip = this.paintClips.at(-1)
     if (!canCrop && (
       clip !== undefined &&
       ((clip.x1 !== undefined && left < clip.x1) ||
@@ -1053,8 +1065,10 @@ export default class Output {
    * @param text - the text to write.
    * @param softWrap - per-line soft-wrap flags parallel to text.split('\n').
    * @param lines - optional pre-split physical lines, exactly text.split('\n').
+   * @param columnWidth - explicit Text ownership including its short-row padding;
+   * omitted structural writes invalidate only cells actually painted.
    */
-  write(x: number, y: number, text: string, softWrap?: SoftWrapFlag[], lines?: readonly string[]): void {
+  write(x: number, y: number, text: string, softWrap?: SoftWrapFlag[], lines?: readonly string[], columnWidth?: number): void {
     if (!text) {
       return
     }
@@ -1066,16 +1080,24 @@ export default class Output {
       text,
       softWrap,
       lines,
+      columnWidth,
     })
   }
 
   /** Whether a rectangle can contribute cells under the current paint clip. */
   isRectVisible(x: number, y: number, width: number, height: number): boolean {
-    const clip = this.imageClips.at(-1)
-    return x < Math.min(this.width, clip?.x2 ?? this.width) &&
-      x + width > Math.max(0, clip?.x1 ?? 0) &&
-      y < Math.min(this.height, clip?.y2 ?? this.height) &&
-      y + height > Math.max(0, clip?.y1 ?? 0)
+    return this.getVisibleRect(x, y, width, height) !== undefined
+  }
+
+  /** Intersect a rectangle with screen bounds and this Output's active clip. */
+  getVisibleRect(x: number, y: number, width: number, height: number): Rectangle | undefined {
+    const clip = this.paintClips.at(-1)
+    const left = Math.max(x, 0, clip?.x1 ?? 0)
+    const top = Math.max(y, 0, clip?.y1 ?? 0)
+    const right = Math.min(x + width, this.width, clip?.x2 ?? this.width)
+    const bottom = Math.min(y + height, this.height, clip?.y2 ?? this.height)
+    if (left >= right || top >= bottom) return undefined
+    return { x: left, y: top, width: right - left, height: bottom - top }
   }
 
   /**
@@ -1083,7 +1105,7 @@ export default class Output {
    * @param clip - the clip region to apply.
    */
   clip(clip: Clip): void {
-    this.imageClips.push(intersectClip(this.imageClips.at(-1), clip))
+    this.paintClips.push(intersectClip(this.paintClips.at(-1), clip))
     this.operations.push({
       type: 'clip',
       clip,
@@ -1092,7 +1114,7 @@ export default class Output {
 
   /** Pop the most recent clip region. */
   unclip(): void {
-    this.imageClips.pop()
+    this.paintClips.pop()
     this.operations.push({
       type: 'unclip',
     })
@@ -1130,7 +1152,19 @@ export default class Output {
     // can't have been painted on top of a sibling's current position.
     const absoluteClears: Rectangle[] = []
     for (const operation of this.operations) {
-      if (operation.type !== 'clear') continue
+      const type = operation.type
+      // Decide column ownership before the first paint, so a source hard
+      // whitespace row cannot be confused with structural blank padding when
+      // a later sibling activates the grid. This inspects operations, not text.
+      if (screen.copyWrap === undefined && (
+        (type === 'write' && operation.columnWidth !== undefined &&
+          (operation.x > 0 || operation.x + operation.columnWidth < screenWidth)) ||
+        (type === 'blit' && (operation.src.copyWrap !== undefined || operation.x > 0 || operation.width < screenWidth)) ||
+        (type === 'shift' && (operation.columnX !== undefined || operation.columnWidth !== undefined)) ||
+        (type === 'softWrapRow' && operation.columnWidth !== undefined &&
+          ((operation.x ?? 0) > 0 || (operation.x ?? 0) + operation.columnWidth < screenWidth))
+      )) ensureCopyWrap(screen)
+      if (type !== 'clear') continue
       const { x, y, width, height } = operation.region
       const startX = Math.max(0, x)
       const startY = Math.max(0, y)
@@ -1258,10 +1292,18 @@ export default class Output {
           // the write case above resets it when a later operation repaints that
           // row. (This used to run in a pass after every write, which let a
           // marker outlive an overlay that overwrote the row.)
-          if (operation.y > 0 && operation.y < screen.height) {
-            const contentEnd = Math.max(1, Math.abs(operation.contentEnd))
-            screen.softWrap[operation.y] = operation.contentEnd < 0 ? -contentEnd : contentEnd
-            paneWrap(operation.y, operation.x, contentEnd, screen.softWrap[operation.y]!)
+          const clip = clips.at(-1)
+          if (operation.y > 0 && operation.y < screen.height &&
+            operation.y >= (clip?.y1 ?? 0) && operation.y < (clip?.y2 ?? screen.height)) {
+            const x = operation.x ?? 0
+            setCopyWrapSpan(screen, operation.y, Math.max(x, clip?.x1 ?? 0),
+              Math.min(x + (operation.columnWidth ?? screenWidth), clip?.x2 ?? screenWidth),
+              operation.contentEnd === 0 ? 0 : (operation.contentEnd < 0 ? -1 : 1) * Math.max(1, Math.abs(operation.contentEnd)))
+            // Decoration hard breaks belong to their own columns, not the
+            // containing pane's body. Keep pane joins from its text producer.
+            if (operation.contentEnd !== 0) paneWrap(operation.y, x,
+              Math.min(x + (operation.columnWidth ?? screenWidth), clip?.x2 ?? screenWidth),
+              screen.softWrap[operation.y]!)
           }
           continue
         }
@@ -1332,7 +1374,8 @@ export default class Output {
           x = writeX
           y += from
 
-          const swBits = screen.softWrap
+          const scopeStart = Math.max(0, x, clip?.x1 ?? 0)
+          const scopeEnd = Math.min(screenWidth, operation.x + (operation.columnWidth ?? screenWidth - operation.x), clip?.x2 ?? screenWidth)
           let offsetY = 0
 
           for (const line of lines) {
@@ -1361,17 +1404,17 @@ export default class Output {
             // x+stringWidth(line) which treats tabs as width 0.
             if (softWrap) {
               const flag = softWrap[swFrom + offsetY]
-              swBits[lineY] = flag === 'gap' ? -prevContentEnd : flag ? prevContentEnd : 0
+              setCopyWrapSpan(screen, lineY, scopeStart, scopeEnd, flag === 'gap' ? -prevContentEnd : flag ? prevContentEnd : 0)
               prevContentEnd = contentEnd
             } else {
-              // Paint order: a producer that doesn't track wrapping (fills,
-              // raw-ansi, overlays) still replaces the row it paints, so a
-              // continuation marker an earlier softWrapRow set for this row
-              // is stale — keep it and a copy would glue the overlay's text
-              // onto the previous line.
-              swBits[lineY] = 0
+              // Structural fills/borders/overlays invalidate only covered
+              // cells, not an adjacent Text plane. Blank canvas padding is
+              // unowned; a real overlay glyph introduces a hard boundary.
+              setCopyWrapSpan(screen, lineY, scopeStart,
+                operation.columnWidth === undefined ? Math.min(scopeEnd, contentEnd) : scopeEnd,
+                0, operation.columnWidth !== undefined)
             }
-            paneWrap(lineY, x, contentEnd, swBits[lineY]!)
+            paneWrap(lineY, x, contentEnd, screen.softWrap[lineY]!)
             offsetY++
           }
           continue
@@ -1412,6 +1455,10 @@ export default class Output {
         }
       }
     }
+
+    // Column copy provenance follows its own pixels; excluded gutters/panes
+    // never choose the compatibility row view used by ordinary Chat copies.
+    projectCopyWrap(screen)
 
     // Blits carry the previous frame's region texts; keep only the ones a
     // cell still references, or the map grows by every redrawn formula.

@@ -14,11 +14,16 @@ export function detachHandoffStdin(
   // the handle. _read also needs blocking: an already queued refill can run
   // after readStop(). Other runtimes/embedded streams may lack the handle.
   const input = stdin as typeof stdin & {
+    read?: (size?: number) => unknown
+    resume?: () => unknown
     _read?: (size: number) => void
     _handle?: { readStop?: () => number }
   }
   if (typeof input._read === 'function') input._read = () => {}
   stdin.pause()
   input._handle?.readStop?.()
+  // Late JS readers must not consume buffered input or restart flowing mode.
+  if (typeof input.read === 'function') input.read = () => null
+  if (typeof input.resume === 'function') input.resume = () => input
   stdin.unref?.()
 }

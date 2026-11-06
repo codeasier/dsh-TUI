@@ -478,6 +478,12 @@ const dict = {
   'context-skills': { zh: '技能 {{n}}', en: 'Skills {{n}}' },
   'context-tools': { zh: '工具 {{n}}', en: 'Tools {{n}}' },
 
+  // ── components/MarkdownCopyButton.tsx ───────────────────────────────
+  'markdown-copy-code': { zh: '复制代码', en: 'Copy code' },
+  'markdown-copy-table': { zh: '复制表格', en: 'Copy table' },
+  'markdown-copy-done': { zh: '已复制', en: 'Copied' },
+  'markdown-copy-failed': { zh: '复制失败', en: 'Copy failed' },
+
   // ── screens/Chat.tsx ────────────────────────────────────────────────
   'skill-unavailable': { zh: '技能 {{name}} 已不可用或未开放用户直调', en: 'Skill {{name}} is gone or not user-invocable' },
   'context-loaded': { zh: '已加载上下文', en: 'Context loaded' },
@@ -1241,6 +1247,7 @@ const dict = {
   'help-history-nav': { zh: '↑/↓ 历史', en: '↑/↓ for history' },
   'help-move-cursor': { zh: '←/→ 移动光标', en: '←/→ to move cursor' },
   'help-word-jumps': { zh: '{{mod}}←/→ 或 Alt/Option+←/→ 按词跳转', en: '{{mod}}←/→ or Alt/Option+←/→ for word jumps' },
+  'help-delete-word': { zh: 'ctrl+w 或 Alt/Option+⌫ 删除前一词', en: 'ctrl+w or Alt/Option+⌫ delete word' },
   'help-complete-command': { zh: 'tab 补全命令', en: 'tab to complete command' },
   'help-cycle-mode': { zh: 'shift+tab 切换模式', en: 'shift+tab to cycle mode' },
   'help-open-editor': { zh: '{{key}} 打开编辑器', en: '{{key}} to open editor' },
@@ -1398,6 +1405,8 @@ const dict = {
 
   // ── components/ModelPicker.tsx / ThemePicker.tsx / ActivityPicker.tsx / EffortSlider.tsx ──
   'picker-title-model': { zh: '模型', en: 'Model' },
+  'picker-model-search-placeholder': { zh: '输入以筛选模型…', en: 'Type to filter models…' },
+  'picker-model-empty': { zh: '没有匹配的模型', en: 'No matching models' },
   'picker-group-recent': { zh: '最近使用', en: 'Recently used' },
   'hint-model-provider': { zh: '**Tab** / **Shift+Tab** 提供商', en: '**Tab** / **Shift+Tab** providers' },
   'hint-model-navigation': { zh: '**↑/↓** 模型', en: '**↑/↓** model' },
@@ -2288,6 +2297,19 @@ const dict = {
   'provider-live-fetch-unavailable': { zh: '该路由无法安全实时拉取模型，已回退到内置目录', en: 'Live model fetch is unavailable for this route — showing the installed catalog only' },
   'provider-catalog-models-only': { zh: '该 catalog 路由的协议无法确定，线上新增模型请先改用自定义端点并指定协议', en: 'This catalog route has no single known protocol; use a custom endpoint with an explicit protocol for new models' },
   'provider-catalog-snapshot-note': { zh: '下方 {{n}} 项来自内置目录快照；该路由未设置 baseURL，无法实时拉取端点模型', en: 'The {{n}} items below come from the installed catalog snapshot; this route sets no baseURL, so its endpoint cannot be probed live' },
+  'provider-catalog-vendor-note': { zh: '该路由只承载内置目录快照；官方端点另有 {{n}} 个新增模型（{{models}}）由同步写入派生路由 {{derived}}，连接后即可在 /model 选择', en: 'This route only serves the installed snapshot; the {{n}} model(s) the vendor added ({{models}}) are written by the sync into the derived route {{derived}} and become selectable in /model' },
+  'provider-q-sync-models': { zh: '勾选 {{route}} 要启用的官方新增模型', en: 'Pick the official models to enable for {{route}}' },
+  'provider-sync-row-no-meta': { zh: '厂商目录未收录该模型：启用后使用路由默认容量、纯文本输入、无思考档', en: 'Not described by the vendor catalog: enabling it keeps the route defaults (text-only input, no thinking tiers)' },
+  'provider-sync-meta-unavailable': { zh: '未取到 models.dev 元数据（离线或被拒）：本次启用的模型只带 id，容量/输入类型/思考档用路由默认', en: 'models.dev metadata unavailable (offline or refused): models enabled now carry ids only, so capacities, modalities and thinking tiers stay at the route defaults' },
+  'provider-row-meta-ctx': { zh: '上下文 {{value}}', en: 'ctx {{value}}' },
+  'provider-row-meta-out': { zh: '输出 {{value}}', en: 'out {{value}}' },
+  'provider-row-meta-input': { zh: '输入 {{value}}', en: 'input {{value}}' },
+  'provider-row-meta-effort': { zh: '思考 {{value}}', en: 'effort {{value}}' },
+  'provider-row-meta-no-reasoning': { zh: '无思考档', en: 'no reasoning' },
+  'provider-sync-row-retired': { zh: '官方已下架（仍启用）', en: 'no longer advertised (still enabled)' },
+  'provider-sync-row-anthropic': { zh: '走 anthropic-messages（派生路由 -live-anthropic）', en: 'via anthropic-messages (derived route -live-anthropic)' },
+  'provider-sync-transcript-split': { zh: '{{derived}}：{{models}}', en: '{{derived}}: {{models}}' },
+  'provider-sync-detail': { zh: '官方端点共 {{total}} 个内置目录之外的模型：已启用 {{enabled}}、未启用 {{unenabled}}。只有勾选的会启用；全部取消会移除派生路由 {{derived}}', en: 'The endpoint publishes {{total}} model(s) beyond the installed snapshot: {{enabled}} enabled, {{unenabled}} not. Only checked ids are enabled; clearing every row removes the derived route {{derived}}' },
   'provider-rollback-ok': { zh: '已回滚刚写入的密钥', en: 'Rolled back the just-written key' },
   'provider-rollback-failed': { zh: '密钥回滚失败，请手动检查 ~/.dsh/.credentials.yaml', en: 'Key rollback failed — check ~/.dsh/.credentials.yaml manually' },
   'provider-write-failed': { zh: 'provider 配置写入失败 · {{{err}}}', en: 'Failed to write the provider configuration · {{{err}}}' },
@@ -2338,12 +2360,42 @@ const dict = {
   'oauth-open-failed': { zh: '无法打开浏览器，请改为复制链接。', en: 'Could not open the browser; copy the link instead.' },
   'oauth-waiting': { zh: '等待授权…', en: 'Waiting for authorization…' },
   'oauth-choose-action': { zh: '请选择一个操作。', en: 'Choose an action.' },
+  // /fast：当前 TUI 进程的 OAuth service tier，不持久化也不改变推理强度
+  'fast-usage': { zh: '用法：/fast [toggle|on|off|status]（最多一个参数）；状态未改变。', en: 'Usage: /fast [toggle|on|off|status] (at most one argument); state unchanged.' },
+  'fast-unsupported': { zh: '/fast 不可用：当前 TUI 进程没有支持 Fast 的 OAuth 路由；service tier 未改变。', en: '/fast unavailable: no OAuth routes in the current TUI process support Fast; service tier unchanged.' },
+  'fast-cancelled': { zh: '/fast 已取消；service tier 未改变。', en: '/fast cancelled; service tier unchanged.' },
+  'fast-enabled': { zh: '开启', en: 'on' },
+  'fast-disabled': { zh: '关闭', en: 'off' },
+  'fast-provider-default': { zh: '提供方默认值', en: 'provider default' },
+  'fast-status': { zh: 'Fast 当前状态：{{state}}（实际 service tier：{{tier}}）。', en: 'Fast status: {{state}} (actual service tier: {{tier}}).' },
+  'fast-on': { zh: 'Fast 已开启（实际 service tier：{{tier}}）。', en: 'Fast is on (actual service tier: {{tier}}).' },
+  'fast-off': { zh: 'Fast 已关闭（实际 service tier：{{tier}}）。', en: 'Fast is off (actual service tier: {{tier}}).' },
+  'fast-scope': { zh: '作用于当前 TUI 进程中所有支持 Fast 的 OAuth 路由，从下一次请求起生效；不改变推理强度（effort）。仅运行时生效，不持久化；重启后恢复启动配置。', en: 'Applies to all Fast-capable OAuth routes in the current TUI process, starting with the next request; reasoning effort is unchanged. Runtime-only, not persisted; restarting restores the startup configuration.' },
   // /provider 动作层（添加/编辑；删除并入编辑菜单）
   'provider-q-action': { zh: '要做什么？', en: 'What do you want to do?' },
   'provider-opt-action-add': { zh: '添加新 provider', en: 'Add a new provider' },
   'provider-opt-action-add-desc': { zh: '内置目录或自定义 API 端点', en: 'Built-in catalog or a custom API endpoint' },
   'provider-opt-action-edit': { zh: '编辑已有 provider', en: 'Edit an existing provider' },
   'provider-opt-action-edit-desc': { zh: '修改密钥、端点、协议、模型，或删除该 provider', en: 'Change the key, endpoint, protocol, or models — or delete the provider' },
+  'provider-opt-action-sync': { zh: '管理官方新增模型', en: 'Manage official models' },
+  'provider-opt-action-sync-desc': { zh: '实时读取厂商端点，勾选要启用的新增模型（写入派生路由）', en: 'Read the vendor endpoint and pick which extra models are enabled on the derived route' },
+  // /provider 官方模型同步（catalogSync.ts）
+  'provider-q-sync-route': { zh: '选择要同步的 catalog 路由', en: 'Choose the catalog route to sync' },
+  'provider-sync-running': { zh: '正在拉取厂商官方模型列表…', en: 'Fetching the vendor model listing…' },
+  'provider-sync-cancelled': { zh: '已取消同步官方模型', en: 'Official-model sync cancelled' },
+  'provider-sync-no-route': { zh: '没有可同步的 catalog 路由：需先用「添加新 provider」配置内置 provider 与 API key', en: 'No catalog route to sync — configure a built-in provider and its API key first' },
+  'provider-sync-not-catalog': { zh: '{{route}} 不是 catalog 路由，官方列表同步只适用于内置 provider', en: '{{route}} is not a catalog route; the vendor listing is only readable for built-in providers' },
+  'provider-sync-connection-overridden': { zh: '{{route}} 使用自定义连接设置，已跳过官方列表探测，未向官方端点发送凭据。', en: '{{route}} uses custom connection settings. Official model discovery was skipped. No credentials were sent to the official endpoint.' },
+  'provider-sync-no-credential': { zh: '{{route}} 没有可解析的 API key，未同步', en: '{{route}} has no resolvable API key — not synced' },
+  'provider-sync-catalog-failed': { zh: '{{route}}：内置目录读取失败，无法判断哪些模型需要同步', en: '{{route}}: the installed catalog could not be read, so the models to sync are unknown' },
+  'provider-sync-listing-failed': { zh: '{{route}}：厂商模型列表拉取失败，本次未做任何变更', en: '{{route}}: the vendor listing could not be read — nothing was changed' },
+  'provider-sync-listing-empty': { zh: '{{route}}：厂商列表返回空，本次未做任何变更', en: '{{route}}: the vendor listing came back empty — nothing was changed' },
+  'provider-sync-derived-conflict': { zh: '派生路由 {{derived}} 的端点或协议与官方目标不一致，已跳过（不覆盖手工配置）', en: 'Derived route {{derived}} points at another endpoint or protocol — skipped rather than overwritten' },
+  'provider-sync-unchanged': { zh: '{{route}}：官方列表与派生路由 {{derived}} 一致，无需变更', en: '{{route}}: the vendor listing matches derived route {{derived}} — nothing to change' },
+  'provider-sync-success': { zh: '{{derived}} 现启用 {{n}} 个官方模型（+{{added}} / -{{removed}}）', en: '{{derived}} now enables {{n}} official model(s) (+{{added}} / -{{removed}})' },
+  'provider-sync-removed': { zh: '{{route}} 已无 catalog 之外的官方模型，派生路由 {{derived}} 已移除', en: '{{route}} has no official models beyond the installed catalog — derived route {{derived}} removed' },
+  'provider-sync-transcript-route': { zh: '同步官方模型：{{route}} → {{derived}}', en: 'Official-model sync: {{route}} → {{derived}}' },
+  'provider-sync-line-pruned': { zh: '派生路由已无模型可服务，配置已移除（原有 {{n}} 个）', en: 'The derived route had no models left to serve — its configuration was removed ({{n}} before)' },
   'provider-q-edit': { zh: '选择要编辑的 provider', en: 'Choose a provider to edit' },
   'provider-none-configured': { zh: '没有已配置的 provider，先用「添加新 provider」创建', en: 'No configured providers — create one with “Add a new provider” first' },
   'provider-row-models': { zh: '{{n}} 个模型', en: '{{n}} models' },
@@ -2428,7 +2480,7 @@ const dict = {
   'cmd-desc-reload': { zh: '重读偏好文件并立即生效' },
   'cmd-desc-settings': { zh: '查看和编辑插件设置' },
   'cmd-desc-doctor': { zh: '运行环境检查' },
-  'cmd-desc-migrate': { zh: '从其他编程代理导入对话（claude-code/codex/omp/zcode/grok-build）' },
+  'cmd-desc-migrate': { zh: '从其他编程代理导入对话（claude-code/codex/omp/zcode/grok-build/opencode）' },
   'cmd-desc-init': { zh: '在工作目录创建 AGENTS.md' },
   'cmd-desc-agents': { zh: '查看本会话的子代理' },
   'cmd-desc-team': { zh: '团队模式：团队服务运行时查看状态（开关用 /plugin enable|disable）' },
@@ -2571,6 +2623,7 @@ const dict = {
   'cmd-desc-color': { zh: '设置当前会话强调色（输入框边框与会话标签）' },
   'cmd-desc-lang': { zh: '切换界面语言（en / zh）' },
   'cmd-desc-model': { zh: '查看当前模型' },
+  'cmd-desc-fast': { zh: '切换当前 TUI 进程支持的 OAuth 路由的 Fast 优先服务（不改变推理强度，不持久化）' },
   'cmd-desc-thinking': { zh: '显示或隐藏思考过程' },
   'cmd-desc-tokens': { zh: '查看会话 token 用量' },
   // Account / policy
@@ -2652,7 +2705,7 @@ const dict = {
 
   // ── screens/Launchpad.tsx（开屏落地页：取代旧的"只有标题的空白会话"）───────
   // 落地页是"启动后第一屏"：大标题与吉祥物居中、输入框在下、再往下是
-  // 信息与快捷入口。发送首句或开始多行编辑时进入聊天页；这里的文案要短。
+  // 信息与快捷入口。发送首句后进入聊天页，多行编辑留在当前输入框；这里的文案要短。
   'launchpad-placeholder': { zh: '说点什么，或输入 / 看命令…', en: 'Say something, or type / for commands…' },
   // （launchpad-param-*-label / launchpad-param-mode-* 六键已删：2026-10 第四版
   // 参数行只画值不画字段名——用户原话"大家都知道是模型啊，不用画蛇添足"；
@@ -2665,8 +2718,8 @@ const dict = {
   // 轮换顺序 = launchpad-tip → launchpad-tip-2 → launchpad-tip-3 → 回到首条；
   // 首启那一条（launchpad-first-run）优先级最高，不参与轮换。
   'launchpad-tip-2': {
-    zh: 'Ctrl+V 直接粘贴，Shift+Enter 进入聊天页换行',
-    en: 'Ctrl+V pastes; Shift+Enter opens chat with a newline',
+    zh: 'Ctrl+V 直接粘贴，Shift+Enter 原地换行',
+    en: 'Ctrl+V pastes; Shift+Enter adds a newline here',
   },
   'launchpad-tip-3': {
     zh: '参数行四段都能点：模型 · 思考深度 · 模式 · 权限',

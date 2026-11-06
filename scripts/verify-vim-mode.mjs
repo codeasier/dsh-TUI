@@ -136,9 +136,11 @@ const channel = {
 }
 
 const { stdout, stderr, stdin } = makeStreams()
+const promptControllerRef = React.createRef()
 const instance = await render(
   React.createElement(Chat, {
     channel,
+    promptControllerRef,
     questionStore: { subscribe: () => () => {}, getSnapshot: () => null, answerCurrent: () => {} },
     onExit() {},
   }),
@@ -152,12 +154,12 @@ setLang('en')
 const screen = () => viewportLines(term).join('\n')
 
 const promptText = () => {
-  // The prompt row starts with the ⌸ session-entry control, then the '❯' glyph,
+  // The prompt row starts with the heavy rail, the ⌸ session entry, then '❯',
   // then the vim badge (INSERT/NORMAL) and the draft. The ⌸ comes first, so the
   // anchor must allow it — with a bare `^[❯]` nothing matches and every draft
   // reads as empty. Strip border decoration, the ⛶ expand-editor affordance
   // ending the row, and the ⌸ control itself.
-  const match = screen().match(/^\s*⌸?\s*[❯]\s*(.*)$/m)
+  const match = screen().match(/^\s*┃\s*⌸?\s*[❯]\s*(.*)$/m)
   const raw = match === null ? '' : (match[1] ?? '')
   return raw.replace(/[╭╮╰╯─│═║⛶⌸]+/g, '').trim()
 }
@@ -189,7 +191,7 @@ check('esc does not clear the draft', draft() === 'hello world', JSON.stringify(
 
 // ── NORMAL keys ────────────────────────────────────────────
 stdin.write('0x')
-check('0x: delete first char', await settled(() => draft() === 'ello world'), JSON.stringify(draft()))
+check('0x: delete first char', await settled(() => draft() === 'ello world'), JSON.stringify({ painted: draft(), draft: promptControllerRef.current?.text() }))
 stdin.write('u')
 check('u: undo x', await settled(() => draft() === 'hello world'), JSON.stringify(draft()))
 stdin.write('wx')

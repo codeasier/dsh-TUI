@@ -33,9 +33,13 @@ function check(name: string, ok: boolean): void {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}`)
 }
 
-check('legacy activity preference reads as the canonical default',
-  parseActivityFrames('{"frames":"claude"}') === DEFAULT_PRESET
-  && DEFAULT_PRESET === 'moon8')
+check('default activity uses the text-only moon animation',
+  DEFAULT_PRESET === 'moon'
+  && resolvePreset(undefined) === FRAME_PRESETS.moon
+  && FRAME_PRESETS.moon.frames.join('') === '◐◓◑◒')
+
+check('legacy activity preference keeps its moon8 migration',
+  parseActivityFrames('{"frames":"claude"}') === 'moon8')
 
 check('activity picker names exclude the legacy brand preset',
   !PRESET_NAMES.includes('claude')
@@ -59,7 +63,7 @@ let legacyWriteOk = false
 try {
   legacyWriteOk = writeActivityFrames('claude', preferenceDir)
   const raw = JSON.parse(readFileSync(join(preferenceDir, 'working-activity.json'), 'utf8')) as { frames?: unknown }
-  legacyWriteOk = legacyWriteOk && raw.frames === DEFAULT_PRESET && readActivityFrames(preferenceDir) === DEFAULT_PRESET
+  legacyWriteOk = legacyWriteOk && raw.frames === 'moon8' && readActivityFrames(preferenceDir) === 'moon8'
 } catch {
   legacyWriteOk = false
 } finally {

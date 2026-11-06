@@ -1,6 +1,6 @@
 import React from 'react'
 import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTerminalSize, useAnimationFrame } from '../ui.js'
-import { formatJobDuration, JOBS_MAX_OUTPUT_LINES, type BackgroundJobState, type BackgroundJobStatus, type JobTimelineEvent } from '../dsh-adapter/jobs.js'
+import { formatJobDuration, jobTitleOf, JOBS_MAX_OUTPUT_LINES, type BackgroundJobState, type BackgroundJobStatus, type JobTimelineEvent } from '../dsh-adapter/jobs.js'
 import { JobProgress, JobSection, jobCommandRows } from './Chat/JobCard.js'
 import { Markdown } from './Markdown.js'
 import type { Theme } from '../theme.js'
@@ -144,11 +144,14 @@ function JobRowLine({ job, focused, armed, columns, onFocus, expanded, onToggle,
 }): React.ReactNode {
   const info = statusInfo(job.status)
   const duration = formatJobDuration(job)
+  const title = jobTitleOf(job)
   const live = !isTerminalStatus(job.status)
   const progress = live && job.progress !== undefined && job.progress !== '' ? job.progress : undefined
   const labelRows = jobCommandRows(job.label, width - 2, expanded)
   const command = job.command !== undefined && job.command !== '' ? job.command : job.label
-  const commandRows = focused ? jobCommandRows(command, width - 2, expanded) : []
+  // The panel is the deep view: the focused row's command always wraps in
+  // full (a clipped one-liner was the "a long line shows nothing" report).
+  const commandRows = focused ? jobCommandRows(command, width - 2, true) : []
   return (
     <Box flexDirection="column" onClick={onFocus}>
       {/* Fixed columns leave the label the remaining header width. */}
@@ -162,9 +165,11 @@ function JobRowLine({ job, focused, armed, columns, onFocus, expanded, onToggle,
         <Box width={columns.idWidth} flexShrink={0}>
           <Text bold={focused} color={focused ? 'accent' : undefined} wrap="truncate-end">{job.id}</Text>
         </Box>
-        {/* Full-screen keeps the command in its flexible header column. */}
+        {/* Full-screen keeps the command in its flexible header column. The
+         *  wrapping roster is the fork contract: a long label wraps in full
+         *  (no `expanded` gate — the deep text is the detail block's job). */}
         <Box flexGrow={1} flexShrink={1}>
-          <Text bold={focused} wrap={columns.labelWrap && expanded ? 'wrap' : 'truncate-end'}>{job.label}</Text>
+          <Text bold={focused} wrap={columns.labelWrap ? undefined : 'truncate-end'}>{title}</Text>
         </Box>
         {columns.showProgress && (
           <Box width={11} flexShrink={0} justifyContent="flex-end">
@@ -192,8 +197,10 @@ function JobRowLine({ job, focused, armed, columns, onFocus, expanded, onToggle,
         <JobSection rows={focused ? commandRows : labelRows} color="accent" onToggle={onToggle} />
       )}
       {focused && (
-        // The detail block starts below the focused job row.
+        // The panel roster truncates its title; the focused detail restores it
+        // in full. In the wrapping full-screen roster that would be redundant.
         <Box flexDirection="column" paddingLeft={4}>
+          {!columns.labelWrap && <Text bold>{title}</Text>}
           <Box flexDirection="row" gap={1}>
             <Box width={7} flexShrink={0}><Text dimColor>{t('jobs-panel-started')}</Text></Box>
             <Text dimColor>

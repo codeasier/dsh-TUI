@@ -145,15 +145,9 @@ async function verify(fullscreen: boolean, columns: number, entry: 'slash' | 'es
     exitOnCtrlC: false, patchConsole: false,
   })
   const shows = (text: string) => viewportLines(terminal).some(line => line.includes(text))
-  /**
-   * A prompt ROW, not just any row carrying the text.
-   *
-   * The composer's row now begins with the session entry control (`⌸ `) before
-   * the caret glyph, so anchoring on `^\s*❯` stopped matching the very row it
-   * was written to find: the draft was on screen and the assertion said it was
-   * never typed. The anchor therefore skips that leading control.
-   */
-  const promptShows = (text: string) => viewportLines(terminal).some(line => /^\s*(?:⌸\s*)?❯/u.test(line) && line.includes(text))
+  /** Match the composer row, not transcript text: its left rail precedes
+   * the optional session-entry control and the effort/caret glyph. */
+  const promptShows = (text: string) => viewportLines(terminal).some(line => /^\s*┃\s*(?:⌸\s*)?❯/u.test(line) && line.includes(text))
   /**
    * The composer is the BOTTOM-MOST prompt row. Transcript user rows above it
    * can carry the same text, so a stale frame after a session swap makes
@@ -161,14 +155,14 @@ async function verify(fullscreen: boolean, columns: number, entry: 'slash' | 'es
    * rewind regression must read the composer itself.
    *
    * Compare its CONTENT, not a substring: `includes` also accepted a wrong
-   * refill (`hihi` for `hi`). The row is `⌸ ❯ <padded value>⛶`; drop the
-   * session-entry control, the prompt glyph, the padding and the expand
+   * refill (`hihi` for `hi`). The row is `┃ ⌸ ❯ <padded value>⛶`; drop the
+   * left rail, session-entry control, prompt glyph, padding and expand
    * affordance before comparing.
    */
   const composerShows = (text: string) => {
-    const rows = viewportLines(terminal).filter(line => /^\s*(?:⌸\s*)?❯/u.test(line))
+    const rows = viewportLines(terminal).filter(line => /^\s*┃\s*(?:⌸\s*)?❯/u.test(line))
     const row = rows.at(-1)
-    return row !== undefined && row.replace(/^\s*(?:⌸\s*)?❯\s*/u, '').replace(/\s*⛶$/u, '') === text
+    return row !== undefined && row.replace(/^\s*┃\s*(?:⌸\s*)?❯\s*/u, '').replace(/\s*⛶$/u, '') === text
   }
   const enter = async () => {
     await sleep(120) // 固定窗:墙钟 Enter deduplication is 80 ms in both Chat and PromptInput

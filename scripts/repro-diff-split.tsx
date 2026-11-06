@@ -66,13 +66,17 @@ const editTool = {
   },
 }
 
+// Left border, padding and output indent.
+const BODY_LEFT = 4
+const hasPaneDivider = (text: string): boolean => text.split('\n').some(line => line.slice(BODY_LEFT).includes('│'))
+
 /** Boot one headless terminal at the given width and render the card.
  *  `verbose` is the Ctrl+O / click-to-expand state the card receives; `rows`
  *  grows the viewport for the expanded visual-row window (the default 30
  *  would clip it); `settleMs` widens the fixed window for frames far larger
  *  than an ordinary card. */
 async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none', options = {}) {
-  const { verbose = false, fullscreen = false, rows = 30, settleMs = 900 } = options
+  const { verbose = false, fullscreen = false, rows = 30, settleMs = 900 } = typeof options === 'boolean' ? { verbose: options } : options
   const term = new XTerm({ cols, rows, scrollback: 0, allowProposedApi: true })
   class FakeStdout extends Writable {
     columns = cols
@@ -80,6 +84,7 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
     isTTY = true
     _write(chunk, _e, cb) { term.write(String(chunk), cb) }
   }
+  // Full expansion isolates diff layout/color assertions from preview limits.
   const app = await render(
     React.createElement(AssistantToolUseMessage, { tool, marginTopOnTurn: false, verbose, fullscreen, diffLayout, toolBackground }),
     { stdout: new FakeStdout(), debug: true, exitOnCtrlC: false },
@@ -100,14 +105,15 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
 {
   const { lines, screen, bgAt, fgAt } = await renderAt(120, editTool)
   const s = screen()
-  check('宽屏不出现统一式 - /+ 行', !lines.some(line => line.startsWith(' ⎿ - ') || line.startsWith(' ⎿ + ')))
+  check('宽屏不出现统一式 - /+ 行', !lines.some(line => line.startsWith('│   - ') || line.startsWith('│   + ')))
   const pairRow = lines.findIndex(line => line.includes('def shout(text):') && line.includes('def shout(text, mark="!"):'))
   check('改动对在同行双栏呈现', pairRow >= 0)
-  check('双栏以 │ 分隔', pairRow >= 0 && lines[pairRow]!.includes('│'))
+  // 竖线要落在正文槽右侧才算是分栏符：第 0 列的 `│` 是机器活动竖线。
+  check('双栏以 │ 分隔', pairRow >= 0 && (lines[pairRow]!.indexOf('│', BODY_LEFT) ?? -1) > BODY_LEFT)
   const ctxRow = lines.findIndex(line => line.includes('# tail'))
-  check('上下文行双栏都有内容', ctxRow >= 0 && lines[ctxRow]!.split('│').length === 2)
+  check('上下文行双栏都有内容', ctxRow >= 0 && lines[ctxRow]!.slice(BODY_LEFT).split('│').length === 2)
   if (pairRow >= 0) {
-    const dividerX = lines[pairRow]!.indexOf('│')
+    const dividerX = lines[pairRow]!.indexOf('│', BODY_LEFT)
     check('左栏（old）改动行底色为暗红系', bgAt(6, pairRow) === 0x362b2c, `bg=${bgAt(6, pairRow).toString(16)}`)
     check('右栏（new）改动行底色为暗绿系', bgAt(dividerX + 2, pairRow) === 0x2b352c, `bg=${bgAt(dividerX + 2, pairRow).toString(16)}`)
     const markX = lines[pairRow]!.indexOf('mark="!"')
@@ -116,7 +122,7 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
     check('关键字使用语法色（syntaxKeyword）', defX > 0 && fgAt(defX, pairRow) === 0x78a0d6, `fg=${fgAt(Math.max(defX, 0), pairRow).toString(16)}`)
   }
   if (ctxRow >= 0) {
-    check('默认 none 档：上下文行无卡片底色', bgAt(6, ctxRow) === 0xffffff, `bg=${bgAt(6, ctxRow).toString(16)}`)
+    check('显式 none 档：上下文行无卡片底色', bgAt(6, ctxRow) === 0xffffff, `bg=${bgAt(6, ctxRow).toString(16)}`)
   }
 }
 
@@ -125,14 +131,14 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
   const { lines, bgAt } = await renderAt(120, editTool, 'auto', 'subtle')
   const row = lines.findIndex(line => line.includes('# tail'))
   if (row >= 0) {
-    check('subtle 档：上下文行为浅档卡片底色', bgAt(6, row) === 0x1c2330, `bg=${bgAt(6, row).toString(16)}`)
+    check('subtle 档：上下文行为浅档卡片底色', bgAt(6, row) === 0x2a2a2a, `bg=${bgAt(6, row).toString(16)}`)
   }
 }
 {
   const { lines, bgAt } = await renderAt(120, editTool, 'auto', 'strong')
   const row = lines.findIndex(line => line.includes('# tail'))
   if (row >= 0) {
-    check('strong 档：上下文行为深档卡片底色', bgAt(6, row) === 0x242b3a, `bg=${bgAt(6, row).toString(16)}`)
+    check('strong 档：上下文行为深档卡片底色', bgAt(6, row) === 0x383838, `bg=${bgAt(6, row).toString(16)}`)
   }
 }
 
@@ -142,12 +148,15 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
   const s = screen()
   check('窄屏回退统一式 - 行', s.includes('- def shout(text):'))
   check('窄屏回退统一式 + 行', s.includes('+ def shout(text, mark="!"):'))
-  check('窄屏不出现 │ 分隔', !s.includes('│'))
+  // 唯一允许的 `│` 是卡面左侧的机器活动竖线；正文槽里不能再出现分栏符。
+  const pipes = (s.match(/│/gu) ?? []).length
+  const railPipes = lines.filter(line => line.startsWith('│')).length
+  check('窄屏不出现 │ 分隔', pipes === railPipes, `pipes=${pipes} rail=${railPipes}`)
   const bodyRow = lines.findIndex(line => line.includes('# tail'))
   if (bodyRow >= 0) {
-    check('默认 none 档：统一式卡体无底色（文本处）', bgAt(lines[bodyRow]!.indexOf('# tail'), bodyRow) === 0xffffff,
+    check('显式 none 档：统一式卡体无底色（文本处）', bgAt(lines[bodyRow]!.indexOf('# tail'), bodyRow) === 0xffffff,
       `bg=${bgAt(lines[bodyRow]!.indexOf('# tail'), bodyRow).toString(16)}`)
-    check('默认 none 档：统一式卡体无底色（行尾）', bgAt(69, bodyRow) === 0xffffff,
+    check('显式 none 档：统一式卡体无底色（行尾）', bgAt(69, bodyRow) === 0xffffff,
       `bg=${bgAt(69, bodyRow).toString(16)}`)
   }
 }
@@ -167,7 +176,7 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
   const { lines } = await renderAt(120, writeTool)
   const helloRow = lines.findIndex(line => line.includes('hello'))
   check('new file starts at the body left edge without an empty pane', helloRow >= 0 && lines[helloRow]!.indexOf('hello') < 12)
-  check('new file has no middle divider', helloRow >= 0 && !lines[helloRow]!.includes('│'))
+  check('new file has no middle divider', helloRow >= 0 && !hasPaneDivider(lines[helloRow]!))
 }
 
 // ---- 5. diffLayout preference overrides the width heuristic
@@ -177,7 +186,40 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
 }
 {
   const { screen } = await renderAt(90, editTool, 'split')
-  check('split 偏好下 90 列也强制双栏', screen().includes('│'))
+  check('split 偏好下 90 列也强制双栏', hasPaneDivider(screen()))
+}
+
+// Forced split still needs room for both panes. Preview and expanded cards
+// must not hide a new file's only populated pane beyond the right edge.
+for (const cols of [20, 40]) {
+  for (const verbose of [false, true]) {
+    const { lines, screen } = await renderAt(cols, {
+      ...editTool, name: 'write',
+      callView: { card: 'diff', title: 'Write new.ts', diffs: [{ path: 'new.ts', oldText: null, newText: 'NEW_FILE' }] },
+    }, 'split', 'subtle', verbose)
+    check(`split ${cols} cols verbose=${verbose}: new file remains visible`, screen().includes('+ NEW_FILE'))
+    check(`split ${cols} cols verbose=${verbose}: no overflowing pane`, lines.every(line => !line.slice(BODY_LEFT).includes('│')))
+  }
+}
+{
+  const { lines, screen } = await renderAt(120, {
+    ...editTool,
+    callView: { card: 'diff', title: 'Edit large.ts', diffs: [{
+      path: 'large.ts', oldText: 'OLD_LINE\n'.repeat(10_000), newText: 'NEW_LINE\n'.repeat(10_001),
+    }] },
+  }, 'auto', 'subtle', false)
+  check('large unequal replacement previews unified instead of quadratic split alignment',
+    screen().includes('- OLD_LINE') && lines.every(line => !line.slice(BODY_LEFT).includes('│')))
+  check('large diff preview stays at eight content rows', lines.filter(line => line.includes('- OLD_LINE')).length === 8)
+}
+{
+  const { screen } = await renderAt(120, {
+    ...editTool, name: 'write',
+    callView: { card: 'diff', title: 'Write cap.ts', diffs: [{
+      path: 'cap.ts', oldText: null, newText: Array.from({ length: 9 }, (_, i) => `DIFF_ROW_${i}`).join('\n'),
+    }] },
+  }, 'auto', 'subtle', false)
+  check('split preview caps even one extra row', screen().includes('DIFF_ROW_7') && !screen().includes('DIFF_ROW_8') && screen().includes('+1 lines'))
 }
 
 // ---- 6. issue #250 regression assertions
@@ -264,11 +306,11 @@ for (const cols of [70, 120]) for (const layout of ['auto', 'split']) for (const
   for (const oldText of [null, '']) {
     const fresh = (await renderAt(cols, diffTool(oldText, content, '/tmp/new.ts'), layout, 'none', { fullscreen })).screen()
     check(`one-sided addition ${cols}/${layout}/${fullscreen}/${oldText}: full line and no divider`,
-      fresh.includes('FULL_WIDTH_TAIL') && !fresh.includes('│'), fresh)
+      fresh.includes('FULL_WIDTH_TAIL') && !hasPaneDivider(fresh), fresh)
   }
   const removed = (await renderAt(cols, diffTool(content, '', '/tmp/gone.ts'), layout, 'none', { fullscreen })).screen()
   check(`one-sided deletion ${cols}/${layout}/${fullscreen}: full line and no divider`,
-    removed.includes('FULL_WIDTH_TAIL') && !removed.includes('│'), removed)
+    removed.includes('FULL_WIDTH_TAIL') && !hasPaneDivider(removed), removed)
 }
 {
   const tool = { ...editTool, callView: { card: 'diff', title: 'Mixed', diffs: [
@@ -276,14 +318,14 @@ for (const cols of [70, 120]) for (const layout of ['auto', 'split']) for (const
     { path: '/tmp/edit.txt', oldText: 'OLD_SIDE_FILE', newText: 'NEW_SIDE_FILE' },
   ] } }
   const { lines } = await renderAt(120, tool, 'split', 'none', { verbose: true })
-  check('mixed files: addition has no divider', lines.some(line => line.includes('ONE_SIDE_FILE') && !line.includes('│')))
-  check('mixed files: ordinary edit stays split', lines.some(line => line.includes('OLD_SIDE_FILE') && line.includes('NEW_SIDE_FILE') && line.includes('│')))
+  check('mixed files: addition has no divider', lines.some(line => line.includes('ONE_SIDE_FILE') && !hasPaneDivider(line)))
+  check('mixed files: ordinary edit stays split', lines.some(line => line.includes('OLD_SIDE_FILE') && line.includes('NEW_SIDE_FILE') && hasPaneDivider(line)))
   const hiddenOld = Array.from({ length: 20 }, (_, i) => `new_${i}`).join('\n') + '\nOLD_TAIL'
   const folded = (await renderAt(120, diffTool('OLD_TAIL', hiddenOld, '/tmp/late.txt'), 'split')).screen()
-  check('folded opposite side still reserves split layout', folded.includes('│'))
+  check('folded opposite side still reserves split layout', hasPaneDivider(folded))
   const unicode = '新'.repeat(50) + '👨‍👩‍👧e\u0301FULL_WIDTH_UNICODE'
   const expanded = (await renderAt(70, diffTool(null, unicode, '/tmp/new.txt'), 'split', 'none', { verbose: true })).screen()
-  check('one-sided expanded wrap preserves Unicode and tail', expanded.includes('👨‍👩‍👧e\u0301') && expanded.includes('FULL_WIDTH_UNICODE') && !expanded.includes('│'))
+  check('one-sided expanded wrap preserves Unicode and tail', expanded.includes('👨‍👩‍👧e\u0301') && expanded.includes('FULL_WIDTH_UNICODE') && !hasPaneDivider(expanded))
 }
 
 // Both states of one 200-char change pair: expanded, both tails are
@@ -306,7 +348,7 @@ for (const cols of [70, 120]) for (const layout of ['auto', 'split']) for (const
   check('展开态长行：右栏尾部可读', expanded.includes('TAIL_NEW_ZZZ'))
   const tailRow = lines.findIndex(line => line.includes('TAIL_OLD_ZZZ'))
   check('展开态长行：尾部视觉行仍以 │ 分隔两栏',
-    tailRow >= 0 && lines[tailRow]!.includes('TAIL_NEW_ZZZ') && lines[tailRow]!.includes('│'),
+    tailRow >= 0 && lines[tailRow]!.includes('TAIL_NEW_ZZZ') && hasPaneDivider(lines[tailRow]!),
     `tailRow=${tailRow}`)
 }
 
@@ -347,7 +389,7 @@ for (const [cells, expected] of [[53, 0], [54, 0], [55, 2], [56, 5]] as const) {
     pairY >= 0 && ctxY >= 0 && ctxY === pairY + 3, `pairY=${pairY} ctxY=${ctxY}`)
   const pairRows = pairY >= 0 ? lines.slice(pairY, pairY + 3) : []
   check('展开态换行：改动对的 3 个视觉行都带 │ 分隔',
-    pairRows.length === 3 && pairRows.every(line => line.includes('│')), `rows=${pairRows.length}`)
+    pairRows.length === 3 && pairRows.every(line => hasPaneDivider(line)), `rows=${pairRows.length}`)
 }
 
 // The expanded body walks a bounded VISUAL-row window (400, the same
@@ -365,7 +407,7 @@ for (const [cells, expected] of [[53, 0], [54, 0], [55, 2], [56, 5]] as const) {
   // A ~400-row frame measured ~950ms to settle here; 3000 keeps that margin
   // on a loaded CI runner without paying it on the ordinary cards above.
   const { lines, screen } = await renderAt(120, bigTool, 'auto', 'none', { verbose: true, rows: 460, settleMs: 3000 })
-  const bodyRows = lines.filter(line => line.includes('│')).length
+  const bodyRows = lines.filter(line => hasPaneDivider(line)).length
   check('展开态视觉行窗口：正文行数不超过 400',
     bodyRows > 0 && bodyRows <= EXPANDED_WINDOW, `bodyRows=${bodyRows}`)
   // The unit is the point: the split view counts WRAPPED rows, so a source
@@ -381,7 +423,7 @@ for (const [cells, expected] of [[53, 0], [54, 0], [55, 2], [56, 5]] as const) {
 {
   const huge = `const blob = '${'z'.repeat(40000)}' ENDOFHUGE`
   const { lines, screen } = await renderAt(120, diffTool(huge, `${huge}_B`, '/tmp/huge.py'), 'auto', 'none', { verbose: true, rows: 900, settleMs: 3000 })
-  const bodyRows = lines.filter(line => line.includes('│')).length
+  const bodyRows = lines.filter(line => hasPaneDivider(line)).length
   check('展开态巨型单行：正文行数不超过 400 视觉行', bodyRows > 0 && bodyRows <= 400, `bodyRows=${bodyRows}`)
   check('展开态巨型单行：提示按换行后的屏幕行计，400 起',
     screen().includes('showing the first 400/') && screen().includes('wrapped rows'))
@@ -412,7 +454,7 @@ for (const [cells, expected] of [[53, 0], [54, 0], [55, 2], [56, 5]] as const) {
   const familyOld = `${'a'.repeat(53)}👨‍👩‍👧`
   const familyNew = `${'a'.repeat(53)}👨‍👩‍👦`
   const { lines } = await renderAt(120, diffTool(familyOld, familyNew, '/tmp/family.txt'), 'auto', 'none', { verbose: true, rows: 20 })
-  const body = lines.filter(line => line.includes('│'))
+  const body = lines.filter(line => hasPaneDivider(line))
   const joined = lines.join('\n')
   check('组合字符簇：家族 emoji 不被 run 边界拆开（两栏各自完整成形）',
     joined.includes('👨‍👩‍👧') && joined.includes('👨‍👩‍👦'))
@@ -428,7 +470,7 @@ for (const [cells, expected] of [[53, 0], [54, 0], [55, 2], [56, 5]] as const) {
   const accentOld = `${'b'.repeat(54)}e\u0301`
   const accentNew = `${'b'.repeat(54)}e\u0302`
   const { lines } = await renderAt(120, diffTool(accentOld, accentNew, '/tmp/accent.txt'), 'auto', 'none', { verbose: true, rows: 20 })
-  const body = lines.filter(line => line.includes('│'))
+  const body = lines.filter(line => hasPaneDivider(line))
   const leadingMark = body.find(line => /^\s*[\u0300-\u036F]/u.test(line))
   check('组合字符簇：视觉行不以组合附标开头', leadingMark === undefined, leadingMark ?? '')
   const folded = (await renderAt(120, diffTool(accentOld, accentNew, '/tmp/accent.txt'))).screen()
