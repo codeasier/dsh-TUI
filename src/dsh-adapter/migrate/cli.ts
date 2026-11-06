@@ -4,9 +4,10 @@
  * `/migrate` command spawns this same CLI in a child process).
  *
  * Usage:
- *   dsh-tui migrate                     # list agents and discoverable counts (writes nothing)
+ *   dsh-tui migrate                     # list agents and discoverable counts (writes no DSH sessions)
  *   dsh-tui migrate <agent>             # import every conversation found from that agent
- *   dsh-tui migrate <agent> --dry-run   # show what would land, write nothing
+ *   dsh-tui migrate <agent> --dry-run   # show what would land, write no DSH sessions
+ * SQLite reads can still create/update coordination sidecars (notably -shm).
  *
  * One agent per run, and `--dry-run` always names one: both are usage errors
  * rather than silent fallbacks, matching the TUI's `/migrate` entry points.

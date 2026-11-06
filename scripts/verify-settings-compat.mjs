@@ -560,10 +560,45 @@ for (const api of ['legacy', 'forms']) {
   assert.equal(provider.routeExists('missing'), false)
   assert.equal(provider.listRefUsers('TEST_CREDENTIAL').length, 1)
   assert.equal(provider.listConfiguredProviders().length, 1)
+  assert.equal(provider.listConfiguredProviders()[0].hasRoutingOverrides, true,
+    `${api}: explicit endpoint overrides are visible to official catalog probes`)
   const host = hosts.settingsHost()
   assert.equal(host.listNamespaces()[0].revision, 7)
   const ops = [{ op: 'set', path: ['providers', 'test', 'baseURL'], value: 'https://new.invalid' }]
   await host.write('llm-pi-ai', ops, 7)
   assert.deepEqual(mutations, [['llm-pi-ai', ops, 7]], 'writes retain revision fencing and path operations')
 }
+// User-layer-only edits must not hide connection overrides inherited from
+// the composition base. Catalog identity still drives ordinary edit/delete;
+// official probing separately refuses these resolved connection settings.
+for (const api of ['legacy', 'forms']) {
+  for (const [label, inherited, routing, customHeaders] of [
+    ['catalog defaults', {}, false, false],
+    ['inherited endpoint', { baseURL: 'https://relay.invalid/v1' }, true, false],
+    ['inherited protocol', { api: 'openai-completions' }, true, false],
+    ['inherited headers', { headers: { 'x-proxy-key': 'fixture-only' } }, false, true],
+  ]) {
+    const stored = { apiKeyEnv: 'PROXY_KEY', models: [{ id: 'model-a' }] }
+    const user = { providers: { 'opencode-go': stored } }
+    const value = { providers: { 'opencode-go': { ...stored, ...inherited } } }
+    const settings = {
+      describe: () => [{ ns: 'llm-pi-ai', revision: 1, value, user }],
+      ...(api === 'legacy' ? { get: () => value } : {}),
+    }
+    const services = {
+      settings,
+      credentials: { resolve: async () => undefined, set: async () => {}, unset: async () => {} },
+      llm: { listConfigurableProviders: () => [{ settingsNs: 'llm-pi-ai', provider: 'opencode-go', displayName: 'OpenCode Go' }] },
+    }
+    const configured = createSettingsHosts({ get: name => services[name] }).providerSetup().listConfiguredProviders()[0]
+    assert.equal(configured.isCatalog, true, `${api}: ${label} retains catalog edit semantics`)
+    assert.equal(configured.baseURL, undefined, `${api}: ${label} does not invent a user-layer endpoint`)
+    assert.equal(configured.api, undefined, `${api}: ${label} does not invent a user-layer protocol`)
+    assert.equal(configured.hasRoutingOverrides === true, routing,
+      `${api}: ${label} reports resolved routing overrides`)
+    assert.equal(configured.hasCustomHeaders === true, customHeaders,
+      `${api}: ${label} reports resolved custom headers`)
+  }
+}
+
 console.log(`PASS: settings scopes, config snapshots and provider reads (${modernSchema ? 'production sections, exact Loader IDs, volatile updates, shortcut resets and disposal' : 'legacy schema'})`)

@@ -63,6 +63,8 @@ try {
 
   // Hold a WAL writer open: both the base-file fingerprint and size remain
   // unchanged while session metadata and transcript change in WAL alone.
+  // Main DB/WAL byte checks below apply to this fixture, not the whole source
+  // directory: SQLite readers may create/update -shm coordination state.
   db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
   const dbPath = join(root, 'opencode.db')
   const baseBefore = statSync(dbPath)

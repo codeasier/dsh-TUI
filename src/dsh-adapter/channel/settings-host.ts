@@ -357,9 +357,15 @@ export function createSettingsHosts(ctx: ServiceLookup, assertActive: () => void
               ? stored.api
               : undefined
             const resolved = resolvedSection?.providers?.[route]
-            const headers = typeof resolved === 'object' && resolved !== null
-              ? (resolved as Record<string, unknown>).headers
+            const effective = typeof resolved === 'object' && resolved !== null
+              ? resolved as Record<string, unknown>
               : undefined
+            // `baseURL` / `api` above intentionally describe editable user
+            // fields. A catalog probe also needs inherited routing overrides:
+            // otherwise a proxy-only credential could reach the vendor URL.
+            const hasRoutingOverrides = effective !== undefined
+              && [effective.baseURL, effective.api].some(value => value !== undefined && value !== '')
+            const headers = effective?.headers
             const hasCustomHeaders = typeof headers === 'object' && headers !== null
               && !Array.isArray(headers) && Object.keys(headers).length > 0
             const headerEntries = typeof headers === 'object' && headers !== null && !Array.isArray(headers)
@@ -391,6 +397,7 @@ export function createSettingsHosts(ctx: ServiceLookup, assertActive: () => void
               shadowed: ref !== '' && process.env[ref] !== undefined,
               ...(baseURL !== undefined ? { baseURL } : {}),
               ...(api !== undefined ? { api } : {}),
+              ...(hasRoutingOverrides ? { hasRoutingOverrides: true } : {}),
               ...(hasCustomHeaders ? { hasCustomHeaders: true } : {}),
               ...(headerEntries.length === 0 ? {} : { headers: Object.fromEntries(headerEntries) }),
               ...(models !== undefined ? { models } : {}),

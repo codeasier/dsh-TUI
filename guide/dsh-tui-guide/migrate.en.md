@@ -8,9 +8,9 @@ them by their original working directory — switching agents no longer costs
 your history.
 
 ```sh
-dsh-tui migrate                # list per-agent candidate-session counts (writes nothing)
+dsh-tui migrate                # list per-agent candidate-session counts (writes no DSH sessions)
 dsh-tui migrate claude-code    # import every Claude Code conversation
-dsh-tui migrate codex --dry-run  # preview what would land, write nothing
+dsh-tui migrate codex --dry-run  # preview what would land, write no DSH sessions
 ```
 
 In-TUI equivalent: `/migrate`. Bare `/migrate` opens a **multi-select source
@@ -21,7 +21,7 @@ source with its count and the "existing sessions are skipped automatically,
 safe to re-run" note; Enter imports / `d` dry-runs / Esc returns to the
 picker), Esc closes. `/migrate <agent>` passes through the same layer (single
 source); `/migrate <agent> --dry-run` previews directly since it writes
-nothing. The completion notification carries per-source real counters
+no DSH sessions. The completion notification carries per-source real counters
 ("imported X · already present Y"). The CLI stays direct for scripts. The import
 runs in a child process so the interface never freezes; results arrive
 through the notification flow and the output lands in a `/migrate` local
@@ -60,6 +60,13 @@ Their metadata can be browsed, but import explains the limitation. Old JSON
   copy just the `.db` file from an active OpenCode store. Counts and recent activity
   come from session rows, not database file counts or mtimes. Each list refresh
   rereads metadata, so unchanged main-file stats cannot hide WAL updates.
+- **Read-only boundary:** migration does not rewrite source session data or
+  explicitly initiate checkpoint/cleanup. SQLite WAL readers may still create
+  or update coordination sidecars in the source directory, notably `-shm` shared memory.
+  Counts, browsing, recent-activity probes and dry-run also read SQLite, so source-directory
+  zero-write behavior is not guaranteed. Strict zero-write access needs a verified
+  read-only storage layer or consistent snapshot; this implementation does not
+  provision one or sacrifice consistency by copying only the active `.db` or bypassing locks.
 - Text, readable reasoning, model-call steps and tool call IDs/arguments/results
   survive. Pending/running tools become interrupted error results, never executions.
   Pruned output stays `[Old tool result content cleared]`, even if the disk still
@@ -85,8 +92,9 @@ Their metadata can be browsed, but import explains the limitation. Old JSON
 
 ## Behavior contract
 
-- **Read-only source**: migration only reads the foreign agent's local store;
-  artifacts are written through the official `JsonlSessionPersistence` into
+- **Read-only source data**: migration does not rewrite foreign session data.
+  The OpenCode SQLite coordination-sidecar boundary above means source-directory
+  zero-write behavior is not claimed. Artifacts are written through the official `JsonlSessionPersistence` into
   `$DSH_HOME/sessions` — imported sessions are first-class (openable,
   continuable, rewindable).
 - **Idempotent**: one deterministic UUID (v5) per source conversation.

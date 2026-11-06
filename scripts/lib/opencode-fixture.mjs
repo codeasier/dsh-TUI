@@ -1,4 +1,7 @@
 /** Synthetic-only OpenCode SQLite fixtures; importing this module creates no files.
+ * createOpenCodeDatabase returns a live WAL writer. Reader checks on the main
+ * DB/WAL do not establish source-directory zero-write behavior: SQLite readers
+ * may create/update coordination sidecars such as -shm.
  * Relevant columns/indexes from anomalyco/opencode
  * aec0b9a6d8898f68f923aaf08b7306d931fd9d76/packages/core/src/session/sql.ts.
  */

@@ -178,6 +178,8 @@ export const CATALOG_SYNC_TIMEOUT_MS = 15_000
 export type CatalogSyncReason =
   /** The stored route is not a catalog route (a custom endpoint). */
   | 'not-catalog'
+  /** The catalog route's effective connection is customized, so its key is not safe to send to the vendor. */
+  | 'connection-overridden'
   /** No API key: neither the profile's ref nor the vendor's own env var resolves. */
   | 'no-credential'
   /** The installed-catalog lookup failed, so the "already covered" set is unknown. */
@@ -276,13 +278,24 @@ export interface CatalogSyncOptions {
  * Configured catalog routes this build can inspect, in configured order — the
  * picker rows. Eligibility is deliberately narrow: a route must be configured
  * (an unconfigured route has no key and serves nothing), be a catalog route,
- * and have a live target.
+ * have a live target, and retain the catalog's connection defaults. Endpoint,
+ * protocol or header overrides may authenticate to a different recipient.
  */
 export function syncableCatalogRoutes(host: ProviderSetupHost): readonly CatalogSyncCandidate[] {
   const names = new Map(host.listCatalogProviders().map(row => [row.provider, row.displayName] as const))
   return host.listConfiguredProviders()
-    .filter(provider => provider.isCatalog && catalogLiveTarget(provider.route) !== undefined)
+    .filter(provider => provider.isCatalog && !catalogConnectionOverridden(provider)
+      && catalogLiveTarget(provider.route) !== undefined)
     .map(provider => ({ route: provider.route, displayName: names.get(provider.route) ?? provider.route }))
+}
+
+/** Catalog membership does not prove that the profile still uses the vendor's connection. */
+export function catalogConnectionOverridden(provider: ConfiguredProvider): boolean {
+  return provider.hasRoutingOverrides === true
+    || (provider.baseURL !== undefined && provider.baseURL !== '')
+    || (provider.api !== undefined && provider.api !== '')
+    || provider.hasCustomHeaders === true
+    || Object.keys(provider.headers ?? {}).length > 0
 }
 
 /**
@@ -325,6 +338,10 @@ export async function inspectCatalogRoute(
       ...(conflictedDerived === undefined ? {} : { conflictedDerived }),
     })
   if (!provider.isCatalog) return refused('not-catalog')
+  // A built-in id may point at a private relay with a relay-only key. Never
+  // resolve that key for the hard-coded vendor endpoint. The effective flag
+  // also covers connection overrides inherited below the editable user layer.
+  if (catalogConnectionOverridden(provider)) return refused('connection-overridden')
   // The editable list omits inherited profiles. Their name is occupied, but
   // their endpoint and entries are unknown here: never shadow or remove them.
   if (stored === undefined && host.routeExists(derived)) {
@@ -360,6 +377,12 @@ export async function inspectCatalogRoute(
     return refused('catalog-failed')
   }
   if (options.signal?.aborted) return refused('catalog-failed')
+  // Credential/catalog reads await external work. A connection changed while
+  // they were pending must not let its key reach the old vendor destination.
+  const currentProvider = host.listConfiguredProviders().find(row => row.route === provider.route)
+  if (currentProvider === undefined || !currentProvider.isCatalog || catalogConnectionOverridden(currentProvider)) {
+    return refused('connection-overridden')
+  }
   // Pass 2: the vendor's own roster.
   let vendorRows: readonly LlmDiscoveredModel[]
   try {
@@ -456,6 +479,10 @@ export async function writeCatalogModels(
   if (target === undefined) throw new Error(`dsh-tui: "${spec.route}" has no live target`)
   const anthropicTarget = catalogLiveAnthropicTarget(spec.route)
   const configured = host.listConfiguredProviders()
+  const parent = configured.find(provider => provider.route === spec.route)
+  if (parent === undefined || !parent.isCatalog || catalogConnectionOverridden(parent)) {
+    throw new Error(`dsh-tui: "${spec.route}" no longer uses the catalog connection; derived routes left untouched`)
+  }
   const targets: [string, CatalogLiveTarget][] = [[derivedCatalogRoute(spec.route), target]]
   if (anthropicTarget !== undefined) targets.push([derivedAnthropicCatalogRoute(spec.route), anthropicTarget])
   for (const [derived, expectedTarget] of targets) {

@@ -222,12 +222,12 @@ Safe mode: [Getting started](docs/getting-started.en.md).
 Bring Claude Code, Codex, OMP, zcode, Grok Build, or OpenCode conversation histories into the DSH session store, then browse and resume them by their original working directory via `/resume`:
 
 ```sh
-dsh-tui migrate                # list importable counts per agent (writes nothing)
+dsh-tui migrate                # list importable counts per agent (writes no DSH sessions)
 dsh-tui migrate claude-code    # import every Claude Code conversation (likewise codex / omp / zcode / grok-build / opencode)
-dsh-tui migrate codex --dry-run  # preview what would land, write nothing
+dsh-tui migrate codex --dry-run  # preview what would land, write no DSH sessions
 ```
 
-- **Read-only source**: migration only reads the foreign agent's local store; artifacts are written through the official `JsonlSessionPersistence` backend, so imported sessions are first-class (openable, continuable).
+- **Read-only source data**: migration does not rewrite foreign session data; OpenCode WAL reads may create or update SQLite coordination sidecars, notably `-shm`, including browsing and dry-runs, so source-directory zero-write behavior is not promised. Artifacts are written through the official `JsonlSessionPersistence` backend, so imported sessions are first-class (openable, continuable).
 - **Idempotent**: one deterministic UUID per source conversation — re-importing skips what is already present instead of stacking duplicates.
 - **Structure preserved**: user/assistant messages, reasoning traces, tool calls with their results, and the source's context compactions (native checkpoints, or OpenCode’s effective-context snapshot) are rebuilt turn by turn; filtering follows each source’s model context. An imported session can pick the work straight up.
 In-TUI browsing: the session screen (`/resume`) shows a tab per agent that has conversations; picking one imports just that conversation and opens it.

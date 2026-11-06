@@ -189,12 +189,12 @@ Node/Python/PowerShell 示例见[自动化 CLI](docs/cli.md)。
 把 Claude Code、Codex、OMP、zcode、Grok Build、OpenCode 的本地对话历史导入 DSH 会话库，之后用 `/resume` 按原工作目录浏览与恢复：
 
 ```sh
-dsh-tui migrate                # 列出各代理可迁移的对话数量（不写入）
+dsh-tui migrate                # 列出各代理可迁移的对话数量（不写 DSH 会话）
 dsh-tui migrate claude-code    # 导入 Claude Code 的全部对话（codex / omp / zcode / grok-build / opencode 同理）
-dsh-tui migrate codex --dry-run  # 只预览将落盘的内容，不写入
+dsh-tui migrate codex --dry-run  # 只预览将落盘的内容，不写 DSH 会话
 ```
 
-- **只读源**：迁移只读取源代理的本地存储，绝不修改；产物经官方 `JsonlSessionPersistence` 后端写入 `$DSH_HOME/sessions`——导入的会话是一等公民（可打开、可续聊）
+- **源数据只读**：迁移不改写源代理的会话数据；产物经官方 `JsonlSessionPersistence` 后端写入 `$DSH_HOME/sessions`——导入的会话是一等公民（可打开、可续聊）。OpenCode WAL 读取可能创建或更新 SQLite 协调侧文件，尤其是 `-shm`；浏览与 dry-run 也一样，不保证源目录零写。
 - **幂等**：同一源对话命中同一确定性 UUID——重复导入跳过已存在项，不堆叠重复
 - **保留结构**：按轮次还原用户/助手消息、思考过程（reasoning）、工具调用及其结果，以及源里的上下文压缩（原生压缩检查点，或 OpenCode 的有效上下文快照）；过滤遵循各源的模型上下文规则。导入的会话可以直接接着做事
 TUI 内浏览：会话管理界面（`/resume`）为每个有会话的代理显示一个标签，选中一条即只导入这一条并直接打开。

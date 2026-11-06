@@ -203,8 +203,9 @@ dsh-tui
 - 换栏 `←/→`；移动 `↑/↓`/`PgUp`/`PgDn`；**直接打字 = 实时筛选**（按标题/目录/分支/模型）。
 - 进入 `Enter`（第 0 行 = 在该工作区新建会话）；新建 `Ctrl+Enter`/`Ctrl+N`；停止后台会话 `Ctrl+X`。
 - `Ctrl+L` 重读 · 工作区栏 `Enter` 打开操作菜单 · `Esc` 关提示→清空筛选→离开。
-- 来源标签：本机的 Claude Code / Codex / Grok Build / zcode 有会话时，标题栏右侧出现对应标签，`Tab`/`Shift+Tab` 或点击切换；
+- 来源标签：本机的 Claude Code / Codex / Grok Build / zcode / OpenCode 有会话时，标题栏右侧出现对应标签，`Tab`/`Shift+Tab` 或点击切换；
   外部标签里 `Enter`/单击 = 只导入这一条并直接打开（导入过的直接打开），工作目录已不存在时只提示不导入，`Ctrl+L` 重扫该来源。
+- OpenCode 读取使用包含已提交 WAL 的一致只读事务，不改写源会话数据；SQLite 仍可能创建或更新协调侧文件（尤其 `-shm`）。浏览、计数、近期活动探测与 dry-run 同样适用，不保证源目录零写，详见[迁移边界](migrate.md#opencode-支持边界)。
 - 鼠标：点击会话行=进入、点 `★`/`☆` 切固定、右键工作区行出菜单。
 - 输入框空着按 `←`（或 `/bg`）= 转后台并打开本界面，会话继续跑。
 
@@ -352,7 +353,7 @@ dsh-tui
 | `/balance` | 无 | DeepSeek 官方账户余额（免费只读接口）：摘要行 + hover 明细（同款本会话估算拆解：主会话/子代理/未计价），点击刷新、`×` 关闭 |
 | `/config` | 无 | 配置来源：`cordis.patch.yml` 路径、启动方式、模型路由 |
 | `/doctor` | 无 | 环境自检 |
-| `/migrate` | `[agent] [--dry-run]` | 从其他编程代理（claude-code/codex/omp/zcode/grok-build）导入对话历史，子进程运行不卡界面，详见[会话迁移](migrate.md) |
+| `/migrate` | `[agent] [--dry-run]` | 从其他编程代理（claude-code/codex/omp/zcode/grok-build/opencode）导入对话历史，子进程运行不卡界面，详见[会话迁移](migrate.md) |
 | `/init` | 无 | 在工作目录创建 `AGENTS.md`（created / exists / failed 三态提示） |
 | `/agents` | 无 | 本会话子代理列表 |
 | `/team` | `status`（默认） | 实验性 Agent Teams 的状态报告；只在团队服务运行后出现在帮助与 `/` 补全里，报告 bundle、服务与本会话 teammate。开关改用 `/plugin enable\|disable @deepseek-ai/dsh-experimental-agent-team-profile`（服务未运行时手敲 `/team` 会给出开启提示） |

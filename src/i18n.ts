@@ -2330,6 +2330,7 @@ const dict = {
   'provider-sync-cancelled': { zh: '已取消同步官方模型', en: 'Official-model sync cancelled' },
   'provider-sync-no-route': { zh: '没有可同步的 catalog 路由：需先用「添加新 provider」配置内置 provider 与 API key', en: 'No catalog route to sync — configure a built-in provider and its API key first' },
   'provider-sync-not-catalog': { zh: '{{route}} 不是 catalog 路由，官方列表同步只适用于内置 provider', en: '{{route}} is not a catalog route; the vendor listing is only readable for built-in providers' },
+  'provider-sync-connection-overridden': { zh: '{{route}} 使用自定义连接设置，已跳过官方列表探测，未向官方端点发送凭据。', en: '{{route}} uses custom connection settings. Official model discovery was skipped. No credentials were sent to the official endpoint.' },
   'provider-sync-no-credential': { zh: '{{route}} 没有可解析的 API key，未同步', en: '{{route}} has no resolvable API key — not synced' },
   'provider-sync-catalog-failed': { zh: '{{route}}：内置目录读取失败，无法判断哪些模型需要同步', en: '{{route}}: the installed catalog could not be read, so the models to sync are unknown' },
   'provider-sync-listing-failed': { zh: '{{route}}：厂商模型列表拉取失败，本次未做任何变更', en: '{{route}}: the vendor listing could not be read — nothing was changed' },

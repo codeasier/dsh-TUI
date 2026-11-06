@@ -2,7 +2,9 @@
  * Run: node --import tsx/esm scripts/verify-migrate-opencode.mjs
  * Proves CLI/browser identity, official persistence → open → fromRestore →
  * deriveMessages → append → reopen, effective compaction/revert context, WAL
- * freshness, source immutability and duplicate imports preserving DSH continuation.
+ * freshness, unchanged main DB/WAL bytes in this fixture and duplicate imports
+ * preserving DSH continuation. This does not assert source-directory zero-write
+ * behavior: SQLite readers may create/update coordination sidecars such as -shm.
  */
 import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'

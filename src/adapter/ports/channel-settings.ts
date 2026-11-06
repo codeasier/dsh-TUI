@@ -104,6 +104,10 @@ export interface ConfiguredProvider {
   /** Explicit `api` override in the stored profile; catalog routes can
    *  carry one too, so this alone does not classify the route. */
   readonly api?: string
+  /** Effective profile overrides the catalog endpoint or wire protocol in
+   *  any settings layer. Official catalog probing must not send this route's
+   *  credential to the catalog default instead of its configured endpoint. */
+  readonly hasRoutingOverrides?: boolean
   /** Effective profile needs custom request headers that the anonymous
    *  discovery request cannot inherit from the named route. */
   readonly hasCustomHeaders?: boolean

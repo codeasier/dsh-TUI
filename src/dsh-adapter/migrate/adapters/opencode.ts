@@ -1,5 +1,9 @@
 /**
- * Read-only OpenCode SQLite migration. Schema/path contract verified against
+ * OpenCode SQLite migration with read-only session queries and a consistent
+ * WAL-aware read transaction. SQLite may create/update coordination sidecars
+ * (notably -shm); this is not a byte-for-byte read-only source-directory view.
+ * No source SQL mutations or explicit checkpoint/cleanup are performed.
+ * Schema/path contract verified against
  * anomalyco/opencode aec0b9a6d8898f68f923aaf08b7306d931fd9d76:
  * packages/core/src/{session/sql.ts,database/database.ts,global.ts}.
  * Only the v1 message/part payloads are imported; native session_message and
@@ -84,6 +88,10 @@ function openSnapshot(path: string): DatabaseSync {
   // Do not load node:sqlite (and emit its experimental warning on Node 22)
   // merely because the migration registry is imported during TUI startup.
   const { DatabaseSync: SQLite } = require('node:sqlite') as typeof import('node:sqlite')
+  // Keep SQLite's normal WAL locking and transaction snapshot: copying live
+  // db/WAL files or declaring the source immutable cannot promise that view.
+  // readOnly/query_only protect session data, not the source directory: the
+  // SQLite VFS can create/update auxiliary files such as the -shm WAL index.
   const db = new SQLite(path, { readOnly: true, enableDoubleQuotedStringLiterals: false })
   try {
     db.exec('PRAGMA query_only = ON; PRAGMA trusted_schema = OFF; PRAGMA busy_timeout = 100; BEGIN')

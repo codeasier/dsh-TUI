@@ -104,6 +104,12 @@
  *    is a plain no-op.
  * 69. a derived route repointed at another endpoint/protocol is refused,
  *    never overwritten.
+ * 49b. a catalog parent with explicit/inherited connection overrides never
+ *    offers official sync, reads its key, probes the vendor or repairs routes;
+ *    ordinary edits against an explicitly configured relay still work.
+ * 49c. adding over an overridden/unknown existing catalog route cannot send
+ *    a typed draft key to the default vendor endpoint before confirmation,
+ *    including when the route changes while the catalog lookup is pending.
  * 70. boot reports un-enabled and retired ids, repairs only the routing of
  *    enabled models, and neither throws nor writes when the listing is down.
  * 50b. stateful migration preserves unknown model fields, writes the target
@@ -130,8 +136,8 @@ import {
   deriveKeyRef,
   runProviderWizard,
 } from '../lib/types/dsh-adapter/providerWizard.js'
-import { inspectCatalogRoutes, reportCatalogRoutesQuietly, writeCatalogModels } from '../lib/types/dsh-adapter/catalogSync.js'
-import { t } from '../lib/types/i18n.js'
+import { inspectCatalogRoutes, reportCatalogRoutesQuietly, syncableCatalogRoutes, writeCatalogModels } from '../lib/types/dsh-adapter/catalogSync.js'
+import { getLang, setLang, t } from '../lib/types/i18n.js'
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -2345,6 +2351,264 @@ for (const invalid of [
     calls.notifications.some(n => n.color === 'warning'
       && n.text === t('provider-sync-derived-conflict', { route: 'opencode-go', derived: 'opencode-go-live' })),
     JSON.stringify(calls.notifications))
+}
+
+// 49b. Catalog membership does not authorize forwarding a relay-only key to
+// the vendor. The effective flag includes overrides from composition bases;
+// raw fields also protect structural callers that do not expose that flag.
+for (const [label, override] of [
+  ['explicit endpoint', { baseURL: 'https://relay.example/v1' }],
+  ['explicit protocol', { api: 'openai-responses' }],
+  ['inherited connection', { hasRoutingOverrides: true }],
+  ['custom headers', { hasCustomHeaders: true }],
+  ['resolved headers', { headers: { 'x-relay-account': 'regression' } }],
+]) {
+  for (const credentialSource of ['store', 'environment']) {
+    const parent = {
+      route: 'opencode-go', ref: 'RELAY_API_KEY', shadowed: credentialSource === 'environment',
+      isCatalog: true, models: ['glm-5.3'], ...override,
+    }
+    const derived = {
+      route: 'opencode-go-live', ref: 'RELAY_API_KEY', shadowed: false, isCatalog: false,
+      api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1',
+      models: ['grok-4.5'], modelEntries: [{ id: 'grok-4.5', customField: 'keep' }],
+    }
+    const { deps, calls } = makeDeps({ action: ACTION_SYNC }, {
+      catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+      configured: [parent, derived],
+    })
+    let credentialReads = 0
+    deps.host.envShadows = () => credentialSource === 'environment'
+    deps.host.envValue = () => { credentialReads++; return 'regression-relay-key' }
+    deps.host.readCredential = async () => { credentialReads++; return 'regression-relay-key' }
+    const before = JSON.stringify([parent, derived])
+    check(`49b ${label}/${credentialSource}: no official-sync candidate`,
+      syncableCatalogRoutes(deps.host).length === 0)
+    const [status] = await inspectCatalogRoutes(deps.host)
+    const logs = []
+    await reportCatalogRoutesQuietly(deps.host, message => logs.push(message))
+    let writeRefused = false
+    try {
+      await writeCatalogModels(deps.host, { route: parent.route, ref: parent.ref }, ['grok-4.5'])
+    } catch { writeRefused = true }
+    const outcome = await runProviderWizard(deps)
+    check(`49b ${label}/${credentialSource}: fail closed before credentials and discovery`,
+      status?.reason === 'connection-overridden' && credentialReads === 0
+        && calls.discoverRequests.length === 0 && logs.length === 0,
+      JSON.stringify({ status, credentialReads, requests: calls.discoverRequests, logs }))
+    check(`49b ${label}/${credentialSource}: no hidden sync option or profile changes`,
+      writeRefused && outcome === 'cancelled'
+        && !Object.hasOwn(calls.optionDescriptions.action ?? {}, t('provider-opt-action-sync'))
+        && !calls.asks.includes('sync-models') && calls.mutations.length === 0
+        && calls.profiles.length === 0 && calls.removedProfiles.length === 0
+        && calls.credentials.length === 0 && calls.removed.length === 0
+        && JSON.stringify([parent, derived]) === before,
+      JSON.stringify({ writeRefused, outcome, asks: calls.asks, mutations: calls.mutations }))
+  }
+}
+
+// Recheck after asynchronous catalog/credential work, before the network probe.
+{
+  const previousLang = getLang()
+  try {
+    for (const lang of ['zh', 'en']) {
+      setLang(lang)
+      const parent = { route: 'opencode-go', ref: 'RELAY_API_KEY', shadowed: false, isCatalog: true }
+      const { deps, calls } = makeDeps({ action: { selected: [t('provider-opt-action-sync')] } }, {
+        configured: [parent], storedCredentials: { RELAY_API_KEY: 'regression-key' },
+        discover: () => {
+          parent.hasRoutingOverrides = true
+          return [{ id: 'glm-5.3' }]
+        },
+      })
+      const outcome = await runProviderWizard(deps)
+      const warning = t('provider-sync-connection-overridden', { route: parent.route })
+      check(`49b ${lang} connection changes during discovery: no vendor request follows`,
+        outcome === 'cancelled' && eq(calls.discoverRequests, [{ provider: 'opencode-go' }])
+          && calls.mutations.length === 0 && calls.profiles.length === 0
+          && calls.removedProfiles.length === 0,
+        JSON.stringify({ outcome, requests: calls.discoverRequests, mutations: calls.mutations }))
+      check(`49b ${lang} connection override warning is localized, not a listing failure`,
+        warning.includes(parent.route)
+          && calls.notifications.some(row => row.color === 'warning' && row.text === warning)
+          && !calls.notifications.some(row => row.text === t('provider-sync-listing-failed', { route: parent.route })),
+        JSON.stringify(calls.notifications))
+    }
+  } finally {
+    setLang(previousLang)
+  }
+}
+
+// The whole-row snapshot includes inherited connection provenance, so a
+// metadata fetch cannot turn an older inspection into permission to write.
+{
+  const parent = { route: 'opencode-go', ref: 'RELAY_API_KEY', shadowed: false, isCatalog: true }
+  const { deps, calls } = makeDeps({
+    action: ACTION_SYNC, 'sync-models': { selected: ['grok-4.5'] },
+  }, {
+    configured: [parent], storedCredentials: { RELAY_API_KEY: 'regression-key' },
+    discover: request => request.provider === undefined ? [{ id: 'grok-4.5' }] : [{ id: 'glm-5.3' }],
+  })
+  deps.readVendorCatalog = async () => { parent.hasRoutingOverrides = true; return {} }
+  check('49b inherited override after inspection: stale selection is refused',
+    await runProviderWizard(deps) === 'failed' && calls.mutations.length === 0
+      && calls.profiles.length === 0 && calls.removedProfiles.length === 0,
+    JSON.stringify({ mutations: calls.mutations, profiles: calls.profiles, removed: calls.removedProfiles }))
+}
+
+// Blocking vendor sync does not disable normal model editing on a relay.
+{
+  const { deps, calls } = makeDeps({
+    action: ACTION_EDIT,
+    'edit-provider': { selected: ['opencode-go'] },
+    'edit-menu': { selected: [t('provider-opt-edit-models')] },
+    models: { selected: ['relay-model'] },
+  }, {
+    configured: [{
+      route: 'opencode-go', ref: 'RELAY_API_KEY', shadowed: false, isCatalog: true,
+      baseURL: 'https://relay.example/v1', api: 'openai-completions',
+      hasRoutingOverrides: true, models: ['glm-5.3'], modelEntries: [{ id: 'glm-5.3' }],
+    }],
+    storedCredentials: { RELAY_API_KEY: 'regression-relay-key' },
+    discover: request => request.provider === undefined ? [{ id: 'relay-model' }] : [{ id: 'glm-5.3' }],
+  })
+  check('49b relay model editing remains available', await runProviderWizard(deps) === 'updated')
+  check('49b relay model editing sends its key only to the configured relay',
+    eq(calls.discoverRequests, [
+      { provider: 'opencode-go' },
+      { baseURL: 'https://relay.example/v1', api: 'openai-completions', apiKey: 'regression-relay-key' },
+    ]) && calls.mutations.length === 1 && calls.mutations[0][0] === 'opencode-go',
+    JSON.stringify({ requests: calls.discoverRequests, mutations: calls.mutations }))
+}
+
+// 49c. Add accepts an existing catalog route and only asks about replacement
+// after discovery. Skipping the endpoint must not send its typed relay key
+// to the official URL, even if the user later cancels before saving anything.
+for (const [label, override] of [
+  ['explicit endpoint', { baseURL: 'https://relay.example/v1' }],
+  ['explicit protocol', { api: 'openai-responses' }],
+  ['inherited connection', { hasRoutingOverrides: true }],
+  ['custom headers', { hasCustomHeaders: true }],
+  ['resolved headers', { headers: { 'x-relay-account': 'regression' } }],
+  ['repurposed route', { isCatalog: false }],
+  ['inherited-only route', undefined],
+]) {
+  const configured = override === undefined ? [] : [{
+    route: 'opencode-go', ref: 'RELAY_API_KEY', shadowed: false, isCatalog: true, ...override,
+  }]
+  const before = JSON.stringify(configured)
+  const { deps, calls } = makeDeps({
+    action: ACTION_ADD, mode: MODE_CATALOG, catalog: { selected: ['opencode-go'] },
+    apikey: { custom: 'regression-relay-draft-key' }, 'baseurl-choice': SKIP_BASEURL,
+    models: { selected: ['glm-5.3'] }, confirm: 'cancel',
+  }, {
+    configured, ...(override === undefined ? { routeExists: true } : {}),
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    discovered: [{ id: 'glm-5.3' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check(`49c ${label}: cancelled add never sends a draft key to the vendor`,
+    outcome === 'cancelled' && eq(calls.discoverRequests, [{ provider: 'opencode-go' }])
+      && calls.asks.includes('confirm')
+      && calls.notifications.some(row => row.color === 'warning' && row.text === t('provider-live-fetch-unavailable')),
+    JSON.stringify({ outcome, requests: calls.discoverRequests, notifications: calls.notifications }))
+  check(`49c ${label}: cancelled add leaves profiles and credentials untouched`,
+    calls.credentials.length === 0 && calls.removed.length === 0
+      && calls.profiles.length === 0 && calls.mutations.length === 0 && calls.removedProfiles.length === 0
+      && JSON.stringify(configured) === before,
+    JSON.stringify({ profiles: calls.profiles, mutations: calls.mutations }))
+}
+
+for (const change of [
+  'existing override', 'new override', 'inherited-only',
+  'cleared override', 'removed override route', 'removed inherited-only',
+]) {
+  const configured = ['existing override', 'cleared override', 'removed override route'].includes(change) ? [{
+    route: 'opencode-go', ref: 'RELAY_API_KEY', shadowed: false, isCatalog: true,
+    ...(change === 'existing override' ? {} : { hasRoutingOverrides: true }),
+  }] : []
+  let inheritedExists = change === 'removed inherited-only'
+  const { deps, calls } = makeDeps({
+    action: ACTION_ADD, mode: MODE_CATALOG, catalog: { selected: ['opencode-go'] },
+    apikey: { custom: 'regression-relay-draft-key' }, 'baseurl-choice': SKIP_BASEURL,
+    models: 'cancel',
+  }, {
+    configured,
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    discover: () => {
+      if (change === 'inherited-only') inheritedExists = true
+      else if (change === 'removed inherited-only') inheritedExists = false
+      else if (change === 'cleared override') delete configured[0].hasRoutingOverrides
+      else if (change === 'removed override route') configured.splice(0)
+      else if (change === 'existing override') configured[0].hasRoutingOverrides = true
+      else configured.push({
+        route: 'opencode-go', ref: 'RELAY_API_KEY', shadowed: false, isCatalog: true,
+        baseURL: 'https://relay.example/v1',
+      })
+      return [{ id: 'glm-5.3' }]
+    },
+  })
+  deps.host.routeExists = route => inheritedExists || configured.some(row => row.route === route)
+  const outcome = await runProviderWizard(deps)
+  check(`49c ${change} during catalog lookup: draft key stays local`,
+    outcome === 'cancelled' && eq(calls.discoverRequests, [{ provider: 'opencode-go' }])
+      && calls.credentials.length === 0 && calls.profiles.length === 0 && calls.mutations.length === 0,
+    JSON.stringify({ outcome, requests: calls.discoverRequests, mutations: calls.mutations }))
+}
+
+// The selected connection is also captured before the credential/endpoint
+// prompts, not just after they return and discovery begins.
+for (const prompt of ['apikey', 'baseurl-choice']) {
+  const configured = [{
+    route: 'opencode-go', ref: 'RELAY_API_KEY', shadowed: false, isCatalog: true,
+    hasRoutingOverrides: true,
+  }]
+  const { deps, calls } = makeDeps({
+    action: ACTION_ADD, mode: MODE_CATALOG, catalog: { selected: ['opencode-go'] },
+    apikey: { custom: 'regression-relay-draft-key' }, 'baseurl-choice': SKIP_BASEURL,
+    models: 'cancel',
+  }, {
+    configured,
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    discovered: [{ id: 'glm-5.3' }],
+  })
+  const ask = deps.ask
+  deps.ask = async (request, options) => {
+    const answer = await ask(request, options)
+    if (request.questions.some(question => question.id === prompt)) delete configured[0].hasRoutingOverrides
+    return answer
+  }
+  check(`49c override removed during ${prompt}: selected relay's draft key stays local`,
+    await runProviderWizard(deps) === 'cancelled'
+      && eq(calls.discoverRequests, [{ provider: 'opencode-go' }])
+      && calls.credentials.length === 0 && calls.profiles.length === 0 && calls.mutations.length === 0,
+    JSON.stringify({ requests: calls.discoverRequests, mutations: calls.mutations }))
+}
+
+// Ordinary model editing still works from the installed snapshot without an
+// explicit endpoint, but an overridden connection gets no anonymous vendor probe.
+for (const [label, override] of [
+  ['explicit protocol', { api: 'openai-responses' }],
+  ['inherited connection', { hasRoutingOverrides: true }],
+]) {
+  const { deps, calls } = makeDeps({
+    action: ACTION_EDIT, 'edit-provider': { selected: ['opencode-go'] },
+    'edit-menu': { selected: [t('provider-opt-edit-models')] },
+    models: { selected: ['glm-5.3'] },
+  }, {
+    configured: [{
+      route: 'opencode-go', ref: 'RELAY_API_KEY', shadowed: false, isCatalog: true,
+      models: ['old-model'], modelEntries: [{ id: 'old-model' }], ...override,
+    }],
+    discovered: [{ id: 'glm-5.3' }],
+  })
+  let credentialReads = 0
+  deps.host.readCredential = async () => { credentialReads++; return 'regression-relay-key' }
+  check(`49c ${label}: snapshot model editing remains available without a vendor probe`,
+    await runProviderWizard(deps) === 'updated' && credentialReads === 0
+      && eq(calls.discoverRequests, [{ provider: 'opencode-go' }])
+      && calls.mutations.length === 1 && calls.mutations[0][0] === 'opencode-go',
+    JSON.stringify({ credentialReads, requests: calls.discoverRequests, mutations: calls.mutations }))
 }
 
 // 50. The boot pass only reports: one debug line per un-enabled and retired

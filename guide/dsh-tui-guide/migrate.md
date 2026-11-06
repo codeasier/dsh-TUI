@@ -7,9 +7,9 @@
 历史上下文。
 
 ```sh
-dsh-tui migrate                # 列出各源候选会话数（不写入）
+dsh-tui migrate                # 列出各源候选会话数（不写 DSH 会话）
 dsh-tui migrate claude-code    # 导入 Claude Code 的全部对话
-dsh-tui migrate codex --dry-run  # 只预览将落盘的内容，不写入
+dsh-tui migrate codex --dry-run  # 只预览将落盘的内容，不写 DSH 会话
 ```
 
 TUI 内等效入口：`/migrate`。裸 `/migrate` 弹出**多选源选择器**——每行一个代理
@@ -17,7 +17,7 @@ TUI 内等效入口：`/migrate`。裸 `/migrate` 弹出**多选源选择器**�
 空格勾选/取消、`a` 全选/全不选、Enter 进入**二次确认层**（逐行列出将导入
 的源与数量，注明「已存在的自动跳过，可重复执行」；Enter 导入 / `d` 干跑
 预览 / Esc 返回选择）、Esc 关闭。`/migrate <agent>` 同样经过确认层（单源）；
-`/migrate <agent> --dry-run` 因不写盘直接预览。完成通知带逐源真实计数
+`/migrate <agent> --dry-run` 因不写 DSH 会话直接预览。完成通知带逐源真实计数
 （「导入 X · 已存在 Y」）。CLI 形态保持直达（脚本场景）。导入在
 子进程中运行，界面不会卡顿；结果经通知流汇报，输出汇入 `/migrate`
 本地行。两个入口走同一套导入逻辑与同一套幂等规则。
@@ -51,6 +51,11 @@ TUI 内等效入口：`/migrate`。裸 `/migrate` 弹出**多选源选择器**�
 - 使用只读 SQLite 事务，包含已提交的 WAL 数据；不要只复制活动存储的 `.db`
   主文件。计数与近期活动来自会话行而非数据库文件数或 mtime；每次刷新重读
   元数据，主文件 stat 不变也不会漏掉 WAL 更新。
+- **只读边界**：迁移不改写源会话数据，也不主动发起 checkpoint/cleanup；
+  但 SQLite 的 WAL 读者可能创建或更新源目录的协调侧文件，尤其是 `-shm` 共享内存文件。
+  计数、浏览、近期活动探测和 dry-run 也会触发 SQLite 读取，因此不保证源目录零写。
+  需要严格零写时应使用经过验证的只读存储或一致快照，本实现不替用户创建该环境，
+  也不靠只复制活动 `.db` 或绕过锁来牺牲一致性。
 - 保留正文、可读推理、模型调用步、工具 callID/参数/结果；pending/running
   工具补为中断错误结果，不恢复执行。已裁剪输出保留
   `[Old tool result content cleared]`，不复活磁盘上的原文；不重放提供方推理签名。
@@ -70,7 +75,8 @@ TUI 内等效入口：`/migrate`。裸 `/migrate` 弹出**多选源选择器**�
 
 ## 行为契约
 
-- **只读源**：迁移只读取源代理的本地存储，绝不修改；产物经官方
+- **源数据只读**：迁移不改写源代理的会话数据；OpenCode 的 SQLite 协调侧文件
+  边界见上文，不宣称源目录零写。产物经官方
   `JsonlSessionPersistence` 写入 `$DSH_HOME/sessions`——导入的会话是
   一等公民（可打开、可续聊、可 rewind）。
 - **幂等**：同一源对话命中同一确定性 UUID（v5）。重复导入跳过已存在
