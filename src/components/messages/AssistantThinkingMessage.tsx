@@ -85,7 +85,18 @@ export function AssistantThinkingMessage({
     rows: size.rows,
     screenRows: size.screenRows,
   }), [size.columns, size.rows, size.screenRows])
-  if (!thinking) {
+  const hasThinking = thinking.length > 0
+  // Smooth reveal starts with an empty slice. Keep every hook before either
+  // empty-text return so the same mounted row can reveal its first character.
+  const [frame, setFrame] = React.useState(0)
+  const [hovered, setHovered] = React.useState(false)
+  React.useEffect(() => {
+    if (!streaming || !hasThinking) return
+    const interval = setInterval(() => setFrame(f => f + 1), THINKING_SPINNER_INTERVAL_MS)
+    return () => clearInterval(interval)
+  }, [streaming, hasThinking])
+
+  if (!hasThinking) {
     if (reasoningTokens === undefined) return null
     return (
       <ThinkingTokensHeader
@@ -102,15 +113,6 @@ export function AssistantThinkingMessage({
   // not lag it behind the reveal); the expanded body below paints `thinking`
   // — the revealed slice under smooth streaming, the full text otherwise.
   const tickerText = textFull ?? thinking
-
-  // Spinner frame (80ms cadence, only while the reasoning is still
-  // streaming — same pattern as BtwPanel's answering spinner).
-  const [frame, setFrame] = React.useState(0)
-  React.useEffect(() => {
-    if (!streaming) return
-    const interval = setInterval(() => setFrame(f => f + 1), THINKING_SPINNER_INTERVAL_MS)
-    return () => clearInterval(interval)
-  }, [streaming])
 
   const duration =
     durationMs !== undefined && durationMs >= 1000
@@ -137,7 +139,6 @@ export function AssistantThinkingMessage({
   const frameText = THINKING_SPINNER_FRAMES[frame % THINKING_SPINNER_FRAMES.length]!
   // Hover 轻指示：可点击折叠时折叠头从琥珀色切到正文色（不刷整行背景，
   // 转录视觉保持安静）。
-  const [hovered, setHovered] = React.useState(false)
   const hoverProps = onClick !== undefined
     ? { onMouseEnter: () => setHovered(true), onMouseLeave: () => setHovered(false) }
     : {}

@@ -9,8 +9,9 @@
  *   non-streaming delivery) reveals too; replayed rows and disabled mode
  *   paint complete immediately.
  * Group C — component contracts:
- *   thinking preview ticker follows the ARRIVED text while the expanded body
- *   paints the revealed slice; tool cards show bounded previews when collapsed
+ *   one thinking instance survives empty/text/count transitions and cleans up
+ *   its spinner; preview follows ARRIVED text while expansion paints the slice;
+ *   tool cards show bounded previews when collapsed
  *   and explicitly opened bodies paint complete without reveal timers.
  * Group D — long-session fanout:
  *   real assistant/reasoning reveal with 80 historical tool cards uses one
@@ -42,12 +43,13 @@ import { Writable, PassThrough } from 'node:stream'
 import { readFile } from 'node:fs/promises'
 import ts from 'typescript'
 import React from 'react'
-import { render } from '../src/ui.js'
+import { Box, Text, render } from '../src/ui.js'
 import { setLang } from '../src/i18n.js'
 import { MessageList } from '../src/components/MessageList.js'
 import { RevealScopeContext } from '../src/components/revealScope.js'
 import { AssistantThinkingMessage } from '../src/components/messages/AssistantThinkingMessage.js'
 import { AssistantToolUseMessage } from '../src/components/messages/AssistantToolUseMessage.js'
+import { THINKING_SPINNER_INTERVAL_MS } from '../src/terminal-utils/figures.js'
 import type { ChatRow, ToolRow } from '../src/dsh-adapter/channel.js'
 import { createDshTranslator } from '../src/dsh-adapter/backend/translate.js'
 import { createChannelReadView } from '../src/adapter/channel/read-view.js'
@@ -304,35 +306,105 @@ console.log('--- B: MessageList integration ---')
 // ---------------------------------------------------------------------------
 console.log('--- C: component contracts ---')
 
-// C1: thinking ticker follows ARRIVED text; expanded body paints the slice.
+// C1: the SAME thinking instance must survive a reveal's empty first slice,
+// text disappearing, and count-only fallback. Separate mounts hide hook-order
+// failures. Observe native timers without advancing or replacing their clock.
 {
   resetRevealForTest()
   const full = Array.from({ length: 12 }, (_, i) => `think line ${i}`).join('\n')
   const slice = full.slice(0, 40)
-  await withTerminal(
-    () => (
-      <AssistantThinkingMessage thinking={slice} textFull={full} marginTopOnTurn={false} verbose={false} preview streaming />
-    ),
-    async screen => {
-      // 固定窗:探针 预览 ticker 不得被揭示节流：settled 等到揭完也判过，
-      // 遮蔽「ticker 跟着 reveal 走」这个 bug
-      await sleep(120)
-      const text = screen()
-      check(text.includes('think line 11'), 'C1 preview ticker follows the ARRIVED text (not the reveal)')
-    },
-  )
-  await withTerminal(
-    () => (
-      <AssistantThinkingMessage thinking={slice} textFull={full} marginTopOnTurn={false} verbose streaming />
-    ),
-    async screen => {
-      // 固定窗:探针 展开体不得越过已揭示切片（断言 think line 11 不出现）
-      await sleep(120)
-      const text = screen()
-      check(!text.includes('think line 11'), 'C1 expanded body paints only the revealed slice')
-      check(text.includes('think line 0'), 'C1 expanded body shows the slice head')
-    },
-  )
+  type ThinkingProps = React.ComponentProps<typeof AssistantThinkingMessage>
+  const textProps = { thinking: slice, textFull: full, verbose: true }
+  const stages: Array<{
+    id: string
+    props: Partial<ThinkingProps>
+    visible: string[]
+    absent: string[]
+    timers: number
+  }> = [
+    { id: 'empty', props: { textFull: full, preview: true },
+      visible: [], absent: ['Thinking', 'think line'], timers: 0 },
+    { id: 'preview', props: { ...textProps, verbose: false, preview: true },
+      visible: ['Thinking', 'think line 11'], absent: ['think line 0'], timers: 1 },
+    { id: 'expanded', props: textProps,
+      visible: ['Thinking', 'think line 0'], absent: ['think line 11'], timers: 1 },
+    { id: 'empty-again', props: {},
+      visible: [], absent: ['Thinking', 'think line'], timers: 0 },
+    { id: 'count-live', props: { reasoningTokens: 123, preview: true },
+      visible: ['Thinking', '~123 tokens'], absent: ['think line'], timers: 1 },
+    { id: 'text-over-count', props: { ...textProps, reasoningTokens: 123 },
+      visible: ['Thinking', 'think line 0'], absent: ['tokens', 'think line 11'], timers: 1 },
+    { id: 'count-again', props: { reasoningTokens: 456 },
+      visible: ['Thinking', '~456 tokens'], absent: ['think line'], timers: 1 },
+    { id: 'count-settled', props: { reasoningTokens: 456, streaming: false },
+      visible: ['Thought', '~456 tokens'], absent: ['Thinking', 'think line'], timers: 0 },
+    { id: 'count-restarted', props: { reasoningTokens: 456 },
+      visible: ['Thinking', '~456 tokens'], absent: ['Thought', 'think line'], timers: 1 },
+    { id: 'text-live-again', props: textProps,
+      visible: ['Thinking…', 'think line 0'], absent: ['tokens', 'think line 11'], timers: 1 },
+    { id: 'text-settled', props: { ...textProps, streaming: false },
+      visible: ['Thinking', 'think line 0'], absent: ['tokens', 'think line 11', '…'], timers: 0 },
+    { id: 'text-restarted', props: textProps,
+      visible: ['Thinking…', 'think line 0'], absent: ['tokens', 'think line 11'], timers: 1 },
+  ]
+  let committedStage = ''
+  function ThinkingFixture({ stage }: { stage: typeof stages[number] }): React.ReactNode {
+    // Child passive effects have run before this marker. The matching screen
+    // sentinel also waits for terminal parsing, so absence/timer checks cannot
+    // pass against the previous render (especially the initial empty frame).
+    React.useEffect(() => { committedStage = stage.id }, [stage.id])
+    return (
+      <Box flexDirection="column">
+        <AssistantThinkingMessage thinking="" marginTopOnTurn={false} verbose={false} streaming {...stage.props} />
+        <Text>{`C1-stage:${stage.id}`}</Text>
+      </Box>
+    )
+  }
+  const spinnerTimers = new Set<ReturnType<typeof setInterval>>()
+  const originalSetInterval = globalThis.setInterval
+  const originalClearInterval = globalThis.clearInterval
+  const originalError = console.error
+  const errors: string[] = []
+  globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => {
+    const timer = originalSetInterval(...args)
+    if (args[1] === THINKING_SPINNER_INTERVAL_MS) spinnerTimers.add(timer)
+    return timer
+  }) as typeof setInterval
+  globalThis.clearInterval = ((...args: Parameters<typeof clearInterval>) => {
+    spinnerTimers.delete(args[0] as ReturnType<typeof setInterval>)
+    originalClearInterval(...args)
+  }) as typeof clearInterval
+  console.error = (...args: unknown[]) => {
+    errors.push(args.map(String).join(' '))
+    originalError(...args)
+  }
+  try {
+    await withTerminal(
+      () => <ThinkingFixture stage={stages[0]!} />,
+      async (screen, rerender) => {
+        for (const [index, stage] of stages.entries()) {
+          if (index > 0) rerender(<ThinkingFixture stage={stage} />)
+          const ready = await settled(() => {
+            const text = screen()
+            return committedStage === stage.id && text.includes(`C1-stage:${stage.id}`) &&
+              stage.visible.every(value => text.includes(value)) &&
+              stage.absent.every(value => !text.includes(value)) && spinnerTimers.size === stage.timers
+          })
+          check(ready, `C1 ${stage.id}: same-instance content and ${stage.timers} active spinner timer(s)`)
+          if (!ready) break
+        }
+      },
+    )
+    check(await settled(() => spinnerTimers.size === 0), 'C1 unmount releases the active spinner')
+    check(!errors.some(error => /Rendered (?:more|fewer) hooks|change in the order of Hooks|Should have a queue/i.test(error)),
+      'C1 transitions emit no hook-order errors')
+  } finally {
+    globalThis.setInterval = originalSetInterval
+    globalThis.clearInterval = originalClearInterval
+    console.error = originalError
+    // Do not let a failed cleanup assertion leak timers into the other groups.
+    for (const timer of spinnerTimers) originalClearInterval(timer)
+  }
 }
 
 // C2/C3: tool previews and full detail are independent of smooth streaming.
