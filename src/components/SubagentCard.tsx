@@ -54,10 +54,10 @@ export function SubagentCard({ subagent, focused, onClick, variant = 'default', 
   const minimalUi = isMinimalUiMode()
   const teamGlyph = teamMember === undefined ? undefined : teamStatusGlyph(teamMember.status, minimalUi)
   const glyph = teamGlyph !== undefined ? teamGlyph.glyph
-    : running ? (minimalUi ? '·' : '🟡')
-    : subagent.status === 'unknown' ? (minimalUi ? '·' : '⚪')
-    : subagent.status === 'failed' || subagent.status === 'cancelled' ? (minimalUi ? '×' : '🔴')
-    : (minimalUi ? '✓' : '🟢')
+    : running ? (minimalUi ? '·' : '◐')
+    : subagent.status === 'unknown' ? (minimalUi ? '·' : '○')
+    : subagent.status === 'failed' || subagent.status === 'cancelled' ? '×'
+    : '✓'
   const glyphColor = teamGlyph !== undefined ? teamGlyph.color
     : minimalUi ? undefined
     : running ? 'warning' as const

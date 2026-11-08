@@ -10,7 +10,9 @@
  * its output, the reply streams in; a second turn shows the diff cards of a
  * new and an edited file and a question panel answered with Enter; a third
  * turn's async questions leave its tool running, accept a steered answer,
- * and dismiss without interruption; Esc then interrupts the command.
+ * and dismiss without interruption; Esc then interrupts the command. The
+ * narrow cases also deliver the tool and async question in one server batch
+ * and require the complete command to remain reachable by real navigation.
  *
  * Run: node --import tsx/esm scripts/verify-codex-chat.tsx
  */
@@ -49,8 +51,8 @@ const command = (id: string, script: string, status: string, output: string | nu
   commandActions: [{ type: 'unknown', command: script }], aggregatedOutput: output, exitCode, durationMs: output === null ? null : 4,
 })
 
-async function run(cols: number, fullscreen: boolean): Promise<void> {
-  const tag = `${cols}c ${fullscreen ? 'fullscreen' : 'inline'}`
+async function run(cols: number, fullscreen: boolean, sameBatch = false): Promise<void> {
+  const tag = `${cols}c ${fullscreen ? 'fullscreen' : 'inline'}${sameBatch ? ' same-batch' : ''}`
   const rows = 30
   const h = await openHarness()
   const permissions = new PermissionStore()
@@ -60,6 +62,11 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
 
   // The server side of each turn, scripted per turn/start.
   let turns = 0
+  // Cover both an already-painted command and the original same-batch
+  // command + async question. The latter must never await a render between
+  // notifications: doing so would hide first-paint/scrollback regressions.
+  let showAsyncQuestion!: () => void
+  const commandPainted = new Promise<void>(resolve => { showAsyncQuestion = resolve })
   const notify = (method: string, params: Rec): void => { h.fake.notify(method, { threadId: THREAD, ...params }) }
   h.fake.on('turn/start', (params, request) => {
     turns += 1
@@ -98,6 +105,7 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
         notify('turn/completed', { turn: { id: turnId, items: [], status: 'completed', error: null } })
       } else {
         notify('item/started', { turnId, item: command('exec-3', 'sleep 30', 'inProgress', null, null) })
+        if (!sameBatch) await commandPainted
         const asyncQuestion = { type: 'agentMessage', id: 'async-3', delivery: 'async', phase: 'final_answer', text: 'Which approach?\n- Small\n- Full\n\nAny details?', questions: [{ title: 'Which approach?', options: ['Small', 'Full'] }, { title: 'Any details?' }] }
         notify('item/started', { turnId, item: asyncQuestion })
         notify('item/completed', { turnId, item: asyncQuestion })
@@ -118,11 +126,15 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
   })
 
   const term = new XTerm({ cols, rows, scrollback: 400, allowProposedApi: true })
+  let renderedFrames = 0
+  let parsedWrites = 0
   class FakeStdout extends Writable {
     columns = cols
     rows = rows
     isTTY = true
-    _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void): void { term.write(String(chunk), callback) }
+    _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void): void {
+      term.write(String(chunk), () => { parsedWrites += 1; callback() })
+    }
   }
   class FakeStdin extends PassThrough {
     isTTY = true
@@ -140,11 +152,15 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
     return lines.join('\n')
   }
   const view = (): string => viewportLines(term, rows).join('\n')
+  // Earlier cases must not leave AlternateScreen's process.stdout bridge
+  // pointing at an unmounted renderer during this case's first effects.
+  instances.delete(process.stdout)
+  const node = React.createElement(Chat, { channel: channel as never, questionStore: questions, approvalStore: permissions, onExit: () => undefined, fullscreen, trajectorySeen: true })
   const instance = await ui.render(
-    React.createElement(Chat, { channel: channel as never, questionStore: questions, approvalStore: permissions, onExit: () => undefined, fullscreen, trajectorySeen: true }),
-    { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
+    fullscreen ? React.createElement(ui.AlternateScreen, null, node) : node,
+    { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false, onFrame: () => { renderedFrames += 1 } },
   )
-  for (const value of instances.values()) instances.set(process.stdout, value)
+  instances.set(process.stdout, instances.get(stdout)!)
   const type = async (text: string): Promise<void> => {
     for (const char of text) stdin.write(char)
     // 固定窗:pacing the prompt applies typed characters on its own render tick.
@@ -153,6 +169,7 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
   try {
     // 固定窗:pacing the key handlers attach after the first frame.
     await sleep(300)
+    check(`${tag}: the terminal uses the intended screen buffer`, term.buffer.active.type === (fullscreen ? 'alternate' : 'normal'))
     await type('run it')
     stdin.write('\r')
     check(`${tag}: the message reaches turn/start with its client id`, await settled(() => h.sent('turn/start').length === 1) && typeof h.sent('turn/start')[0]!.clientUserMessageId === 'string')
@@ -176,18 +193,75 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
 
     await type('long one')
     stdin.write('\r')
-    check(`${tag}: the running command's card is on screen`, await settled(() => screen().includes('sleep 30')), screen())
+    if (!sameBatch) {
+      check(`${tag}: the running command's card is on screen`, await settled(() => view().includes('sleep 30')), view())
+      showAsyncQuestion()
+    } else {
+      check(`${tag}: the same-batch command projects as running`, await settled(() => channel.rows.some(row => row.kind === 'tool' && row.tool?.status === 'running' && row.tool.argsFull?.includes('sleep 30'))))
+    }
     check(`${tag}: async question opens while the session keeps working`, await settled(() => view().includes('Which approach?') && view().includes('Small')) && channel.working && h.session.status === 'running', view())
+    if (sameBatch) {
+      // Exercise the real keyboard fold route rather than assuming the entire
+      // tool and question fit in one narrow 30-row viewport simultaneously.
+      // The server emitted both items without an intervening await/frame.
+      stdin.write('\x0b')
+      check(`${tag}: Ctrl+K visibly folds the question`,
+        await settled(() => view().includes('Waiting for your answer') && !view().includes('Custom answer')), view())
+      check(`${tag}: folding neither answers nor cancels the live question`,
+        questions.getSnapshot() !== null && channel.working && h.sent('turn/steer').length === 0 && h.sent('turn/interrupt').length === 0)
+      stdin.write('\x0b')
+      check(`${tag}: unfolding restores the same answerable question`,
+        await settled(() => view().includes('❯● Small') && view().includes('Custom answer')), view())
+    }
     stdin.write('\r')
     check(`${tag}: async default answer steers without interrupting`, await settled(() => h.sent('turn/steer').length === 1 && view().includes('Any details?')) && h.sent('turn/interrupt').length === 0, view())
     check(`${tag}: async answer echo is readable and has no protocol envelope`, await settled(() => channel.rows.some(row => row.kind === 'user' && row.text === '> Which approach?\n\nSmall')) && !screen().includes('send_user_message_question_reply'), view())
+    const framesBeforeCancel = renderedFrames
+    const writesBeforeCancel = parsedWrites
     stdin.write('\x1b')
     check(`${tag}: dismissing an async question leaves work running`, await settled(() => questions.getSnapshot() === null) && h.sent('turn/interrupt').length === 0 && channel.working, view())
+    // The tool is still live even if the answer bubble has scrolled its
+    // header out of this terminal's viewport.
+    check(`${tag}: dismissing the question preserves the running tool`, channel.rows.some(row => row.kind === 'tool' && row.tool?.status === 'running' && row.tool.argsFull?.includes('sleep 30')))
+    if (sameBatch) {
+      // A store update precedes React's commit and xterm's asynchronous
+      // parser. Require a post-cancel frame and drained terminal write before
+      // testing visibility; never force a redraw to resurrect missing text.
+      check(`${tag}: cancelling removes the visible questionnaire`, await settled(() =>
+        renderedFrames > framesBeforeCancel && parsedWrites > writesBeforeCancel
+        && stdout.writableLength === 0 && !view().includes('📋')), view())
+      let accessible = view().includes('sleep 30')
+      if (!accessible && fullscreen) {
+        // Fullscreen has no native scrollback. Use Chat's real PgUp route,
+        // allowing multiple pages rather than assuming the tool is adjacent.
+        for (let page = 0; page < 12 && !accessible; page++) {
+          stdin.write('\x1b[5~')
+          accessible = await settled(() => view().includes('sleep 30'), { timeoutMs: 1500 })
+        }
+      } else if (!accessible) {
+        // Inline gives scrolling to the terminal. Page through its real
+        // native viewport; channel.rows or a buffer-only search is not proof
+        // that a user can bring the complete command back onto the screen.
+        const buffer = term.buffer.active
+        const nativeView = (): string => Array.from({ length: rows }, (_, y) =>
+          buffer.getLine(buffer.viewportY + y)?.translateToString(true) ?? '').join('\n')
+        term.scrollToTop()
+        const pages = Math.ceil(buffer.length / (rows - 1)) + 1
+        for (let page = 0; page < pages && !accessible; page++) {
+          accessible = nativeView().includes('sleep 30')
+          if (!accessible) term.scrollLines(rows - 1)
+        }
+      }
+      check(`${tag}: the complete command is accessible after cancelling the question`, accessible, screen())
+      if (fullscreen) stdin.write('\x1b[F')
+      else term.scrollToBottom()
+    }
     stdin.write('\x1b')
     check(`${tag}: Esc interrupts the turn`, await settled(() => h.sent('turn/interrupt').length === 1 && h.sent('turn/interrupt')[0]!.turnId === 'turn-3'))
     check(`${tag}: the interrupted card and the interrupt row show`, await settled(() => screen().includes(codexText('codex-interrupted')) && !channel.working), screen())
   } finally {
     instance.unmount()
+    instances.delete(process.stdout)
     channel.releaseContributions()
     await h.session.dispose()
     term.dispose()
@@ -198,5 +272,7 @@ await run(80, false)
 await run(80, true)
 await run(40, false)
 await run(40, true)
+await run(40, false, true)
+await run(40, true, true)
 console.log(`\nverify-codex-chat OK (${passed} checks)`)
 process.exit(0)

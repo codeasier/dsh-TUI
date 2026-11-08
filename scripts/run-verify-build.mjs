@@ -43,6 +43,8 @@ import { join } from 'node:path'
 
 const GATES = [
   'verify:cli',
+  'verify:local-install-ownership',
+  'verify:local-install-rollback',
   'verify:boundary',
   'verify:agent-domain',
   'verify:contract',

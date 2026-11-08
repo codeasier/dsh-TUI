@@ -148,10 +148,39 @@ export interface ChildStderrReporter {
 }
 
 /**
+ * Grade one child-stderr line by what it says, so a server's start-up chatter
+ * never reads as a fault and a real fault never reads as chatter. MCP servers
+ * must log to stderr (stdout is the JSON-RPC channel) and do so on every boot,
+ * so only a line that announces a problem reaches the notice area at all:
+ *
+ * - `error`   — failure vocabulary (the line says something broke)
+ * - `warning` — caution vocabulary (degraded, retrying, deprecated)
+ * - `info`    — everything else: start-up banners, version notes, usage hints
+ *
+ * `info` lines are dropped from the notice stream, NOT from the process: the
+ * caller logs every line before pushing it here (see the guard sink in
+ * `plugin.ts`), so `DSH_TUI_DEBUG` still shows what was kept out of the UI.
+ * A genuine failure that uses none of this vocabulary ends up as `info` — the
+ * cost of a quiet status area, and the reason the lists stay generous.
+ */
+const FAILURE_LINE_PATTERN =
+  /\b(?:err(?:or|ors)|fail(?:ed|ure|ures)?|fatal|panic|exception|unhandled|uncaught|abort(?:ed)?|refused|unreachable|denied|cannot|can't|unable to|no server|no such|not found|ENOENT|EACCES|ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT|ENOTEMPTY|EADDRINUSE|EPERM|EBUSY)\b/iu
+
+const CAUTION_LINE_PATTERN = /\b(?:warn(?:ing|ings)?|deprecated|degraded|retry(?:ing)?|timeout|timed out|fallback)\b/iu
+
+export function childStderrSeverity(line: string): 'error' | 'warning' | 'info' {
+  if (FAILURE_LINE_PATTERN.test(line)) return 'error'
+  if (CAUTION_LINE_PATTERN.test(line)) return 'warning'
+  return 'info'
+}
+
+/**
  * Turn a raw child-stderr line stream into bounded, deduplicated
  * notifications: identical lines inside a short debounce window collapse into
- * one "（重复 N 次）" notice, and a line that was just shown stays silent for
- * a cooldown so a failing reconnect loop can't spam the status area.
+ * one "（重复 N 次）" notice, a line that was just shown stays silent for a
+ * cooldown so a failing reconnect loop can't spam the status area, and both
+ * the decision to notify and the notice color follow the line's own content
+ * (see childStderrSeverity — informational lines produce no notice).
  */
 export function createChildStderrReporter(
   notify: ChildStderrNotify,
@@ -171,6 +200,13 @@ export function createChildStderrReporter(
     push(raw) {
       const cleaned = raw.replace(ANSI_PATTERN, '').trim()
       if (cleaned.length === 0) return
+      // Grade the FULL line: the display cap below only shortens what a notice
+      // shows, it must never hide a failure word that sits past it.
+      const severity = childStderrSeverity(cleaned)
+      if (severity === 'info') return
+      // Re-bind the narrowed grade for `flush` below: it is a nested function,
+      // where control-flow narrowing of `severity` no longer applies.
+      const noticeColor = severity
       const line = cleaned.length > maxLineLength ? `${cleaned.slice(0, maxLineLength)}…` : cleaned
       const existing = groups.get(line)
       if (existing !== undefined) {
@@ -201,7 +237,7 @@ export function createChildStderrReporter(
           group.count > 1
             ? t('child-stderr-line-repeat', { line, count: group.count })
             : t('child-stderr-line', { line })
-        notify(text, { color: 'error', timeoutMs: 8000 })
+        notify(text, { color: noticeColor, timeoutMs: 8000 })
       }
     },
     dispose() {

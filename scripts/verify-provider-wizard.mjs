@@ -88,6 +88,45 @@
  * 43–52. Tab capability drafts: add/edit commits, cancellation, unchanged
  * selections, unchecked edits, whole-catalog overrides, override migration,
  * offline editing, inheritance resets, validation and no-op saves.
+ * 63. managing official models: the vendor's extra ids are the selectable
+ *    rows (enabled ones pre-checked), nothing is enabled that the user did not
+ *    tick, and the derived route is written with exactly that set — enriched
+ *    with the vendor catalog's name, capacities, modalities and thinking tiers.
+ * 43b. without the vendor catalog (models.dev unreachable) the same pass still
+ *    works: rows say so, entries stay bare, and the user is told.
+ * 64. un-checking an enabled model removes it while a kept id re-enters its
+ *    stored entry, hand-tuned fields beating the catalog.
+ * 65. a selection that already matches writes nothing, while a bare stored
+ *    entry gains the catalog fields exactly once.
+ * 66. no resolvable key refuses by name and never probes.
+ * 67. a failed vendor listing changes nothing.
+ * 68. clearing every row retires the derived route; with no derived route it
+ *    is a plain no-op.
+ * 69. a derived route repointed at another endpoint/protocol is refused,
+ *    never overwritten.
+ * 49b. a catalog parent with explicit/inherited connection overrides never
+ *    offers official sync, reads its key, probes the vendor or repairs routes;
+ *    ordinary edits against an explicitly configured relay still work.
+ * 49c. adding over an overridden/unknown existing catalog route cannot send
+ *    a typed draft key to the default vendor endpoint before confirmation,
+ *    including when the route changes while the catalog lookup is pending.
+ * 70. boot reports un-enabled and retired ids, repairs only the routing of
+ *    enabled models, and neither throws nor writes when the listing is down.
+ * 50b. stateful migration preserves unknown model fields, writes the target
+ *    before source cleanup, checks concurrent edits and all-layer existence,
+ *    and stops later repairs/logging when the owner unloads during a write.
+ * 71. the action question gains the management option only while a configured
+ *    catalog route has a vendor listing.
+ * 72. connecting a catalog route reports the vendor's extras (and their
+ *    derived route) in the model question and enables nothing by itself.
+ * 73. an unreachable vendor listing while connecting keeps the snapshot note
+ *    and surfaces the live-probe failure once.
+ * 74. editing that route's model list shows the same note and keeps
+ *    vendor-only ids unselectable.
+ *
+ * The route picker (several eligible routes) cannot be exercised yet: exactly
+ * one route in `CATALOG_LIVE_TARGETS` has a vendor listing, so every pass has
+ * a single candidate. The branch stays for the next registered target.
  *
  * Run with plain node against the compiled lib (after `pnpm build`):
  * `node scripts/verify-provider-wizard.mjs`
@@ -97,7 +136,8 @@ import {
   deriveKeyRef,
   runProviderWizard,
 } from '../lib/types/dsh-adapter/providerWizard.js'
-import { t } from '../lib/types/i18n.js'
+import { inspectCatalogRoutes, reportCatalogRoutesQuietly, syncableCatalogRoutes, writeCatalogModels } from '../lib/types/dsh-adapter/catalogSync.js'
+import { getLang, setLang, t } from '../lib/types/i18n.js'
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -134,6 +174,8 @@ function makeDeps(script, options = {}) {
     asks: [],
     /** every discoverModels request, in order (shape regressions). */
     discoverRequests: [],
+    /** the per-request options bag (signal forwarding). */
+    discoverSignals: [],
     /** question id → hideCustomInput flag as submitted (panel contract). */
     hideFlags: {},
     /** question id → option descriptions, for catalog row-shape regressions. */
@@ -152,7 +194,7 @@ function makeDeps(script, options = {}) {
     return raw[index]
   }
   const host = {
-    listCatalogProviders: () => [
+    listCatalogProviders: () => options.catalogProviders ?? [
       { provider: 'deepseek', displayName: 'DeepSeek' },
       { provider: 'openai', displayName: 'OpenAI' },
       { provider: 'same-name', displayName: 'same-name' },
@@ -173,9 +215,10 @@ function makeDeps(script, options = {}) {
           && row.ref === ref)
         .map(row => row.route)
     },
-    routeExists: () => false,
-    discoverModels: async request => {
+    routeExists: route => options.routeExists ?? (options.configured ?? []).some(row => row.route === route),
+    discoverModels: async (request, discoverOptions) => {
       calls.discoverRequests.push(request)
+      calls.discoverSignals.push(discoverOptions?.signal)
       if (options.discover) return options.discover(request)
       if (options.discoverThrows) throw new Error('connection refused')
       return options.discovered ?? []
@@ -200,11 +243,30 @@ function makeDeps(script, options = {}) {
       calls.profiles.push([route, profile])
     },
     mutateProfile: async (route, ops) => {
-      if (options.profileThrows) throw new Error('settings-rejected: unserviceable')
+      // `mutateThrows` names ONE route (the derived route) so the connect-time
+      // sync can fail while the catalog profile write still succeeds.
+      if (options.profileThrows || options.mutateThrows === route) throw new Error('settings-rejected: unserviceable')
       calls.mutations.push([route, ops])
+      if (options.statefulProfiles) {
+        const provider = options.configured.find(row => row.route === route)
+          ?? { route, ref: '', shadowed: false, isCatalog: false }
+        for (const op of ops) {
+          if (op.path[0] === 'models') {
+            provider.modelEntries = structuredClone(op.value)
+            provider.models = op.value.map(entry => entry.id)
+          } else if (op.path[0] === 'apiKeyEnv') provider.ref = op.value
+          else provider[op.path[0]] = structuredClone(op.value)
+        }
+        if (!options.configured.includes(provider)) options.configured.push(provider)
+      }
     },
     ...(options.oauth ? { oauth: options.oauth } : {}),
   }
+  // Vendor metadata source: the fixture by default, `null` to simulate an
+  // offline/unreachable models.dev.
+  const readVendorCatalog = options.vendorCatalog === null
+    ? async () => undefined
+    : async () => options.vendorCatalog ?? VENDOR_CATALOG
   const deps = {
     host,
     ask: async request => {
@@ -237,6 +299,7 @@ function makeDeps(script, options = {}) {
     },
     notify: (text, opts) => { calls.notifications.push({ text, color: opts?.color }) },
     pushLocal: (title, lines) => { calls.pushed.push({ title, lines }) },
+    readVendorCatalog,
     working: () => options.working ?? false,
     switchModel: async (provider, model) => {
       calls.switches.push([provider, model])
@@ -253,6 +316,49 @@ const CONFIRM_WRITE = { selected: [t('provider-opt-confirm-write')] }
 const KEEP_MODEL = { selected: [t('provider-opt-switch-keep')] }
 const ACTION_ADD = { selected: [t('provider-opt-action-add')] }
 const ACTION_EDIT = { selected: [t('provider-opt-action-edit')] }
+const ACTION_SYNC = { selected: [t('provider-opt-action-sync')] }
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+/** The vendor routing header op one derived-route write carries. */
+const sessionHeaderOp = ops => ops.find(op => eq(op.path, ['headers']))
+// models.dev-shaped fixture: the fields the wizard maps onto a model entry.
+const VENDOR_CATALOG = {
+  'opencode-go': {
+    models: {
+      'grok-4.5': {
+        name: 'Grok 4.5',
+        limit: { context: 500000, output: 500000 },
+        modalities: { input: ['text', 'image'] },
+        reasoning: true,
+        reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high'] }],
+      },
+      'longcat-2.5-preview-free': {
+        name: 'LongCat 2.5 Preview Free',
+        limit: { context: 1000000, output: 131072 },
+        modalities: { input: ['text', 'image'] },
+        reasoning: true,
+        reasoning_options: [{ type: 'toggle' }],
+      },
+      'claude-haiku-5-5': {
+        name: 'Claude Haiku 5.5',
+        limit: { context: 1000000, output: 128000 },
+        modalities: { input: ['text', 'image'] },
+        reasoning: true,
+        reasoning_options: [{ type: 'toggle' }],
+      },
+    },
+  },
+  'opencode': {
+    models: {
+      'glm-5': {
+        name: 'GLM-5',
+        limit: { context: 204800, output: 131072 },
+        modalities: { input: ['text'] },
+        reasoning: true,
+        reasoning_options: [{ type: 'toggle' }],
+      },
+    },
+  },
+}
 // Edit-menu picks (asked exactly once per edit session).
 const MENU_KEY = { selected: [t('provider-opt-edit-key')] }
 const MENU_BASEURL = { selected: [t('provider-opt-edit-baseurl')] }
@@ -1774,6 +1880,1504 @@ for (const invalid of [
     ...CUSTOM_EDIT, models: { selected: ['chosen'], edits: { chosen: {} } },
   }, { configured: [CAPABILITY_PROVIDER], discovered: [{ id: 'chosen', contextWindow: 800000 }] })
   check('52 no-op capability save: zero writes', await runProviderWizard(deps) === 'cancelled' && calls.mutations.length === 0)
+}
+
+// 43. Managing official models: only the vendor's extra ids are selectable
+// (the catalog route cannot carry them), nothing is pre-checked on a first
+// pass, and the write carries exactly what the user ticked — enriched with the
+// vendor catalog's name, capacities, modalities and thinking tiers.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['longcat-2.5-preview-free'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }, { id: 'longcat-2.5-preview-free' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('43 manage: outcome synced', outcome === 'synced', outcome)
+  check('43 manage: one candidate skips the route question', !calls.asks.includes('sync-route'), JSON.stringify(calls.asks))
+  check('43 manage: probes the installed catalog, then the vendor listing',
+    eq(calls.discoverRequests, [
+      { provider: 'opencode-go' },
+      { baseURL: 'https://opencode.ai/zen/go/v1', api: 'openai-completions', apiKey: 'sk-zen' },
+    ]), JSON.stringify(calls.discoverRequests))
+  check('43 manage: only vendor-only ids are rows, nothing pre-checked',
+    eq(Object.keys(calls.optionDescriptions['sync-models'] ?? {}).sort(), ['grok-4.5', 'longcat-2.5-preview-free'])
+      && eq(calls.defaults['sync-models'], []),
+    JSON.stringify({ rows: Object.keys(calls.optionDescriptions['sync-models'] ?? {}), defaults: calls.defaults['sync-models'] }))
+  check('43 manage: rows describe the catalog metadata (name, capacities, modalities, tiers)',
+    calls.optionDescriptions['sync-models']?.['longcat-2.5-preview-free']
+      === [
+        'LongCat 2.5 Preview Free',
+        t('provider-row-meta-ctx', { value: '1M' }),
+        t('provider-row-meta-out', { value: '128k' }),
+        t('provider-row-meta-input', { value: 'text+image' }),
+        t('provider-row-meta-effort', { value: 'off/high' }),
+      ].join(' · ')
+      && calls.optionDescriptions['sync-models']?.['grok-4.5']
+        === [
+          'Grok 4.5',
+          t('provider-row-meta-ctx', { value: '500k' }),
+          t('provider-row-meta-out', { value: '500k' }),
+          t('provider-row-meta-input', { value: 'text+image' }),
+          t('provider-row-meta-effort', { value: 'low/medium/high' }),
+        ].join(' · '),
+    JSON.stringify(calls.optionDescriptions['sync-models']))
+  check('43 manage: the detail counts enabled versus un-enabled',
+    calls.details['sync-models'] === t('provider-sync-detail', {
+      total: 2,
+      enabled: 0,
+      unenabled: 2,
+      derived: 'opencode-go-live, opencode-go-live-anthropic',
+    }), JSON.stringify(calls.details['sync-models']))
+  const written = calls.mutations[0]?.[1]?.[0]?.value ?? []
+  check('43 manage: the derived route enables exactly the ticked id, enriched',
+    calls.mutations.length === 1 && calls.mutations[0]?.[0] === 'opencode-go-live'
+      && written.length === 1 && written[0].id === 'longcat-2.5-preview-free'
+      && written[0].name === 'LongCat 2.5 Preview Free'
+      && written[0].contextWindow === 1000000
+      && written[0].maxTokens === 131072
+      && eq(written[0].input, ['text', 'image'])
+      && eq(written[0].reasoningEfforts, { off: 'none', high: 'high' }),
+    JSON.stringify(calls.mutations))
+  check('43 manage: the route identity rides the same write',
+    eq(calls.mutations[0]?.[1]?.slice(1, 5), [
+      { op: 'set', path: ['api'], value: 'openai-completions' },
+      { op: 'set', path: ['baseURL'], value: 'https://opencode.ai/zen/go/v1' },
+      { op: 'set', path: ['apiKeyEnv'], value: 'OPENCODE_GO_API_KEY' },
+      { op: 'set', path: ['displayName'], value: 'OpenCode Go (live)' },
+    ]), JSON.stringify(calls.mutations[0]?.[1]))
+  check('43 manage: the vendor routing header is generated for the declared route',
+    UUID.test(sessionHeaderOp(calls.mutations[0]?.[1])?.value?.['x-opencode-session'] ?? ''),
+    JSON.stringify(sessionHeaderOp(calls.mutations[0]?.[1])))
+  check('43 manage: the catalog route profile is untouched',
+    calls.profiles.length === 0 && calls.credentials.length === 0,
+    JSON.stringify({ profiles: calls.profiles, credentials: calls.credentials }))
+  check('43 manage: transcript reports the enabled set',
+    calls.pushed.some(entry => entry.title === '/provider'
+      && entry.lines[0] === t('provider-sync-transcript-route', { route: 'opencode-go', derived: 'opencode-go-live, opencode-go-live-anthropic' })
+      && entry.lines[1].includes('longcat-2.5-preview-free')),
+    JSON.stringify(calls.pushed))
+  check('43 manage: success toast counts the enabled set',
+    calls.notifications.some(n => n.color === 'success'
+      && n.text === t('provider-sync-success', {
+        route: 'opencode-go',
+        derived: 'opencode-go-live, opencode-go-live-anthropic',
+        n: 1,
+        added: 1,
+        removed: 0,
+      })),
+    JSON.stringify(calls.notifications))
+}
+
+// 43b. Without the vendor catalog (models.dev unreachable) the same pass still
+// works: rows say so, entries stay bare, and the user is told.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['longcat-2.5-preview-free'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    vendorCatalog: null,
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'longcat-2.5-preview-free' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  const written = calls.mutations[0]?.[1]?.[0]?.value ?? []
+  check('43b manage without metadata: outcome synced with a bare entry',
+    outcome === 'synced' && eq(written, [{ id: 'longcat-2.5-preview-free' }]),
+    JSON.stringify({ outcome, mutations: calls.mutations }))
+  check('43b manage without metadata: the routing header still lands',
+    UUID.test(sessionHeaderOp(calls.mutations[0]?.[1])?.value?.['x-opencode-session'] ?? ''),
+    JSON.stringify(sessionHeaderOp(calls.mutations[0]?.[1])))
+  check('43b manage without metadata: the row and the toast say so',
+    calls.optionDescriptions['sync-models']?.['longcat-2.5-preview-free'] === t('provider-sync-row-no-meta')
+      && calls.notifications.some(n => n.color === 'warning' && n.text === t('provider-sync-meta-unavailable')),
+    JSON.stringify({ rows: calls.optionDescriptions['sync-models'], notifications: calls.notifications }))
+}
+
+// 43c. A Claude id splits to the anthropic derived route: the vendor serves
+// `claude-*` over anthropic-messages only, and an openai-completions request
+// for it fails the first turn with 400 ModelProtocolUnsupported.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['claude-haiku-5-5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'claude-haiku-5-5' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('43c claude split: outcome synced', outcome === 'synced', outcome)
+  check('43c claude split: the row notes its anthropic-only routing',
+    (calls.optionDescriptions['sync-models']?.['claude-haiku-5-5'] ?? '').includes(t('provider-sync-row-anthropic')),
+    JSON.stringify(calls.optionDescriptions['sync-models']))
+  const anthropicMutation = calls.mutations.find(([route]) => route === 'opencode-go-live-anthropic')
+  check('43c claude split: the anthropic derived route carries the Claude id',
+    calls.mutations.length === 1 && anthropicMutation !== undefined
+      && anthropicMutation[1].find(op => op.path.join('.') === 'models')?.value?.[0]?.id === 'claude-haiku-5-5',
+    JSON.stringify(calls.mutations))
+  check('43c claude split: the anthropic route declares its protocol and endpoint',
+    eq(anthropicMutation?.[1]?.slice(1, 5), [
+      { op: 'set', path: ['api'], value: 'anthropic-messages' },
+      { op: 'set', path: ['baseURL'], value: 'https://opencode.ai/zen/go' },
+      { op: 'set', path: ['apiKeyEnv'], value: 'OPENCODE_GO_API_KEY' },
+      { op: 'set', path: ['displayName'], value: 'OpenCode Go (live-anthropic)' },
+    ]), JSON.stringify(anthropicMutation?.[1]))
+  check('43c claude split: the primary derived route is untouched',
+    !calls.mutations.some(([route]) => route === 'opencode-go-live')
+      && !calls.removedProfiles.includes('opencode-go-live'),
+    JSON.stringify({ mutations: calls.mutations, removed: calls.removedProfiles }))
+}
+
+// 43d. A mixed selection splits across both derived routes, with one
+// transcript line per active route.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['longcat-2.5-preview-free', 'claude-haiku-5-5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'longcat-2.5-preview-free' }, { id: 'claude-haiku-5-5' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  const byRoute = new Map(calls.mutations.map(([route, ops]) => [route, ops]))
+  check('43d mixed split: outcome synced', outcome === 'synced', outcome)
+  check('43d mixed split: each protocol lands on its own derived route',
+    calls.mutations.length === 2
+      && byRoute.get('opencode-go-live')?.find(op => op.path.join('.') === 'models')?.value?.[0]?.id === 'longcat-2.5-preview-free'
+      && byRoute.get('opencode-go-live-anthropic')?.find(op => op.path.join('.') === 'models')?.value?.[0]?.id === 'claude-haiku-5-5',
+    JSON.stringify(calls.mutations))
+  check('43d mixed split: transcript names both derived routes',
+    calls.pushed.some(entry => entry.title === '/provider'
+      && entry.lines.some(line => /^opencode-go-live[:：]\s*longcat-2\.5-preview-free$/u.test(line))
+      && entry.lines.some(line => /^opencode-go-live-anthropic[:：]\s*claude-haiku-5-5$/u.test(line))),
+    JSON.stringify(calls.pushed))
+}
+
+// 43e. A Claude id stranded on the primary route by an older build migrates
+// on the next write: the primary route drops it, the anthropic route gains it.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['claude-haiku-5-5'] },
+  }, {
+    statefulProfiles: true,
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['claude-haiku-5-5'], modelEntries: [{ id: 'claude-haiku-5-5' }], headers: { 'x-opencode-session': 'session-abc' } },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'claude-haiku-5-5' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('43e stranded migration: outcome synced', outcome === 'synced', outcome)
+  check('43e stranded migration: the primary route is removed, the anthropic route gains the id',
+    calls.removedProfiles.includes('opencode-go-live')
+      && calls.mutations.some(([route, ops]) => route === 'opencode-go-live-anthropic'
+        && ops.find(op => op.path.join('.') === 'models')?.value?.[0]?.id === 'claude-haiku-5-5'),
+    JSON.stringify({ removed: calls.removedProfiles, mutations: calls.mutations }))
+}
+
+// 44. Un-checking an enabled model disables it, while a kept id keeps the
+// fields its stored entry states (hand-tuned values beat the catalog).
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['grok-4.5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      {
+        route: 'opencode-go-live',
+        ref: 'OPENCODE_GO_API_KEY',
+        shadowed: false,
+        isCatalog: false,
+        api: 'openai-completions',
+        baseURL: 'https://opencode.ai/zen/go/v1',
+        models: ['grok-4.5', 'longcat-2.5-preview-free'],
+        modelEntries: [{ id: 'grok-4.5', contextWindow: 1000000, compat: { supportsStore: false } }, { id: 'longcat-2.5-preview-free' }],
+      },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }, { id: 'longcat-2.5-preview-free' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  const written = calls.mutations[0]?.[1]?.[0]?.value ?? []
+  check('44 manage disable: outcome synced', outcome === 'synced', outcome)
+  check('44 manage disable: the enabled ids arrive pre-checked',
+    eq(calls.defaults['sync-models'], ['grok-4.5', 'longcat-2.5-preview-free']),
+    JSON.stringify(calls.defaults['sync-models']))
+  check('44 manage disable: the disabled id leaves, the kept entry keeps its hand-tuned field',
+    written.length === 1 && written[0].id === 'grok-4.5'
+      && written[0].contextWindow === 1000000
+      && eq(written[0].compat, { supportsStore: false })
+      && written[0].name === 'Grok 4.5'
+      && written[0].maxTokens === 500000
+      && eq(written[0].reasoningEfforts, { low: 'low', medium: 'medium', high: 'high' }),
+    JSON.stringify(written))
+  check('44 manage disable: the toast counts the change',
+    calls.notifications.some(n => n.color === 'success'
+      && n.text === t('provider-sync-success', {
+        route: 'opencode-go',
+        derived: 'opencode-go-live, opencode-go-live-anthropic',
+        n: 1,
+        added: 0,
+        removed: 1,
+      })),
+    JSON.stringify(calls.notifications))
+}
+
+// 45. Re-applying the current enabled set writes nothing — but a stored entry
+// that predates the metadata (a bare id) is enriched exactly once.
+{
+  const ENRICHED_GROK = {
+    name: 'Grok 4.5',
+    contextWindow: 500000,
+    maxTokens: 500000,
+    input: ['text', 'image'],
+    reasoningEfforts: { low: 'low', medium: 'medium', high: 'high' },
+    id: 'grok-4.5',
+  }
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['grok-4.5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], modelEntries: [ENRICHED_GROK], headers: { 'x-opencode-session': 'session-abc' } },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('45 manage no-op: outcome cancelled (nothing written)', outcome === 'cancelled', outcome)
+  check('45 manage no-op: no profile mutation', eq(calls.mutations, []), JSON.stringify(calls.mutations))
+  check('45 manage no-op: toast says it already matches',
+    calls.notifications.some(n => n.text === t('provider-sync-unchanged', { route: 'opencode-go', derived: 'opencode-go-live, opencode-go-live-anthropic' })),
+    JSON.stringify(calls.notifications))
+
+  // Same selection over a bare stored entry: the catalog fields are added once.
+  const bare = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['grok-4.5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], modelEntries: [{ id: 'grok-4.5' }] },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const bareOutcome = await runProviderWizard(bare.deps)
+  const enriched = bare.calls.mutations[0]?.[1]?.[0]?.value ?? []
+  check('45 manage enrichment: a bare entry gains the catalog fields once',
+    bareOutcome === 'synced' && enriched.length === 1 && enriched[0].id === 'grok-4.5'
+      && enriched[0].name === 'Grok 4.5' && enriched[0].contextWindow === 500000
+      && eq(enriched[0].reasoningEfforts, { low: 'low', medium: 'medium', high: 'high' }),
+    JSON.stringify({ outcome: bareOutcome, mutations: bare.calls.mutations }))
+
+  // A route written before the header existed is repaired by the next submit,
+  // and an existing routing id is never replaced.
+  const legacy = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['grok-4.5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], modelEntries: [ENRICHED_GROK] },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const legacyOutcome = await runProviderWizard(legacy.deps)
+  check('45 header repair: a missing routing header is added without touching the models',
+    legacyOutcome === 'synced'
+      && eq(legacy.calls.mutations[0]?.[1]?.[0]?.value, [ENRICHED_GROK])
+      && UUID.test(sessionHeaderOp(legacy.calls.mutations[0]?.[1])?.value?.['x-opencode-session'] ?? ''),
+    JSON.stringify({ outcome: legacyOutcome, mutations: legacy.calls.mutations }))
+
+  const kept = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['grok-4.5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], modelEntries: [ENRICHED_GROK], headers: { 'x-opencode-session': 'session-abc' } },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const keptOutcome = await runProviderWizard(kept.deps)
+  check('45 header repair: an existing routing id is reused, not regenerated',
+    keptOutcome === 'cancelled' && eq(kept.calls.mutations, []),
+    JSON.stringify({ outcome: keptOutcome, mutations: kept.calls.mutations }))
+}
+
+// 46. No resolvable key: refused by name, and no probe is attempted.
+{
+  const { deps, calls } = makeDeps({ 'action': ACTION_SYNC }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: '', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    discover: () => { throw new Error('must not probe without a key') },
+  })
+  const outcome = await runProviderWizard(deps)
+  check('46 manage without key: outcome cancelled', outcome === 'cancelled', outcome)
+  check('46 manage without key: no discovery request at all',
+    eq(calls.discoverRequests, []), JSON.stringify(calls.discoverRequests))
+  check('46 manage without key: refusal names the route',
+    calls.notifications.some(n => n.color === 'warning'
+      && n.text === t('provider-sync-no-credential', { route: 'opencode-go', derived: 'opencode-go-live' })),
+    JSON.stringify(calls.notifications))
+}
+
+// 47. The vendor listing fails: reported as failed, nothing written.
+{
+  const { deps, calls } = makeDeps({ 'action': ACTION_SYNC }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'] },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : Promise.reject(new Error('connection refused')),
+  })
+  const outcome = await runProviderWizard(deps)
+  check('47 manage offline: outcome failed', outcome === 'failed', outcome)
+  check('47 manage offline: nothing written and nothing removed',
+    eq(calls.mutations, []) && eq(calls.removedProfiles, []),
+    JSON.stringify({ mutations: calls.mutations, removed: calls.removedProfiles }))
+  check('47 manage offline: the warning names the fetch failure',
+    calls.notifications.some(n => n.color === 'warning'
+      && n.text === t('provider-sync-listing-failed', { route: 'opencode-go', derived: 'opencode-go-live' })),
+    JSON.stringify(calls.notifications))
+}
+
+// 48. Clearing every row disables everything: the derived route is retired.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: [] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5', 'longcat-2.5-preview-free'] },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }, { id: 'longcat-2.5-preview-free' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('48 manage disable-all: outcome synced', outcome === 'synced', outcome)
+  check('48 manage disable-all: the derived profile is removed',
+    eq(calls.removedProfiles, ['opencode-go-live']) && eq(calls.mutations, []),
+    JSON.stringify({ removed: calls.removedProfiles, mutations: calls.mutations }))
+  check('48 manage disable-all: transcript reports the pruned route',
+    calls.pushed.some(entry => entry.title === '/provider'
+      && entry.lines[1] === t('provider-sync-line-pruned', { n: 2 })),
+    JSON.stringify(calls.pushed))
+
+  const second = makeDeps({ 'action': ACTION_SYNC, 'sync-models': { selected: [] } }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined ? [{ id: 'glm-5.3' }] : [{ id: 'glm-5.3' }],
+  })
+  const secondOutcome = await runProviderWizard(second.deps)
+  check('48 manage disable-all: nothing enabled and no derived route means no write',
+    secondOutcome === 'cancelled'
+      && eq(second.calls.mutations, []) && eq(second.calls.removedProfiles, []),
+    JSON.stringify({ outcome: secondOutcome, mutations: second.calls.mutations }))
+}
+
+// 49. A derived route pointing at another endpoint/protocol is a human's
+// route: refused, never overwritten.
+{
+  const { deps, calls } = makeDeps({ 'action': ACTION_SYNC }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'anthropic-messages', baseURL: 'https://relay.example/v1', models: ['my-model'] },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('49 manage repurposed route: outcome cancelled', outcome === 'cancelled', outcome)
+  check('49 manage repurposed route: nothing written',
+    eq(calls.mutations, []) && eq(calls.removedProfiles, []),
+    JSON.stringify({ mutations: calls.mutations, removed: calls.removedProfiles }))
+  check('49 manage repurposed route: refusal names the derived route',
+    calls.notifications.some(n => n.color === 'warning'
+      && n.text === t('provider-sync-derived-conflict', { route: 'opencode-go', derived: 'opencode-go-live' })),
+    JSON.stringify(calls.notifications))
+}
+
+// 49b. Catalog membership does not authorize forwarding a relay-only key to
+// the vendor. The effective flag includes overrides from composition bases;
+// raw fields also protect structural callers that do not expose that flag.
+for (const [label, override] of [
+  ['explicit endpoint', { baseURL: 'https://relay.example/v1' }],
+  ['explicit protocol', { api: 'openai-responses' }],
+  ['inherited connection', { hasRoutingOverrides: true }],
+  ['custom headers', { hasCustomHeaders: true }],
+  ['resolved headers', { headers: { 'x-relay-account': 'regression' } }],
+]) {
+  for (const credentialSource of ['store', 'environment']) {
+    const parent = {
+      route: 'opencode-go', ref: 'RELAY_API_KEY', shadowed: credentialSource === 'environment',
+      isCatalog: true, models: ['glm-5.3'], ...override,
+    }
+    const derived = {
+      route: 'opencode-go-live', ref: 'RELAY_API_KEY', shadowed: false, isCatalog: false,
+      api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1',
+      models: ['grok-4.5'], modelEntries: [{ id: 'grok-4.5', customField: 'keep' }],
+    }
+    const { deps, calls } = makeDeps({ action: ACTION_SYNC }, {
+      catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+      configured: [parent, derived],
+    })
+    let credentialReads = 0
+    deps.host.envShadows = () => credentialSource === 'environment'
+    deps.host.envValue = () => { credentialReads++; return 'regression-relay-key' }
+    deps.host.readCredential = async () => { credentialReads++; return 'regression-relay-key' }
+    const before = JSON.stringify([parent, derived])
+    check(`49b ${label}/${credentialSource}: no official-sync candidate`,
+      syncableCatalogRoutes(deps.host).length === 0)
+    const [status] = await inspectCatalogRoutes(deps.host)
+    const logs = []
+    await reportCatalogRoutesQuietly(deps.host, message => logs.push(message))
+    let writeRefused = false
+    try {
+      await writeCatalogModels(deps.host, { route: parent.route, ref: parent.ref }, ['grok-4.5'])
+    } catch { writeRefused = true }
+    const outcome = await runProviderWizard(deps)
+    check(`49b ${label}/${credentialSource}: fail closed before credentials and discovery`,
+      status?.reason === 'connection-overridden' && credentialReads === 0
+        && calls.discoverRequests.length === 0 && logs.length === 0,
+      JSON.stringify({ status, credentialReads, requests: calls.discoverRequests, logs }))
+    check(`49b ${label}/${credentialSource}: no hidden sync option or profile changes`,
+      writeRefused && outcome === 'cancelled'
+        && !Object.hasOwn(calls.optionDescriptions.action ?? {}, t('provider-opt-action-sync'))
+        && !calls.asks.includes('sync-models') && calls.mutations.length === 0
+        && calls.profiles.length === 0 && calls.removedProfiles.length === 0
+        && calls.credentials.length === 0 && calls.removed.length === 0
+        && JSON.stringify([parent, derived]) === before,
+      JSON.stringify({ writeRefused, outcome, asks: calls.asks, mutations: calls.mutations }))
+  }
+}
+
+// Recheck after asynchronous catalog/credential work, before the network probe.
+{
+  const previousLang = getLang()
+  try {
+    for (const lang of ['zh', 'en']) {
+      setLang(lang)
+      const parent = { route: 'opencode-go', ref: 'RELAY_API_KEY', shadowed: false, isCatalog: true }
+      const { deps, calls } = makeDeps({ action: { selected: [t('provider-opt-action-sync')] } }, {
+        configured: [parent], storedCredentials: { RELAY_API_KEY: 'regression-key' },
+        discover: () => {
+          parent.hasRoutingOverrides = true
+          return [{ id: 'glm-5.3' }]
+        },
+      })
+      const outcome = await runProviderWizard(deps)
+      const warning = t('provider-sync-connection-overridden', { route: parent.route })
+      check(`49b ${lang} connection changes during discovery: no vendor request follows`,
+        outcome === 'cancelled' && eq(calls.discoverRequests, [{ provider: 'opencode-go' }])
+          && calls.mutations.length === 0 && calls.profiles.length === 0
+          && calls.removedProfiles.length === 0,
+        JSON.stringify({ outcome, requests: calls.discoverRequests, mutations: calls.mutations }))
+      check(`49b ${lang} connection override warning is localized, not a listing failure`,
+        warning.includes(parent.route)
+          && calls.notifications.some(row => row.color === 'warning' && row.text === warning)
+          && !calls.notifications.some(row => row.text === t('provider-sync-listing-failed', { route: parent.route })),
+        JSON.stringify(calls.notifications))
+    }
+  } finally {
+    setLang(previousLang)
+  }
+}
+
+// The whole-row snapshot includes inherited connection provenance, so a
+// metadata fetch cannot turn an older inspection into permission to write.
+{
+  const parent = { route: 'opencode-go', ref: 'RELAY_API_KEY', shadowed: false, isCatalog: true }
+  const { deps, calls } = makeDeps({
+    action: ACTION_SYNC, 'sync-models': { selected: ['grok-4.5'] },
+  }, {
+    configured: [parent], storedCredentials: { RELAY_API_KEY: 'regression-key' },
+    discover: request => request.provider === undefined ? [{ id: 'grok-4.5' }] : [{ id: 'glm-5.3' }],
+  })
+  deps.readVendorCatalog = async () => { parent.hasRoutingOverrides = true; return {} }
+  check('49b inherited override after inspection: stale selection is refused',
+    await runProviderWizard(deps) === 'failed' && calls.mutations.length === 0
+      && calls.profiles.length === 0 && calls.removedProfiles.length === 0,
+    JSON.stringify({ mutations: calls.mutations, profiles: calls.profiles, removed: calls.removedProfiles }))
+}
+
+// Blocking vendor sync does not disable normal model editing on a relay.
+{
+  const { deps, calls } = makeDeps({
+    action: ACTION_EDIT,
+    'edit-provider': { selected: ['opencode-go'] },
+    'edit-menu': { selected: [t('provider-opt-edit-models')] },
+    models: { selected: ['relay-model'] },
+  }, {
+    configured: [{
+      route: 'opencode-go', ref: 'RELAY_API_KEY', shadowed: false, isCatalog: true,
+      baseURL: 'https://relay.example/v1', api: 'openai-completions',
+      hasRoutingOverrides: true, models: ['glm-5.3'], modelEntries: [{ id: 'glm-5.3' }],
+    }],
+    storedCredentials: { RELAY_API_KEY: 'regression-relay-key' },
+    discover: request => request.provider === undefined ? [{ id: 'relay-model' }] : [{ id: 'glm-5.3' }],
+  })
+  check('49b relay model editing remains available', await runProviderWizard(deps) === 'updated')
+  check('49b relay model editing sends its key only to the configured relay',
+    eq(calls.discoverRequests, [
+      { provider: 'opencode-go' },
+      { baseURL: 'https://relay.example/v1', api: 'openai-completions', apiKey: 'regression-relay-key' },
+    ]) && calls.mutations.length === 1 && calls.mutations[0][0] === 'opencode-go',
+    JSON.stringify({ requests: calls.discoverRequests, mutations: calls.mutations }))
+}
+
+// 49c. Add accepts an existing catalog route and only asks about replacement
+// after discovery. Skipping the endpoint must not send its typed relay key
+// to the official URL, even if the user later cancels before saving anything.
+for (const [label, override] of [
+  ['explicit endpoint', { baseURL: 'https://relay.example/v1' }],
+  ['explicit protocol', { api: 'openai-responses' }],
+  ['inherited connection', { hasRoutingOverrides: true }],
+  ['custom headers', { hasCustomHeaders: true }],
+  ['resolved headers', { headers: { 'x-relay-account': 'regression' } }],
+  ['repurposed route', { isCatalog: false }],
+  ['inherited-only route', undefined],
+]) {
+  const configured = override === undefined ? [] : [{
+    route: 'opencode-go', ref: 'RELAY_API_KEY', shadowed: false, isCatalog: true, ...override,
+  }]
+  const before = JSON.stringify(configured)
+  const { deps, calls } = makeDeps({
+    action: ACTION_ADD, mode: MODE_CATALOG, catalog: { selected: ['opencode-go'] },
+    apikey: { custom: 'regression-relay-draft-key' }, 'baseurl-choice': SKIP_BASEURL,
+    models: { selected: ['glm-5.3'] }, confirm: 'cancel',
+  }, {
+    configured, ...(override === undefined ? { routeExists: true } : {}),
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    discovered: [{ id: 'glm-5.3' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check(`49c ${label}: cancelled add never sends a draft key to the vendor`,
+    outcome === 'cancelled' && eq(calls.discoverRequests, [{ provider: 'opencode-go' }])
+      && calls.asks.includes('confirm')
+      && calls.notifications.some(row => row.color === 'warning' && row.text === t('provider-live-fetch-unavailable')),
+    JSON.stringify({ outcome, requests: calls.discoverRequests, notifications: calls.notifications }))
+  check(`49c ${label}: cancelled add leaves profiles and credentials untouched`,
+    calls.credentials.length === 0 && calls.removed.length === 0
+      && calls.profiles.length === 0 && calls.mutations.length === 0 && calls.removedProfiles.length === 0
+      && JSON.stringify(configured) === before,
+    JSON.stringify({ profiles: calls.profiles, mutations: calls.mutations }))
+}
+
+for (const change of [
+  'existing override', 'new override', 'inherited-only',
+  'cleared override', 'removed override route', 'removed inherited-only',
+]) {
+  const configured = ['existing override', 'cleared override', 'removed override route'].includes(change) ? [{
+    route: 'opencode-go', ref: 'RELAY_API_KEY', shadowed: false, isCatalog: true,
+    ...(change === 'existing override' ? {} : { hasRoutingOverrides: true }),
+  }] : []
+  let inheritedExists = change === 'removed inherited-only'
+  const { deps, calls } = makeDeps({
+    action: ACTION_ADD, mode: MODE_CATALOG, catalog: { selected: ['opencode-go'] },
+    apikey: { custom: 'regression-relay-draft-key' }, 'baseurl-choice': SKIP_BASEURL,
+    models: 'cancel',
+  }, {
+    configured,
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    discover: () => {
+      if (change === 'inherited-only') inheritedExists = true
+      else if (change === 'removed inherited-only') inheritedExists = false
+      else if (change === 'cleared override') delete configured[0].hasRoutingOverrides
+      else if (change === 'removed override route') configured.splice(0)
+      else if (change === 'existing override') configured[0].hasRoutingOverrides = true
+      else configured.push({
+        route: 'opencode-go', ref: 'RELAY_API_KEY', shadowed: false, isCatalog: true,
+        baseURL: 'https://relay.example/v1',
+      })
+      return [{ id: 'glm-5.3' }]
+    },
+  })
+  deps.host.routeExists = route => inheritedExists || configured.some(row => row.route === route)
+  const outcome = await runProviderWizard(deps)
+  check(`49c ${change} during catalog lookup: draft key stays local`,
+    outcome === 'cancelled' && eq(calls.discoverRequests, [{ provider: 'opencode-go' }])
+      && calls.credentials.length === 0 && calls.profiles.length === 0 && calls.mutations.length === 0,
+    JSON.stringify({ outcome, requests: calls.discoverRequests, mutations: calls.mutations }))
+}
+
+// The selected connection is also captured before the credential/endpoint
+// prompts, not just after they return and discovery begins.
+for (const prompt of ['apikey', 'baseurl-choice']) {
+  const configured = [{
+    route: 'opencode-go', ref: 'RELAY_API_KEY', shadowed: false, isCatalog: true,
+    hasRoutingOverrides: true,
+  }]
+  const { deps, calls } = makeDeps({
+    action: ACTION_ADD, mode: MODE_CATALOG, catalog: { selected: ['opencode-go'] },
+    apikey: { custom: 'regression-relay-draft-key' }, 'baseurl-choice': SKIP_BASEURL,
+    models: 'cancel',
+  }, {
+    configured,
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    discovered: [{ id: 'glm-5.3' }],
+  })
+  const ask = deps.ask
+  deps.ask = async (request, options) => {
+    const answer = await ask(request, options)
+    if (request.questions.some(question => question.id === prompt)) delete configured[0].hasRoutingOverrides
+    return answer
+  }
+  check(`49c override removed during ${prompt}: selected relay's draft key stays local`,
+    await runProviderWizard(deps) === 'cancelled'
+      && eq(calls.discoverRequests, [{ provider: 'opencode-go' }])
+      && calls.credentials.length === 0 && calls.profiles.length === 0 && calls.mutations.length === 0,
+    JSON.stringify({ requests: calls.discoverRequests, mutations: calls.mutations }))
+}
+
+// Ordinary model editing still works from the installed snapshot without an
+// explicit endpoint, but an overridden connection gets no anonymous vendor probe.
+for (const [label, override] of [
+  ['explicit protocol', { api: 'openai-responses' }],
+  ['inherited connection', { hasRoutingOverrides: true }],
+]) {
+  const { deps, calls } = makeDeps({
+    action: ACTION_EDIT, 'edit-provider': { selected: ['opencode-go'] },
+    'edit-menu': { selected: [t('provider-opt-edit-models')] },
+    models: { selected: ['glm-5.3'] },
+  }, {
+    configured: [{
+      route: 'opencode-go', ref: 'RELAY_API_KEY', shadowed: false, isCatalog: true,
+      models: ['old-model'], modelEntries: [{ id: 'old-model' }], ...override,
+    }],
+    discovered: [{ id: 'glm-5.3' }],
+  })
+  let credentialReads = 0
+  deps.host.readCredential = async () => { credentialReads++; return 'regression-relay-key' }
+  check(`49c ${label}: snapshot model editing remains available without a vendor probe`,
+    await runProviderWizard(deps) === 'updated' && credentialReads === 0
+      && eq(calls.discoverRequests, [{ provider: 'opencode-go' }])
+      && calls.mutations.length === 1 && calls.mutations[0][0] === 'opencode-go',
+    JSON.stringify({ credentialReads, requests: calls.discoverRequests, mutations: calls.mutations }))
+}
+
+// 50. The boot pass only reports: one debug line per un-enabled and retired
+// group, never a write, silence on a no-op, and no throw when offline.
+{
+  const BOOT = options => makeDeps({}, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    ...options,
+  })
+  const pending = BOOT({
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }, { id: 'longcat-2.5-preview-free' }],
+  })
+  const lines = []
+  await reportCatalogRoutesQuietly(pending.deps.host, (message, level) => lines.push([level, message]))
+  check('50 boot report: one debug line names the un-enabled models',
+    eq(lines, [[
+      'debug',
+      'opencode-go: 2 official model(s) not enabled (grok-4.5, longcat-2.5-preview-free) — enable them from /provider',
+    ]]), JSON.stringify(lines))
+  check('50 boot report: nothing is written',
+    eq(pending.calls.mutations, []) && eq(pending.calls.removedProfiles, []),
+    JSON.stringify({ mutations: pending.calls.mutations, removed: pending.calls.removedProfiles }))
+
+  const retired = BOOT({
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5', 'longcat-2.5-preview-free'], headers: { 'x-opencode-session': 'session-abc' } },
+    ],
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const retiredLines = []
+  await reportCatalogRoutesQuietly(retired.deps.host, (message, level) => retiredLines.push([level, message]))
+  check('50 boot report: an enabled id the vendor dropped is reported',
+    eq(retiredLines, [['debug', 'opencode-go: 1 enabled model(s) the endpoint no longer advertises (longcat-2.5-preview-free)']]),
+    JSON.stringify(retiredLines))
+
+  const clean = BOOT({
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], headers: { 'x-opencode-session': 'session-abc' } },
+    ],
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const cleanLines = []
+  await reportCatalogRoutesQuietly(clean.deps.host, (message, level) => cleanLines.push([level, message]))
+  check('50 boot report: an in-sync route is silent', eq(cleanLines, []), JSON.stringify(cleanLines))
+
+  const offline = BOOT({
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : Promise.reject(new Error('connection refused')),
+  })
+  const offlineLines = []
+  let threw = false
+  try {
+    await reportCatalogRoutesQuietly(
+      offline.deps.host,
+      (message, level) => offlineLines.push([level, message]),
+      { signal: AbortSignal.timeout(5000) },
+    )
+  } catch {
+    threw = true
+  }
+  check('50 boot report: an offline listing neither throws nor writes',
+    threw === false && eq(offline.calls.mutations, [])
+      && eq(offlineLines, [['debug', 'opencode-go: listing-failed']])
+      && offline.calls.discoverSignals.every(signal => signal instanceof AbortSignal),
+    JSON.stringify({ threw, lines: offlineLines, mutations: offline.calls.mutations }))
+
+  const aborted = new AbortController()
+  const late = BOOT({
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false,
+        isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false,
+        isCatalog: false, api: 'openai-completions',
+        baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'] },
+    ],
+    discover: request => {
+      if (request.provider !== undefined) return [{ id: 'glm-5.3' }]
+      aborted.abort()
+      return [{ id: 'glm-5.3' }, { id: 'grok-4.5' }, { id: 'new-model' }]
+    },
+  })
+  const lateLines = []
+  await reportCatalogRoutesQuietly(late.deps.host,
+    (message, level) => lateLines.push([level, message]), { signal: aborted.signal })
+  check('50 boot report: owner unload discards late discovery and skips repairs',
+    eq(late.calls.mutations, []) && eq(late.calls.removedProfiles, []) && eq(lateLines, []),
+    JSON.stringify({ mutations: late.calls.mutations,
+      removed: late.calls.removedProfiles, lines: lateLines }))
+
+  // The one write the boot pass owns: a route enabled before the vendor's
+  // routing-header requirement cannot serve a request, so the header is added
+  // — without enabling or disabling a single model.
+  const legacy = BOOT({
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], modelEntries: [{ id: 'grok-4.5' }] },
+    ],
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const legacyLines = []
+  await reportCatalogRoutesQuietly(legacy.deps.host, (message, level) => legacyLines.push([level, message]))
+  check('50 boot repair: a missing routing header is added and reported',
+    legacyLines.some(([, message]) => message === 'opencode-go: added the x-opencode-session routing header to opencode-go-live')
+      && UUID.test(sessionHeaderOp(legacy.calls.mutations[0]?.[1])?.value?.['x-opencode-session'] ?? '')
+      && eq(legacy.calls.mutations[0]?.[1]?.[0]?.value, [{ id: 'grok-4.5' }]),
+    JSON.stringify({ lines: legacyLines, mutations: legacy.calls.mutations }))
+
+  const healthy = BOOT({
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      { route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1', models: ['grok-4.5'], headers: { 'x-opencode-session': 'session-abc' } },
+    ],
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'grok-4.5' }],
+  })
+  const healthyLines = []
+  await reportCatalogRoutesQuietly(healthy.deps.host, (message, level) => healthyLines.push([level, message]))
+  check('50 boot repair: a route that already has the header is left alone',
+    eq(healthyLines, []) && eq(healthy.calls.mutations, []),
+    JSON.stringify({ lines: healthyLines, mutations: healthy.calls.mutations }))
+}
+
+// 50b. Stateful settings exercise migration failure and concurrent edit windows.
+{
+  const parentRoute = 'opencode-go'
+  const primaryRoute = 'opencode-go-live'
+  const targetRoute = 'opencode-go-live-anthropic'
+  const ref = 'OPENCODE_GO_API_KEY'
+  const customEntry = {
+    id: 'claude-fixture',
+    contextWindow: 123456,
+    maxTokens: 4567,
+    reasoningEfforts: { high: 'custom-high' },
+    input: ['text', 'image'],
+    customField: { keep: true },
+  }
+  function migrationFixture(options = {}) {
+    const primaryEntries = [
+      customEntry,
+      ...(options.mixed ? [{ id: 'grok-fixture', customField: 'also-keep' }] : []),
+    ]
+    const profiles = new Map([
+      [parentRoute, {
+        route: parentRoute, ref, shadowed: false, isCatalog: true,
+        models: ['catalog-model'],
+      }],
+      [primaryRoute, {
+        route: primaryRoute, ref, shadowed: false, isCatalog: false,
+        api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1',
+        models: primaryEntries.map(entry => entry.id),
+        modelEntries: structuredClone(primaryEntries),
+        headers: { 'x-opencode-session': 'source-session' },
+      }],
+      ...(options.destination === undefined ? [] : [[targetRoute, {
+        route: targetRoute, ref, shadowed: false, isCatalog: false,
+        api: 'anthropic-messages', baseURL: 'https://opencode.ai/zen/go',
+        models: [customEntry.id],
+        modelEntries: [structuredClone(options.destination)],
+        headers: {
+          'X-OpenCode-Session': 'destination-session',
+          'x-user-header': 'keep',
+        },
+      }]]),
+    ])
+    const calls = []
+    const host = {
+      listCatalogProviders: () => [{ provider: parentRoute, displayName: 'OpenCode Go' }],
+      listConfiguredProviders: () => [...profiles.values()],
+      routeExists: route => profiles.has(route),
+      envShadows: () => false,
+      readCredential: async () => 'synthetic-key',
+      discoverModels: async request => {
+        if (request.provider !== undefined) return [{ id: 'catalog-model' }]
+        await options.duringDiscovery?.(profiles)
+        return [{ id: 'catalog-model' }, { id: customEntry.id }, { id: 'grok-fixture' }]
+      },
+      mutateProfile: async (route, ops) => {
+        calls.push(['set', route])
+        if (options.failWrite === route) throw new Error('synthetic write refused')
+        const provider = { route, ref, shadowed: false, isCatalog: false, ...profiles.get(route) }
+        for (const op of ops) {
+          if (op.path[0] === 'models') {
+            provider.models = op.value.map(entry => entry.id)
+            provider.modelEntries = structuredClone(op.value)
+          } else if (op.path[0] === 'apiKeyEnv') provider.ref = op.value
+          else provider[op.path[0]] = structuredClone(op.value)
+        }
+        profiles.set(route, provider)
+        if (route === targetRoute) await options.afterDestination?.(profiles)
+        if (route === primaryRoute) await options.afterPrimary?.(profiles)
+      },
+      removeProfile: async route => {
+        calls.push(['remove', route])
+        if (options.failRemove === route) throw new Error('synthetic removal refused')
+        profiles.delete(route)
+      },
+    }
+    return { host, profiles, calls }
+  }
+  const boot = fixture => reportCatalogRoutesQuietly(fixture.host, () => {})
+  const rejected = async action => {
+    try { await action(); return false } catch { return true }
+  }
+  const profileState = fixture => structuredClone([...fixture.profiles])
+
+  // No metadata supplied at boot: preserve all fields, target first.
+  {
+    const fixture = migrationFixture()
+    await boot(fixture)
+    check('50b boot migration preserves all source model fields and writes target first',
+      eq(fixture.profiles.get(targetRoute)?.modelEntries, [customEntry])
+        && !fixture.profiles.has(primaryRoute)
+        && eq(fixture.calls, [['set', targetRoute], ['remove', primaryRoute]]),
+      JSON.stringify({ profiles: [...fixture.profiles], calls: fixture.calls }))
+  }
+
+  // Existing destination fields win; mixed-case session header stays single.
+  {
+    const destinationEntry = { id: customEntry.id, maxTokens: 999, name: 'Destination choice' }
+    const fixture = migrationFixture({ destination: destinationEntry })
+    await boot(fixture)
+    const expectedHeaders = {
+      'X-OpenCode-Session': 'destination-session',
+      'x-user-header': 'keep',
+    }
+    check('50b destination fields win, enabled IDs deduplicate, and mixed-case header survives',
+      eq(fixture.profiles.get(targetRoute)?.modelEntries, [{ ...customEntry, ...destinationEntry }])
+        && eq(fixture.profiles.get(targetRoute)?.models, [customEntry.id])
+        && eq(fixture.profiles.get(targetRoute)?.headers, expectedHeaders),
+      JSON.stringify([...fixture.profiles]))
+    fixture.calls.length = 0
+    await boot(fixture)
+    check('50b mixed-case existing session header does not cause another settings write',
+      eq(fixture.calls, [])
+        && eq(fixture.profiles.get(targetRoute)?.headers, expectedHeaders),
+      JSON.stringify({ profiles: [...fixture.profiles], calls: fixture.calls }))
+  }
+
+  // Failure at either write/remove preserves the original source.
+  for (const options of [
+    { failWrite: targetRoute },
+    { failRemove: primaryRoute },
+    { mixed: true, failWrite: primaryRoute },
+  ]) {
+    const fixture = migrationFixture(options)
+    const sourceBefore = structuredClone(fixture.profiles.get(primaryRoute))
+    const failed = await rejected(() => boot(fixture))
+    const destinationSafe = options.failWrite === targetRoute
+      ? !fixture.profiles.has(targetRoute) && eq(fixture.calls, [['set', targetRoute]])
+      : eq(fixture.profiles.get(targetRoute)?.modelEntries, [customEntry])
+    check(`50b migration refusal preserves source: ${JSON.stringify(options)}`,
+      failed && eq(fixture.profiles.get(primaryRoute), sourceBefore) && destinationSafe,
+      JSON.stringify({ profiles: [...fixture.profiles], calls: fixture.calls }))
+  }
+
+  // Changes during discovery invalidate the boot plan, with zero writes.
+  for (const [label, edit] of [
+    ['delete primary', profiles => profiles.delete(primaryRoute)],
+    ['replace selected models', profiles => {
+      const primary = profiles.get(primaryRoute)
+      primary.models = ['user-added']
+      primary.modelEntries = [{ id: 'user-added', customField: 'new-selection' }]
+    }],
+    ['add selected model', profiles => {
+      const primary = profiles.get(primaryRoute)
+      primary.models.push('user-added')
+      primary.modelEntries.push({ id: 'user-added', customField: 'new-selection' })
+    }],
+    ['repurpose primary endpoint', profiles => {
+      profiles.get(primaryRoute).baseURL = 'https://other.example/v1'
+    }],
+    ['change parent credential reference', profiles => {
+      profiles.get(parentRoute).ref = 'OTHER_API_KEY'
+    }],
+    ['create repurposed target', profiles => {
+      profiles.set(targetRoute, {
+        route: targetRoute, ref, shadowed: false, isCatalog: false,
+        api: 'openai-completions', baseURL: 'https://other.example/v1',
+        models: ['user-model'], modelEntries: [{ id: 'user-model', customField: 'keep-user-edit' }],
+        headers: { 'X-OpenCode-Session': 'user-session' },
+      })
+    }],
+  ]) {
+    let stateAfterEdit
+    const fixture = migrationFixture({
+      duringDiscovery: async profiles => {
+        await Promise.resolve()
+        edit(profiles)
+        stateAfterEdit = structuredClone([...profiles])
+      },
+    })
+    await boot(fixture)
+    check(`50b boot leaves concurrent discovery edit untouched: ${label}`,
+      eq(profileState(fixture), stateAfterEdit) && eq(fixture.calls, []),
+      JSON.stringify({ profiles: [...fixture.profiles], calls: fixture.calls }))
+  }
+
+  // Destination changed while its write awaited: never clean the source.
+  for (const [label, edit] of [
+    ['delete target', profiles => profiles.delete(targetRoute)],
+    ['replace target models', profiles => {
+      const target = profiles.get(targetRoute)
+      target.models = ['user-replacement']
+      target.modelEntries = [{ id: 'user-replacement', customField: 'keep-user-edit' }]
+    }],
+    ['change target protocol', profiles => {
+      profiles.get(targetRoute).api = 'openai-completions'
+    }],
+    ['repurpose target endpoint', profiles => {
+      profiles.get(targetRoute).baseURL = 'https://other.example/v1'
+    }],
+    ['change target credential reference', profiles => {
+      profiles.get(targetRoute).ref = 'OTHER_API_KEY'
+    }],
+    ['change target routing header', profiles => {
+      profiles.get(targetRoute).headers = { 'x-opencode-session': 'user-replacement' }
+    }],
+    ['edit copied target metadata', profiles => {
+      profiles.get(targetRoute).modelEntries[0].customField = { user: 'changed-after-write' }
+    }],
+  ]) {
+    let stateAfterEdit
+    const fixture = migrationFixture({
+      afterDestination: async profiles => {
+        await Promise.resolve()
+        edit(profiles)
+        stateAfterEdit = structuredClone([...profiles])
+      },
+    })
+    const sourceBefore = structuredClone(fixture.profiles.get(primaryRoute))
+    const failed = await rejected(() => boot(fixture))
+    check(`50b target readback detects concurrent edit without deleting source: ${label}`,
+      failed
+        && eq(fixture.profiles.get(primaryRoute), sourceBefore)
+        && eq(profileState(fixture), stateAfterEdit)
+        && eq(fixture.calls, [['set', targetRoute]]),
+      JSON.stringify({ profiles: [...fixture.profiles], calls: fixture.calls }))
+  }
+
+  // Nonmigrating primary repair cannot overwrite a changed pending target.
+  for (const [label, edit] of [
+    ['delete pending target', profiles => profiles.delete(targetRoute)],
+    ['replace pending target models', profiles => {
+      const target = profiles.get(targetRoute)
+      target.models = ['user-replacement']
+      target.modelEntries = [{ id: 'user-replacement', customField: 'keep-user-edit' }]
+    }],
+    ['change parent reference', profiles => {
+      profiles.get(parentRoute).ref = 'OTHER_API_KEY'
+    }],
+  ]) {
+    let stateAfterEdit
+    const fixture = migrationFixture({
+      destination: { id: customEntry.id },
+      afterPrimary: async profiles => {
+        await Promise.resolve()
+        edit(profiles)
+        stateAfterEdit = structuredClone([...profiles])
+      },
+    })
+    const primary = fixture.profiles.get(primaryRoute)
+    primary.models = ['grok-fixture']
+    primary.modelEntries = [{ id: 'grok-fixture' }]
+    primary.headers = {}
+    const failed = await rejected(() => boot(fixture))
+    check(`50b nonmigration second write respects concurrent edit: ${label}`,
+      failed
+        && eq(profileState(fixture), stateAfterEdit)
+        && eq(fixture.calls, [['set', primaryRoute]]),
+      JSON.stringify({ profiles: [...fixture.profiles], calls: fixture.calls }))
+  }
+
+  // Source changes during direct write: leave both routes intact.
+  {
+    let stateAfterEdit
+    const fixture = migrationFixture({
+      afterDestination: async profiles => {
+        await Promise.resolve()
+        const source = profiles.get(primaryRoute)
+        source.models.push('late-user-model')
+        source.modelEntries.push({ id: 'late-user-model', customField: 'keep-late-edit' })
+        stateAfterEdit = structuredClone([...profiles])
+      },
+    })
+    const failed = await rejected(() => writeCatalogModels(
+      fixture.host, { route: parentRoute, ref }, [customEntry.id],
+    ))
+    check('50b direct migration stops cleanup when source changes during target write',
+      failed
+        && fixture.profiles.get(primaryRoute)?.models.includes('late-user-model')
+        && eq(fixture.profiles.get(targetRoute)?.modelEntries, [customEntry])
+        && eq(profileState(fixture), stateAfterEdit)
+        && eq(fixture.calls, [['set', targetRoute]]),
+      JSON.stringify({ profiles: [...fixture.profiles], calls: fixture.calls }))
+  }
+  // Inspection, metadata fetch, and picker are all separate async edit windows.
+  for (const stage of ['discovery', 'metadata', 'picker']) {
+    for (const [label, edit] of [
+      ['delete parent', profiles => profiles.delete(parentRoute)],
+      ['change parent credential reference', profiles => {
+        profiles.get(parentRoute).ref = 'USER_SELECTED_REF'
+      }],
+      ['delete source', profiles => profiles.delete(primaryRoute)],
+      ['add source model', profiles => {
+        const source = profiles.get(primaryRoute)
+        source.models.push('user-added')
+        source.modelEntries.push({ id: 'user-added', customField: 'keep-user-edit' })
+      }],
+      ['repurpose source endpoint', profiles => {
+        profiles.get(primaryRoute).baseURL = 'https://other.example/v1'
+      }],
+      ['delete target', profiles => profiles.delete(targetRoute)],
+      ['add target model', profiles => {
+        const target = profiles.get(targetRoute)
+        target.models.push('claude-user-added')
+        target.modelEntries.push({ id: 'claude-user-added', customField: 'keep-user-edit' })
+      }],
+      ['repurpose target endpoint', profiles => {
+        profiles.get(targetRoute).baseURL = 'https://other.example/anthropic'
+      }],
+    ]) {
+      let stateAfterEdit
+      const editAndSnapshot = async profiles => {
+        await Promise.resolve()
+        edit(profiles)
+        stateAfterEdit = structuredClone([...profiles])
+      }
+      const fixture = migrationFixture({
+        destination: customEntry,
+        ...(stage === 'discovery' ? { duringDiscovery: editAndSnapshot } : {}),
+      })
+      const { deps, calls } = makeDeps({
+        action: ACTION_SYNC,
+        'sync-models': { selected: [customEntry.id] },
+      })
+      const outcome = await runProviderWizard({
+        ...deps,
+        host: fixture.host,
+        readVendorCatalog: async () => {
+          if (stage === 'metadata') await editAndSnapshot(fixture.profiles)
+          return {}
+        },
+        ask: async request => {
+          if (stage === 'picker' && request.questions.some(question => question.id === 'sync-models')) {
+            await editAndSnapshot(fixture.profiles)
+          }
+          return deps.ask(request)
+        },
+      })
+      check(`50b stale interactive ${stage} inspection preserves user edit: ${label}`,
+        outcome === 'failed' && eq(profileState(fixture), stateAfterEdit)
+          && eq(fixture.calls, []) && eq(calls.pushed, []),
+        JSON.stringify({ outcome, profiles: [...fixture.profiles], mutations: fixture.calls }))
+    }
+  }
+
+  // A newly inherited route also invalidates the interactive inspection.
+  {
+    const fixture = migrationFixture()
+    let inheritedAppeared = false
+    fixture.host.routeExists = route => fixture.profiles.has(route)
+      || (inheritedAppeared && route === targetRoute)
+    const before = profileState(fixture)
+    const { deps } = makeDeps({ action: ACTION_SYNC, 'sync-models': { selected: [customEntry.id] } })
+    const outcome = await runProviderWizard({
+      ...deps,
+      host: fixture.host,
+      readVendorCatalog: async () => {
+        inheritedAppeared = true
+        return {}
+      },
+    })
+    check('50b interactive inspection detects an inherited route appearing during metadata fetch',
+      outcome === 'failed' && eq(profileState(fixture), before) && eq(fixture.calls, []),
+      JSON.stringify({ outcome, profiles: [...fixture.profiles], calls: fixture.calls }))
+  }
+
+  // Editable rows exclude composition-base routes. Never shadow such a route,
+  // including when an empty selection would otherwise attempt to remove it.
+  for (const inheritedRoute of [primaryRoute, targetRoute]) {
+    for (const selected of [[customEntry.id], []]) {
+      const fixture = migrationFixture()
+      fixture.profiles.delete(inheritedRoute)
+      const inherited = {
+        route: inheritedRoute, api: 'openai-responses',
+        baseURL: 'https://base.example/v1', apiKeyEnv: 'BASE_ONLY_REF',
+        models: [{ id: 'base-model', customField: 'keep-base-entry' }],
+      }
+      const inheritedBefore = structuredClone(inherited)
+      fixture.host.routeExists = route => fixture.profiles.has(route) || route === inheritedRoute
+      const before = profileState(fixture)
+      const [status] = await inspectCatalogRoutes(fixture.host)
+      const directRejected = await rejected(() => writeCatalogModels(
+        fixture.host, { route: parentRoute, ref }, selected,
+      ))
+      await boot(fixture)
+      const { deps, calls } = makeDeps({ action: ACTION_SYNC, 'sync-models': { selected } })
+      const outcome = await runProviderWizard({ ...deps, host: fixture.host })
+      check(`50b inherited-only ${inheritedRoute} refuses selection ${JSON.stringify(selected)}`,
+        status.reason === 'derived-conflict' && status.conflictedDerived === inheritedRoute
+          && directRejected && outcome === 'cancelled'
+          && !calls.asks.includes('sync-models')
+          && eq(profileState(fixture), before) && eq(inherited, inheritedBefore)
+          && eq(fixture.calls, []),
+        JSON.stringify({ outcome, status, profiles: [...fixture.profiles], calls: fixture.calls }))
+    }
+  }
+
+  // A user-layer models overlay must not hide a repurposed inherited endpoint.
+  for (const route of [primaryRoute, targetRoute]) {
+    for (const omitted of [['api'], ['baseURL'], ['api', 'baseURL']]) {
+      const fixture = migrationFixture({ destination: customEntry })
+      const provider = fixture.profiles.get(route)
+      for (const field of omitted) delete provider[field]
+      const before = profileState(fixture)
+      const [status] = await inspectCatalogRoutes(fixture.host)
+      const directRejected = await rejected(() => writeCatalogModels(
+        fixture.host, { route: parentRoute, ref }, [customEntry.id],
+      ))
+      await boot(fixture)
+      check(`50b partial inherited overlay refuses ${route} missing ${omitted.join('/')}`,
+        status.reason === 'derived-conflict' && status.conflictedDerived === route
+          && directRejected && eq(profileState(fixture), before) && eq(fixture.calls, []),
+        JSON.stringify({ status, profiles: [...fixture.profiles], calls: fixture.calls }))
+    }
+  }
+
+  // A stopped owner cannot continue a multi-write repair or announce it.
+  for (const stage of ['destination', 'primary']) {
+    const controller = new AbortController()
+    const fixture = migrationFixture({
+      mixed: true,
+      ...(stage === 'primary' ? { destination: { id: customEntry.id } } : {}),
+      ...(stage === 'destination'
+        ? { afterDestination: async () => { controller.abort() } }
+        : { afterPrimary: async () => { controller.abort() } }),
+    })
+    if (stage === 'primary') {
+      const primary = fixture.profiles.get(primaryRoute)
+      primary.models = ['grok-fixture']
+      primary.modelEntries = [{ id: 'grok-fixture' }]
+      primary.headers = {}
+    }
+    const sourceBefore = structuredClone(fixture.profiles.get(primaryRoute))
+    const targetBefore = structuredClone(fixture.profiles.get(targetRoute))
+    const lines = []
+    await reportCatalogRoutesQuietly(fixture.host,
+      (message, level) => lines.push([level, message]), { signal: controller.signal })
+    check(`50b owner unload during ${stage} write stops remaining repair and logs`,
+      eq(lines, [])
+        && eq(fixture.calls, [['set', stage === 'destination' ? targetRoute : primaryRoute]])
+        && (stage === 'destination'
+          ? eq(fixture.profiles.get(primaryRoute), sourceBefore)
+            && eq(fixture.profiles.get(targetRoute)?.modelEntries, [customEntry])
+          : eq(fixture.profiles.get(targetRoute), targetBefore)),
+      JSON.stringify({ profiles: [...fixture.profiles], calls: fixture.calls, lines }))
+  }
+
+  // Existence can change at an inherited layer without a user-layer row changing.
+  for (const stage of ['discovery', 'destination', 'primary']) {
+    const existenceOverrides = new Map()
+    const options = stage === 'discovery'
+      ? { duringDiscovery: async () => { existenceOverrides.set(primaryRoute, false) } }
+      : stage === 'destination'
+        ? { afterDestination: async () => { existenceOverrides.set(targetRoute, false) } }
+        : { destination: { id: customEntry.id },
+          afterPrimary: async () => { existenceOverrides.set(targetRoute, false) } }
+    const fixture = migrationFixture(options)
+    fixture.host.routeExists = route => existenceOverrides.get(route) ?? fixture.profiles.has(route)
+    if (stage === 'primary') {
+      const primary = fixture.profiles.get(primaryRoute)
+      primary.models = ['grok-fixture']
+      primary.modelEntries = [{ id: 'grok-fixture' }]
+      primary.headers = {}
+    }
+    const sourceBefore = structuredClone(fixture.profiles.get(primaryRoute))
+    const targetBefore = structuredClone(fixture.profiles.get(targetRoute))
+    const failed = await rejected(() => boot(fixture))
+    check(`50b ${stage} window observes all-layer route existence`,
+      failed === (stage !== 'discovery')
+        && eq(fixture.calls, stage === 'discovery' ? []
+          : [['set', stage === 'destination' ? targetRoute : primaryRoute]])
+        && (stage === 'primary'
+          ? eq(fixture.profiles.get(targetRoute), targetBefore)
+          : eq(fixture.profiles.get(primaryRoute), sourceBefore)),
+      JSON.stringify({ profiles: [...fixture.profiles], calls: fixture.calls }))
+  }
+
+  // A failed source cleanup leaves a complete destination and is safe to retry.
+  {
+    const options = { failRemove: primaryRoute }
+    const fixture = migrationFixture(options)
+    await rejected(() => boot(fixture))
+    options.failRemove = undefined
+    fixture.calls.length = 0
+    await boot(fixture)
+    check('50b retry after cleanup failure keeps metadata without rewriting destination',
+      !fixture.profiles.has(primaryRoute)
+        && eq(fixture.profiles.get(targetRoute)?.modelEntries, [customEntry])
+        && eq(fixture.calls, [['remove', primaryRoute]]),
+      JSON.stringify({ profiles: [...fixture.profiles], calls: fixture.calls }))
+  }
+
+  // Removing a duplicate source does not mean the enabled target was removed.
+  {
+    const fixture = migrationFixture({ destination: customEntry })
+    const result = await writeCatalogModels(fixture.host, { route: parentRoute, ref }, [customEntry.id])
+    const noChange = await writeCatalogModels(fixture.host, { route: parentRoute, ref }, [customEntry.id])
+    check('50b partial route cleanup reports enabled models rather than all removed',
+      result.status === 'written' && eq(result.models, [customEntry.id])
+        && noChange.status === 'unchanged' && eq(noChange.models, [customEntry.id]),
+      JSON.stringify({ result, noChange }))
+  }
+
+  // Selection deduplication and target > source > metadata apply to direct writes.
+  {
+    const destination = { id: customEntry.id, maxTokens: 999, name: 'Destination choice' }
+    const fixture = migrationFixture({ destination })
+    const result = await writeCatalogModels(fixture.host, { route: parentRoute, ref },
+      [customEntry.id, customEntry.id], new Map([[customEntry.id, {
+        name: 'Vendor name', maxTokens: 1, contextWindow: 1,
+      }]]))
+    check('50b direct migration deduplicates and preserves target then source precedence',
+      eq(result.models, [customEntry.id])
+        && eq(fixture.profiles.get(targetRoute)?.modelEntries, [{
+          name: destination.name, maxTokens: destination.maxTokens,
+          contextWindow: customEntry.contextWindow,
+          ...customEntry, ...destination,
+        }]),
+      JSON.stringify({ result, profiles: [...fixture.profiles] }))
+  }
+}
+
+// 51. Without a configured catalog route that has a vendor listing, the
+// action question stays exactly two options (the optional-branch contract).
+{
+  const { deps, calls } = makeDeps({ 'action': ACTION_ADD, 'mode': MODE_CATALOG, 'catalog': { selected: ['deepseek'] } }, {
+    configured: [{ route: 'deepseek', ref: 'DEEPSEEK_API_KEY', shadowed: false, isCatalog: true }],
+  })
+  await runProviderWizard(deps)
+  check('51 action menu: no management option without a live target route',
+    !calls.optionDescriptions.action?.[t('provider-opt-action-sync')]
+      && Boolean(calls.optionDescriptions.action?.[t('provider-opt-action-add')]),
+    JSON.stringify(calls.optionDescriptions.action))
+
+  const syncable = makeDeps({ 'action': ACTION_SYNC, 'sync-models': { selected: [] } }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined ? [{ id: 'glm-5.3' }] : [{ id: 'glm-5.3' }],
+  })
+  await runProviderWizard(syncable.deps)
+  check('51 action menu: a live-target catalog route adds the management option',
+    syncable.calls.optionDescriptions.action?.[t('provider-opt-action-sync')] === t('provider-opt-action-sync-desc'),
+    JSON.stringify(syncable.calls.optionDescriptions.action))
+}
+
+// 52. Connecting a catalog route reports the vendor's extras (and their
+// derived route) in the model question, and enables nothing by itself.
+{
+  const { deps, calls } = makeDeps({
+    'mode': MODE_CATALOG,
+    'catalog': { selected: ['opencode-go'] },
+    'apikey': { custom: 'sk-zen' },
+    'baseurl-choice': SKIP_BASEURL,
+    'models': { selected: ['glm-5.3'] },
+    'confirm': CONFIRM_WRITE,
+    'switch': KEEP_MODEL,
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : [{ id: 'glm-5.3' }, { id: 'longcat-2.5-preview-free' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('52 connect: outcome added', outcome === 'added', outcome)
+  check('52 connect: the catalog route probes its vendor listing without a stored baseURL',
+    eq(calls.discoverRequests, [
+      { provider: 'opencode-go' },
+      { baseURL: 'https://opencode.ai/zen/go/v1', api: 'openai-completions', apiKey: 'sk-zen' },
+    ]), JSON.stringify(calls.discoverRequests))
+  check('52 connect: the vendor-only ids are reported as a question detail, never as options',
+    calls.details.models === t('provider-catalog-vendor-note', {
+      n: 1,
+      models: 'longcat-2.5-preview-free',
+      derived: 'opencode-go-live, opencode-go-live-anthropic',
+    }) && calls.optionDescriptions.models?.['longcat-2.5-preview-free'] === undefined,
+    JSON.stringify({ detail: calls.details.models, options: Object.keys(calls.optionDescriptions.models ?? {}) }))
+  check('52 connect: the catalog profile pins only the selected snapshot model',
+    eq(calls.profiles, [['opencode-go', { apiKeyEnv: 'OPENCODE_GO_API_KEY', models: [{ id: 'glm-5.3' }] }]]),
+    JSON.stringify(calls.profiles))
+  check('52 connect: nothing is enabled on the derived route behind the user\'s back',
+    eq(calls.mutations, []), JSON.stringify(calls.mutations))
+}
+
+// 53. The vendor listing is unreachable while connecting: the snapshot note
+// stays, the live-probe failure is surfaced once, and the connect succeeds.
+{
+  const { deps, calls } = makeDeps({
+    'mode': MODE_CATALOG,
+    'catalog': { selected: ['opencode-go'] },
+    'apikey': { custom: 'sk-zen' },
+    'baseurl-choice': SKIP_BASEURL,
+    'models': { selected: ['glm-5.3'] },
+    'confirm': CONFIRM_WRITE,
+    'switch': KEEP_MODEL,
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }]
+      : Promise.reject(new Error('connection refused')),
+  })
+  const outcome = await runProviderWizard(deps)
+  check('53 connect offline: outcome added', outcome === 'added', outcome)
+  check('53 connect offline: the question falls back to the snapshot note',
+    calls.details.models === t('provider-catalog-snapshot-note', { n: 1 }),
+    JSON.stringify(calls.details.models))
+  check('53 connect offline: the live-probe failure is surfaced',
+    calls.notifications.some(n => n.color === 'warning' && n.text === t('provider-live-fetch-failed'))
+      && eq(calls.mutations, []),
+    JSON.stringify({ notifications: calls.notifications, mutations: calls.mutations }))
+}
+
+// 54. Editing such a route's model list shows the same vendor note, and the
+// vendor-only ids stay unselectable (the catalog route cannot carry them).
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['opencode-go'] },
+    'edit-menu': MENU_MODELS,
+    'models': { selected: ['glm-5.3', 'glm-5.2'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [{ route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] }],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }, { id: 'glm-5.2' }]
+      : [{ id: 'glm-5.3' }, { id: 'glm-5.2' }, { id: 'longcat-2.5-preview-free' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('54 edit with vendor extras: outcome updated', outcome === 'updated', outcome)
+  check('54 edit with vendor extras: the note names the derived route',
+    calls.details.models === t('provider-catalog-vendor-note', {
+      n: 1,
+      models: 'longcat-2.5-preview-free',
+      derived: 'opencode-go-live, opencode-go-live-anthropic',
+    }), JSON.stringify(calls.details.models))
+  check('54 edit with vendor extras: only catalog-covered ids are selectable',
+    eq(Object.keys(calls.optionDescriptions.models ?? {}).sort(), ['glm-5.2', 'glm-5.3']),
+    JSON.stringify(Object.keys(calls.optionDescriptions.models ?? {})))
+  check('54 edit with vendor extras: the catalog route keeps its own shape',
+    eq(calls.mutations, [['opencode-go', [{ op: 'set', path: ['models'], value: [{ id: 'glm-5.3' }, { id: 'glm-5.2' }] }]]]),
+    JSON.stringify(calls.mutations))
 }
 
 console.log(failed === 0 ? '\nAll provider-wizard checks passed' : `\n${failed} check(s) FAILED`)
