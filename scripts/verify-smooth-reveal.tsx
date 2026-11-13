@@ -9,12 +9,13 @@
  *   non-streaming delivery) reveals too; replayed rows and disabled mode
  *   paint complete immediately.
  * Group C — component contracts:
- *   thinking preview ticker follows the ARRIVED text while the expanded body
- *   paints the revealed slice; a running tool card's diff body reveals line
- *   by line; the settled result view snaps complete.
- * Group D — long-session subscriber fanout:
- *   with 80 settled history cards, only the active card advances the reveal
- *   scheduler; settled cards do not each force a store rerender.
+ *   one thinking instance survives empty/text/count transitions and cleans up
+ *   its spinner; preview follows ARRIVED text while expansion paints the slice;
+ *   tool cards show bounded previews when collapsed
+ *   and explicitly opened bodies paint complete without reveal timers.
+ * Group D — long-session fanout:
+ *   real assistant/reasoning reveal with 80 historical tool cards uses one
+ *   store subscriber, catches up and retires the timer.
  * Group E — completed reveals survive remounts and session boundaries:
  *   a finished row does not re-reveal after thousands of later reveals, a
  *   session reset drops cross-session keys, and all three Chat reset sites
@@ -28,6 +29,8 @@
  *   reset drops only its own prefix.
  *
  * Run: node --import tsx/esm scripts/verify-smooth-reveal.tsx
+ * Negative control: add --disable-animation; positive B/D animation oracles
+ * must fail against the same rendered content with smoothStreaming off.
  */
 // 注意：静态 import 会提升执行，下面这行 env pin 对本脚本的 i18n 解析
 // 其实无效（i18n.js 在赋值前就已按启动链解析 activeLang；本脚本断言的
@@ -40,12 +43,13 @@ import { Writable, PassThrough } from 'node:stream'
 import { readFile } from 'node:fs/promises'
 import ts from 'typescript'
 import React from 'react'
-import { render } from '../src/ui.js'
+import { Box, Text, render } from '../src/ui.js'
 import { setLang } from '../src/i18n.js'
 import { MessageList } from '../src/components/MessageList.js'
 import { RevealScopeContext } from '../src/components/revealScope.js'
 import { AssistantThinkingMessage } from '../src/components/messages/AssistantThinkingMessage.js'
 import { AssistantToolUseMessage } from '../src/components/messages/AssistantToolUseMessage.js'
+import { THINKING_SPINNER_INTERVAL_MS } from '../src/terminal-utils/figures.js'
 import type { ChatRow, ToolRow } from '../src/dsh-adapter/channel.js'
 import { createDshTranslator } from '../src/dsh-adapter/backend/translate.js'
 import { createChannelReadView } from '../src/adapter/channel/read-view.js'
@@ -54,6 +58,7 @@ import { createProjectorHarness } from './lib/projector-harness.js'
 import {
   REVEAL_MIN_STEP,
   getRevealVersion,
+  getRevealSubscriberCount,
   isRevealTimerRunning,
   revealLengthOf,
   revealLinesOf,
@@ -82,6 +87,7 @@ function check(ok: boolean, label: string, detail = ''): void {
   }
 }
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+const animationEnabled = !process.argv.includes('--disable-animation')
 
 // ---------------------------------------------------------------------------
 // Group A — scheduler/cursor units
@@ -155,14 +161,22 @@ check(revealStep(25) === 4, 'A1 revealStep(25) = 4')
 // ---------------------------------------------------------------------------
 const COLS = 60
 const ROWS = 24
+type RevealFrame = { text: string; version: number; running: boolean; subscribers: number }
 class FakeStdout extends Writable {
   columns = COLS
   rows = ROWS
   isTTY = true
-  constructor(private term: XTerm.Terminal) { super() }
+  constructor(private term: XTerm.Terminal, private frames: RevealFrame[]) { super() }
   _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void): void {
-    this.term.write(String(chunk), callback)
+    this.term.write(String(chunk), () => {
+      this.frames.push({ text: terminalText(this.term), version: getRevealVersion(), running: isRevealTimerRunning(), subscribers: getRevealSubscriberCount() })
+      callback()
+    })
   }
+}
+function terminalText(term: XTerm.Terminal): string {
+  const buffer = term.buffer.active
+  return Array.from({ length: ROWS }, (_, y) => buffer.getLine(buffer.baseY + y)?.translateToString(true) ?? '').join('\n')
 }
 class Input extends PassThrough {
   isTTY = true
@@ -172,24 +186,39 @@ class Input extends PassThrough {
 }
 async function withTerminal(
   make: () => React.ReactNode,
-  run: (screen: () => string, rerender: (node: React.ReactNode) => void) => Promise<void>,
+  run: (screen: () => string, rerender: (node: React.ReactNode) => void, frames: RevealFrame[]) => Promise<void>,
 ): Promise<void> {
   const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
-  const stdout = new FakeStdout(term) as unknown as NodeJS.WriteStream
+  const frames: RevealFrame[] = []
+  const stdout = new FakeStdout(term, frames) as unknown as NodeJS.WriteStream
   const instance = await render(make(), {
     stdout,
     stdin: new Input() as unknown as NodeJS.ReadStream,
     exitOnCtrlC: false,
     patchConsole: false,
   })
-  const screen = (): string =>
-    Array.from({ length: ROWS }, (_, y) => term.buffer.active.getLine(y)?.translateToString(true) ?? '').join('\n')
+  const screen = (): string => terminalText(term)
   try {
-    await run(screen, node => instance.rerender(node))
+    await run(screen, node => instance.rerender(node), frames)
   } finally {
     await instance.unmount()
     term.dispose()
   }
+}
+
+// Capture real terminal frames rather than sampling an empty first frame or
+// missing the early phase when frame parsing is delayed on a slow runner.
+async function checkAnimatedReveal(screen: () => string, frames: RevealFrame[], label: string, head: string, tail: string): Promise<void> {
+  check(await settled(() => frames.some(frame => frame.version > 0 && frame.running &&
+    frame.text.includes(head) && !frame.text.includes(tail))), `${label}: advancing timer paints a nonempty partial prefix`)
+  const earlyVersion = frames.find(frame => frame.version > 0 && frame.running &&
+    frame.text.includes(head) && !frame.text.includes(tail))?.version
+  check(await settled(() => screen().includes(tail) && !isRevealTimerRunning(), { timeoutMs: 8000 }),
+    `${label}: full tail paints and timer retires`)
+  const version = getRevealVersion()
+  check(earlyVersion !== undefined && version > earlyVersion, `${label}: version advances from partial to complete`)
+  await sleep(80) // 固定窗:探针 已追平的调度器不得继续 tick 或重新动画
+  check(getRevealVersion() === version && !isRevealTimerRunning() && screen().includes(tail), `${label}: caught-up content stays complete without ticks`)
 }
 
 const LONG_TEXT = [
@@ -221,15 +250,8 @@ console.log('--- B: MessageList integration ---')
     { id: 2, kind: 'assistant', text: LONG_TEXT, streaming: true, fresh: true },
   ]
   await withTerminal(
-    () => <MessageList rows={rows} smoothStreaming {...listProps} />,
-    async screen => {
-      // Wait for the head to paint rather than timing it: a cold first frame can
-      // take >80ms under load, and the tail assertion below is what matters.
-      const headShown = await settled(() => screen().includes('alpha-start'))
-      check(headShown, 'B1 streaming row: head visible')
-      check(!screen().includes('omega-end'), 'B1 streaming row: tail hidden early in the reveal')
-      check(await settled(() => screen().includes('omega-end'), { timeoutMs: 6000 }), 'B1 streaming row: tail visible after catch-up')
-    },
+    () => <MessageList rows={rows} smoothStreaming={animationEnabled} {...listProps} />,
+    async (screen, _rerender, frames) => checkAnimatedReveal(screen, frames, 'B1 streaming row', 'alpha-start', 'omega-end'),
   )
 }
 
@@ -240,14 +262,8 @@ console.log('--- B: MessageList integration ---')
     { id: 3, kind: 'assistant', text: LONG_TEXT, streaming: false, fresh: true },
   ]
   await withTerminal(
-    () => <MessageList rows={rows} smoothStreaming {...listProps} />,
-    async screen => {
-      // 固定窗:墙钟 采样 reveal 动画早期（80ms 内尾巴还没揭到）
-      await sleep(80)
-      check(!screen().includes('omega-end'), 'B2 settled-fresh row: tail hidden early (non-streaming becomes smooth)')
-      await sleep(2600) // 固定窗:墙钟 等 reveal 动画把整段追平
-      check(screen().includes('omega-end'), 'B2 settled-fresh row: complete after catch-up')
-    },
+    () => <MessageList rows={rows} smoothStreaming={animationEnabled} {...listProps} />,
+    async (screen, _rerender, frames) => checkAnimatedReveal(screen, frames, 'B2 settled-fresh row', 'alpha-start', 'omega-end'),
   )
 }
 
@@ -290,43 +306,110 @@ console.log('--- B: MessageList integration ---')
 // ---------------------------------------------------------------------------
 console.log('--- C: component contracts ---')
 
-// C1: thinking ticker follows ARRIVED text; expanded body paints the slice.
+// C1: the SAME thinking instance must survive a reveal's empty first slice,
+// text disappearing, and count-only fallback. Separate mounts hide hook-order
+// failures. Observe native timers without advancing or replacing their clock.
 {
   resetRevealForTest()
   const full = Array.from({ length: 12 }, (_, i) => `think line ${i}`).join('\n')
   const slice = full.slice(0, 40)
-  await withTerminal(
-    () => (
-      <AssistantThinkingMessage thinking={slice} textFull={full} marginTopOnTurn={false} verbose={false} preview streaming />
-    ),
-    async screen => {
-      // 固定窗:探针 预览 ticker 不得被揭示节流：settled 等到揭完也判过，
-      // 遮蔽「ticker 跟着 reveal 走」这个 bug
-      await sleep(120)
-      const text = screen()
-      check(text.includes('think line 11'), 'C1 preview ticker follows the ARRIVED text (not the reveal)')
-    },
-  )
-  await withTerminal(
-    () => (
-      <AssistantThinkingMessage thinking={slice} textFull={full} marginTopOnTurn={false} verbose streaming />
-    ),
-    async screen => {
-      // 固定窗:探针 展开体不得越过已揭示切片（断言 think line 11 不出现）
-      await sleep(120)
-      const text = screen()
-      check(!text.includes('think line 11'), 'C1 expanded body paints only the revealed slice')
-      check(text.includes('think line 0'), 'C1 expanded body shows the slice head')
-    },
-  )
+  type ThinkingProps = React.ComponentProps<typeof AssistantThinkingMessage>
+  const textProps = { thinking: slice, textFull: full, verbose: true }
+  const stages: Array<{
+    id: string
+    props: Partial<ThinkingProps>
+    visible: string[]
+    absent: string[]
+    timers: number
+  }> = [
+    { id: 'empty', props: { textFull: full, preview: true },
+      visible: [], absent: ['Thinking', 'think line'], timers: 0 },
+    { id: 'preview', props: { ...textProps, verbose: false, preview: true },
+      visible: ['Thinking', 'think line 11'], absent: ['think line 0'], timers: 1 },
+    { id: 'expanded', props: textProps,
+      visible: ['Thinking', 'think line 0'], absent: ['think line 11'], timers: 1 },
+    { id: 'empty-again', props: {},
+      visible: [], absent: ['Thinking', 'think line'], timers: 0 },
+    { id: 'count-live', props: { reasoningTokens: 123, preview: true },
+      visible: ['Thinking', '~123 tokens'], absent: ['think line'], timers: 1 },
+    { id: 'text-over-count', props: { ...textProps, reasoningTokens: 123 },
+      visible: ['Thinking', 'think line 0'], absent: ['tokens', 'think line 11'], timers: 1 },
+    { id: 'count-again', props: { reasoningTokens: 456 },
+      visible: ['Thinking', '~456 tokens'], absent: ['think line'], timers: 1 },
+    { id: 'count-settled', props: { reasoningTokens: 456, streaming: false },
+      visible: ['Thought', '~456 tokens'], absent: ['Thinking', 'think line'], timers: 0 },
+    { id: 'count-restarted', props: { reasoningTokens: 456 },
+      visible: ['Thinking', '~456 tokens'], absent: ['Thought', 'think line'], timers: 1 },
+    { id: 'text-live-again', props: textProps,
+      visible: ['Thinking…', 'think line 0'], absent: ['tokens', 'think line 11'], timers: 1 },
+    { id: 'text-settled', props: { ...textProps, streaming: false },
+      visible: ['Thinking', 'think line 0'], absent: ['tokens', 'think line 11', '…'], timers: 0 },
+    { id: 'text-restarted', props: textProps,
+      visible: ['Thinking…', 'think line 0'], absent: ['tokens', 'think line 11'], timers: 1 },
+  ]
+  let committedStage = ''
+  function ThinkingFixture({ stage }: { stage: typeof stages[number] }): React.ReactNode {
+    // Child passive effects have run before this marker. The matching screen
+    // sentinel also waits for terminal parsing, so absence/timer checks cannot
+    // pass against the previous render (especially the initial empty frame).
+    React.useEffect(() => { committedStage = stage.id }, [stage.id])
+    return (
+      <Box flexDirection="column">
+        <AssistantThinkingMessage thinking="" marginTopOnTurn={false} verbose={false} streaming {...stage.props} />
+        <Text>{`C1-stage:${stage.id}`}</Text>
+      </Box>
+    )
+  }
+  const spinnerTimers = new Set<ReturnType<typeof setInterval>>()
+  const originalSetInterval = globalThis.setInterval
+  const originalClearInterval = globalThis.clearInterval
+  const originalError = console.error
+  const errors: string[] = []
+  globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => {
+    const timer = originalSetInterval(...args)
+    if (args[1] === THINKING_SPINNER_INTERVAL_MS) spinnerTimers.add(timer)
+    return timer
+  }) as typeof setInterval
+  globalThis.clearInterval = ((...args: Parameters<typeof clearInterval>) => {
+    spinnerTimers.delete(args[0] as ReturnType<typeof setInterval>)
+    originalClearInterval(...args)
+  }) as typeof clearInterval
+  console.error = (...args: unknown[]) => {
+    errors.push(args.map(String).join(' '))
+    originalError(...args)
+  }
+  try {
+    await withTerminal(
+      () => <ThinkingFixture stage={stages[0]!} />,
+      async (screen, rerender) => {
+        for (const [index, stage] of stages.entries()) {
+          if (index > 0) rerender(<ThinkingFixture stage={stage} />)
+          const ready = await settled(() => {
+            const text = screen()
+            return committedStage === stage.id && text.includes(`C1-stage:${stage.id}`) &&
+              stage.visible.every(value => text.includes(value)) &&
+              stage.absent.every(value => !text.includes(value)) && spinnerTimers.size === stage.timers
+          })
+          check(ready, `C1 ${stage.id}: same-instance content and ${stage.timers} active spinner timer(s)`)
+          if (!ready) break
+        }
+      },
+    )
+    check(await settled(() => spinnerTimers.size === 0), 'C1 unmount releases the active spinner')
+    check(!errors.some(error => /Rendered (?:more|fewer) hooks|change in the order of Hooks|Should have a queue/i.test(error)),
+      'C1 transitions emit no hook-order errors')
+  } finally {
+    globalThis.setInterval = originalSetInterval
+    globalThis.clearInterval = originalClearInterval
+    console.error = originalError
+    // Do not let a failed cleanup assertion leak timers into the other groups.
+    for (const timer of spinnerTimers) originalClearInterval(timer)
+  }
 }
 
-// C2/C3: tool card body reveal + result snap.
+// C2/C3: tool previews and full detail are independent of smooth streaming.
 {
   resetRevealForTest()
-  // 12 hunk lines → the diff-card cap folds to 8 + one "+N lines" hint = 9
-  // rendered rows; the hint is the LAST rendered row, so its absence early
-  // and presence late brackets the whole line reveal.
   const diffs = [
     {
       path: '/src/example.ts',
@@ -351,22 +434,29 @@ console.log('--- C: component contracts ---')
   await withTerminal(
     () => <AssistantToolUseMessage tool={runningTool} marginTopOnTurn={false} verbose={false} smoothReveal fresh />,
     async (screen, rerender) => {
-      const headShown = await settled(() => screen().includes('old line 0'))
-      check(headShown, 'C2 running card: body head visible')
-      check(!screen().includes('lines (ctrl+o to expand)'), 'C2 running card: capped tail row hidden early in the reveal', screen())
-      check(await settled(() => screen().includes('lines (ctrl+o to expand)'), { timeoutMs: 6000 }), 'C2 running card: body complete after catch-up')
-      // C3: result arriving mid/after reveal snaps complete.
-      rerender(<AssistantToolUseMessage tool={doneTool} marginTopOnTurn={false} verbose={false} smoothReveal fresh />)
-      // 固定窗:探针 结果视图不得走揭示动画：settled 等到揭完也判过，遮蔽 bug
-      await sleep(80)
-      check(screen().includes('settled-result-marker'), 'C3 settled result paints complete (no reveal)')
+      check(await settled(() => screen().includes('Edit /src/example.ts')), 'C2 running summary is visible')
+      check(await settled(() => screen().includes('old line 0') && screen().includes('new line 1') && !screen().includes('new line 2')),
+        'C2 running diff preview paints its eight-row budget without exposing the tail')
+      check(!isRevealTimerRunning() && getRevealVersion() === 0 && getRevealSubscriberCount() === 0,
+        'C2 tool card owns neither reveal cursor nor subscriber')
+      rerender(<AssistantToolUseMessage tool={runningTool} marginTopOnTurn={false} verbose isExpanded smoothReveal fresh />)
+      check(await settled(() => Array.from({ length: 6 }, (_, i) => [`old line ${i}`, `new line ${i}`]).flat()
+        .every(line => screen().includes(line))), 'C2 opened running diff paints every old/new line')
+      check(!isRevealTimerRunning() && getRevealVersion() === 0, 'C2 opened diff paints complete without animation')
+      rerender(<AssistantToolUseMessage tool={doneTool} marginTopOnTurn={false} verbose={false} />)
+      check(await settled(() => screen().includes('Edited') && !screen().includes('old line')), 'C3 settled summary replaces call title')
+      check(await settled(() => screen().includes('settled-result-marker')),
+        'C3 settled card immediately paints its short output preview')
+      rerender(<AssistantToolUseMessage tool={doneTool} marginTopOnTurn={false} verbose isExpanded />)
+      check(await settled(() => screen().includes('settled-result-marker')), 'C3 opened result paints complete')
+      check(!isRevealTimerRunning() && getRevealVersion() === 0, 'C3 result never activates reveal')
     },
   )
 }
 
 // D: long-session tool-card fanout — only MessageList may subscribe to the
-// reveal store in the production path. A single active card is enough to
-// advance the scheduler; settled cards must not each force a store rerender.
+// reveal store in the production path. Real assistant/thinking content drives
+// the scheduler; settled cards must not each force a store rerender.
 console.log('--- D: long-session reveal subscriber fanout ---')
 {
   resetRevealForTest()
@@ -386,38 +476,29 @@ console.log('--- D: long-session reveal subscriber fanout ---')
       durationMs: 1000,
     },
   }))
-  const activeTool: ChatRow = {
-    id: 2000,
-    kind: 'tool',
-    text: '',
-    fresh: true,
-    tool: {
-      callId: 'active-long-session',
-      name: 'edit',
-      argsText: '{}',
-      argsFull: '{}',
-      status: 'running',
-      callView: {
-        card: 'diff',
-        title: 'Edit /src/active.ts',
-        diffs: [{
-          path: '/src/active.ts',
-          oldText: Array.from({ length: 8 }, (_, i) => `old line ${i}`).join('\n'),
-          newText: Array.from({ length: 8 }, (_, i) => `new line ${i}`).join('\n'),
-        }],
+  for (const kind of ['assistant', 'reasoning'] as const) {
+    resetRevealForTest()
+    const active: ChatRow = { id: 2000, kind, text: LONG_TEXT, streaming: true, fresh: true }
+    const expandedRows = new Set([active.id])
+    await withTerminal(
+      () => <MessageList rows={historyTools} smoothStreaming={animationEnabled}
+        {...listProps} expandedRows={expandedRows} />,
+      async (screen, rerender, frames) => {
+        // Finish the history's cold mount before delivering live content:
+        // otherwise its initial layout can consume the whole early reveal
+        // window before the first parsed terminal frame reaches the oracle.
+        check(await settled(() => screen().includes('Edited') && getRevealSubscriberCount() === 1),
+          `D1 ${kind}: historical cards painted before live delivery`)
+        frames.length = 0
+        rerender(<MessageList rows={[...historyTools, active]} smoothStreaming={animationEnabled}
+          {...listProps} expandedRows={expandedRows} />)
+        await checkAnimatedReveal(screen, frames, `D1 ${kind} with 80 history cards`, 'alpha-start', 'omega-end')
+        check(frames.some(frame => frame.running) && frames.filter(frame => frame.running).every(frame => frame.subscribers === 1) &&
+          getRevealSubscriberCount() === 1, `D1 ${kind}: one list subscriber throughout animation, no per-card fanout`)
       },
-      startedAt: Date.now(),
-    },
+    )
+    check(getRevealSubscriberCount() === 0, `D1 ${kind}: unmount releases the subscriber`)
   }
-  await withTerminal(
-    () => <MessageList rows={[...historyTools, activeTool]} smoothStreaming {...listProps} />,
-    async screen => {
-      await sleep(120) // 固定窗:墙钟 采样揭示动画早期（活动卡头部已出现）
-      check(screen().includes('old line 0'), 'D1 active tool remains visible with many history cards')
-      await sleep(2200) // 固定窗:墙钟 等揭示动画把活动卡追平
-      check(screen().includes('lines (ctrl+o to expand)'), 'D1 active tool reveal completes without nested store updates')
-    },
-  )
 }
 
 // E: a completed reveal must outlive the row's mount. `fresh` is set when a

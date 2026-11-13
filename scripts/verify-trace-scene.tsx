@@ -741,7 +741,7 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   // cell of the hint row must be at the terminal's right margin. Walking a
   // ladder of widths covers the size-dependent case, which is the one a single
   // fixed-width test would miss.
-  const LADDER = [84, 100, 126, 150, 184]
+  const LADDER = [84, 100, 102, 126, 150, 184]
   for (const cols of LADDER) {
     const { stdout, stdin, screen, term } = makeHarness(cols, 34, 200)
     const instance = await renderWithTip(
@@ -766,11 +766,15 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
       'disp-keymap',
     )
     for (const value of instances.values()) instances.set(process.stdout, value)
-    if (cols === 100) {
-      check('the 100-column tip fixture loses its /tips suffix', await settled(() =>
+    // The fork's normal margin adds one column per side. At 102 columns
+    // the tip keeps its separator while clipping /tips, the same adversarial
+    // footer-identification case that upstream exercises at 100 columns.
+    if (cols === 102) {
+      check('the 102-column tip fixture loses its /tips suffix', await settled(() =>
         screen().split('\n').some(line => line.includes('提示：/settings')
           && line.includes('shortcuts') && line.includes('快捷键')
-          && line.includes('·') && line.trimEnd().endsWith('…') && !line.includes('/tips'))))
+          && line.includes('·') && line.trimEnd().endsWith('…') && !line.includes('/tips'))),
+        screen().split('\n').filter(line => line.includes('提示：')).join(' | '))
     }
     // A truncated tip can contain both "shortcuts" and · without /tips.
     // Select the real footer independently of the width we are about to test.

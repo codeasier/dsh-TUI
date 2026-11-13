@@ -2,7 +2,9 @@
  * SOURCE_ROOT=final exact tree; SCREEN_RESULT=JSON; SCREEN_RAW=raw terminal log.
  * Twelve independent roots (long/short document, close-during-stream/keep-open): inline/fullscreen × 80x24/36x16, each resized to the
  * other geometry. Long CJK/emoji/path/Markdown transcript, streamed updates,
- * open/hidden/restored/scrolled/closed account card. Assertions read xterm.
+ * open/hidden/restored/scrolled/closed account card. A thirteenth inline root
+ * covers same-commit transcript growth, dock closure and coupon appearance.
+ * Assertions read xterm, including native scrollback for the growth case.
  */
 // Match the product entry: external NODE_ENV=test must not select Ink's
 // synchronous testing renderer, which paints before layout effects.
@@ -147,7 +149,72 @@ for(const fullscreen of [false,true])for(const initialColumns of [80,36]){
  unsubscribeResize();coupons.clear();await app.unmount();term.dispose()
  }
 }
+// Real parent/child layout-effect ordering: PromptInput closes its dock first,
+// then Chat reanchors the appearing coupon. A tail-only request in Chat would
+// overwrite the child's preserveGrowth request and lose the first new lines.
+async function couponDockGrowth():Promise<void>{
+ const columns=80,terminalRows=24
+ const term=new Terminal({cols:columns,rows:terminalRows,scrollback:2000,allowProposedApi:true})
+ activateModernEmojiWidths(term)
+ class Output extends Writable {columns=columns;rows=terminalRows;isTTY=true;_write(chunk:unknown,_e:BufferEncoding,done:()=>void){term.write(String(chunk),done)}}
+ class Input extends PassThrough {isTTY=true;setRawMode(){return this};ref(){return this};unref(){return this}}
+ const stdout=new Output(),stdin=new Input(),stderr=new Writable({write(_c,_e,done){done()}})
+ const rows=[{id:1,kind:'local-output',text:Array.from({length:40},(_,i)=>`BASE_LINE_${i}`).join('\n')}]
+ const listeners=new Set<()=>void>()
+ const channel={
+  whaleIdle:false,version:0,rows,status:'idle',sessionTitle:'coupon growth',agentId:'coupon-dock-growth',
+  model:'deepseek-v4-flash',provider:'deepseek',reasoningEffort:'max',effortLevels:[],tokens:{input:0,output:0},
+  cwd:'/tmp/demo',displayCwd:'/tmp/demo',gitBranch:'main',working:false,spinnerMode:'requesting',
+  responseChars:0,activeToolCount:0,turnStart:0,
+  pending:[{id:'queued',text:'COUPON_DOCK_READY',placement:'followup',docked:true,images:[]}],
+  commandList:LOCAL_COMMANDS,notifications:[],mode:{plan:false},activityFrames:'moon8',subagents:[],
+  lastUserText:'',scrollGutter:'hidden',smoothStreaming:false,
+  subscribe(fn:()=>void){listeners.add(fn);return()=>listeners.delete(fn)},
+  submit(){},cancel(){},clear(){},notify(){},listModels:async()=>[],listSessions:async()=>[],
+  setResumeTarget(){},loadOlder(){},mcpStatus:()=>[],pushLocal(){},
+  commandCompletions:(input:string)=>completeCommands(input),
+ }
+ const coupons=new WhaleCouponStore()
+ const newLines=Array.from({length:60},(_,i)=>`COUPON_GROWTH_${String(i).padStart(2,'0')}_END`)
+ let armed=true,displayed=0
+ // Register before mounting Chat so all three store changes reach the same
+ // commit. No reanchor spy or override: the real lifecycle effects must run.
+ const unsubscribe=coupons.subscribe(()=>{
+  if(!armed||coupons.getSnapshot()===null)return
+  armed=false;channel.pending=[];rows.push({id:2,kind:'local-output',text:newLines.join('\n')});channel.version++
+  for(const listener of listeners)listener()
+ })
+ const commits:{offered:boolean;version:number;pending:number;rows:number}[]=[]
+ function CommitProbe({children}:{children:React.ReactNode}){
+  const version=React.useSyncExternalStore(channel.subscribe,()=>channel.version,()=>channel.version)
+  const offer=React.useSyncExternalStore(coupons.subscribe,coupons.getSnapshot,coupons.getSnapshot)
+  React.useLayoutEffect(()=>{commits.push({offered:offer!==null,version,pending:channel.pending.length,rows:rows.length})})
+  return children
+ }
+ const notice={id:'coupon-growth',createdAt:'2026-01-01T00:00:00Z',displayUntil:null,title:'COUPON_GROWTH_NOTICE',body:'A new offer during transcript growth.',actions:[]}
+ const account={getNotifications:async()=>({nextPollAfterSeconds:600,notifications:[notice]}),getNotificationContent:async()=>notice,reportNotificationEvent:async(_id:string,event:string)=>{if(event==='displayed')displayed++;return true}}
+ const app=await render(<CommitProbe><ThemeProvider theme="dark"><Chat channel={channel as never} questionStore={new QuestionStore()} fullscreen={false} bonusNotices={coupons}/></ThemeProvider></CommitProbe>,{stdout:stdout as never,stdin:stdin as never,stderr:stderr as never,patchConsole:false,exitOnCtrlC:false,terminalImages:false})
+ try{
+  assert.equal(await settled(()=>viewportLines(term).some(line=>line.includes('COUPON_DOCK_READY'))),true,'parked queue is visibly open before coupon growth')
+  const beforeCommits=commits.length,beforeBase=term.buffer.active.baseY
+  await coupons.refresh(account)
+  assert.equal(await settled(()=>displayed===1&&viewportLines(term).some(line=>line.includes(notice.title))),true,'appearing coupon has a real terminal presentation receipt')
+  await new Promise<void>(resolve=>stdout.write('',()=>resolve()))
+  const changed=commits.slice(beforeCommits)
+  assert.ok(changed.some(commit=>commit.offered),'coupon committed')
+  assert.ok(changed.every(commit=>commit.offered&&commit.version===1&&commit.pending===0&&commit.rows===2),'coupon, dock closure and new transcript share the first changed commit')
+  const buffer=term.buffer.active
+  const history=Array.from({length:buffer.baseY},(_,y)=>buffer.getLine(y)?.translateToString(true)??'')
+  assert.ok(buffer.baseY>beforeBase,'new rows reach native scrollback rather than only replacing the viewport tail')
+  // These are well above the final viewport and coupon overlay. Later sparse
+  // frames cannot recover them if Chat consumed growth as a tail-only repaint.
+  for(const line of newLines.slice(0,20))assert.equal(history.filter(painted=>painted.includes(line)).length,1,`${line} reaches native scrollback exactly once`)
+  assert.equal(viewportLines(term).some(line=>line.includes('COUPON_DOCK_READY')),false,'closed dock leaves no visible stale copy')
+ }finally{unsubscribe();coupons.clear();await app.unmount();term.dispose()}
+}
+await couponDockGrowth()
+
 if(process.env.SCREEN_RESULT)writeFileSync(process.env.SCREEN_RESULT,JSON.stringify({sourceRoot,node:process.version,snapshots},null,2))
 if(process.env.SCREEN_RAW)writeFileSync(process.env.SCREEN_RAW,raw.join(''))
 if(errors.length){console.error(JSON.stringify(errors));process.exit(1)}
-console.log('PASS account notice Chat geometry (12 scenarios): inline/fullscreen, 80/36 columns, resize, CJK/emoji, stream, scroll, close')
+console.log('PASS account notice Chat geometry (13 scenarios): inline/fullscreen, 80/36 columns, resize, CJK/emoji, stream, scroll, close, same-commit dock/coupon growth')
