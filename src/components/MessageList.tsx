@@ -323,7 +323,9 @@ function signatureParts(
         row.job?.outputLines.length ?? 0,
         // Equal JS lengths (ASCII → CJK) can move detail onto a tail row.
         row.job?.detail ?? '',
-        row.job?.progress?.length ?? 0,
+        // JobProgress is always one normalized, truncated line. Only its
+        // presence changes the header budget or adds a tail row, not its text.
+        Boolean(row.job?.progress),
         // The waterfall wraps its tail and keeps the last rows, so how much
         // text those tail lines carry decides how many rows actually paint.
         row.job === undefined

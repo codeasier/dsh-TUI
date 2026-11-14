@@ -48,20 +48,22 @@ function statusInfo(status: BackgroundJobStatus): { glyph: string; label: string
 /**
  * Producer progress as the design system's bar: `n/m` draws a 5-cell
  * sub-cell-accurate `ProgressBar` (same primitive the rest of the TUI uses)
- * plus the raw counter; any other shape passes through verbatim. Exported for
- * the /jobs panel so both surfaces read the same.
+ * plus the counter; other shapes show a phase label. Normalize both to one
+ * plain line and truncate inside the available column so neither can change
+ * the card height. Exported for /jobs so both surfaces read the same.
  */
 export function JobProgress({ progress }: { progress: string }): React.ReactNode {
-  const match = /^(\d+)\s*\/\s*(\d+)$/.exec(progress.trim())
+  const text = React.useMemo(() => notificationText(progress, Infinity), [progress])
+  const match = /^(\d+)\s*\/\s*(\d+)$/.exec(text)
   const current = match === null ? Number.NaN : Number(match[1])
   const total = match === null ? Number.NaN : Number(match[2])
-  if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 0) {
-    return <Text color="accent" wrap="truncate-end">{progress}</Text>
-  }
+  const counter = Number.isFinite(current) && Number.isFinite(total) && total > 0
   return (
-    <Box flexDirection="row" gap={1}>
-      <ProgressBar ratio={Math.min(current, total) / total} width={5} fillColor="accent" emptyColor="inactive" />
-      <Text color="accent">{progress.trim()}</Text>
+    <Box flexDirection="row" gap={1} height={1} overflow="hidden">
+      {counter && <Box width={5} flexShrink={0}>
+        <ProgressBar ratio={Math.min(current, total) / total} width={5} fillColor="accent" emptyColor="inactive" />
+      </Box>}
+      <Text color="accent" wrap="truncate-end">{text || ' '}</Text>
     </Box>
   )
 }
@@ -115,8 +117,8 @@ function waterfallWindow(
  * status) plus a bounded output waterfall (up to three rows) while the job
  * is live — and only when mirrored output exists: background jobs are
  * usually silent, so an outputless card is just its header line, never a
- * row of empty gutters. Settled jobs fold to the header line alone (a
- * failed/killed job keeps one detail line); the `/jobs` panel holds the
+ * row of empty gutters. Settled jobs fold away output, retaining their detail
+ * once, in the header if it fits or on a tail row; the `/jobs` panel holds the
  * fuller view the card clicks to.
  *
  * The waterfall is MIRRORED, never polled: the harness job registry's read
@@ -201,7 +203,7 @@ export function JobCard({ job, marginTopOnTurn, onClick, rail, expanded: _expand
   const titleWidth = Math.max(1, titleBudget)
   const titleLines = wrapText(headerName, titleWidth, 'wrap').split('\n')
   const progressTail = liveProgress !== undefined && !progressInHeader
-  const detailTail = headerDetail !== undefined && (!detailInHeader || (settled && job.status !== 'completed'))
+  const detailTail = headerDetail !== undefined && !detailInHeader
   const contentLines = titleLines.length + activity.length + (detailTail ? 1 : 0) + (progressTail ? 1 : 0)
   const railGlyphs: string[] = []
   if (grouped) {

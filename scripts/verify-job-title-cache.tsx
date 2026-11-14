@@ -2,7 +2,8 @@
  * Focused upgrade regression: grouped job payloads refresh without status changes,
  * rendered description||label titles invalidate offscreen heights (including
  * equal-JS-length CJK replacements), narrow rails keep THREE visual tail rows,
- * oversized titles are bounded, and elapsed-time ticks preserve cached heights.
+ * progress stays one line, settled details appear once, oversized titles are
+ * bounded, and elapsed-time ticks preserve cached heights.
  * Run: node --import tsx/esm scripts/verify-job-title-cache.tsx
  */
 process.env.DSH_TUI_LANG = 'en'
@@ -15,7 +16,7 @@ const home = mkdtempSync(join(tmpdir(), 'dshtui-job-title-cache-'))
 process.env.HOME = home
 process.env.USERPROFILE = home
 
-const [React, { Writable, PassThrough }, { Terminal }, ui, { MessageList }, { JobCard }, { settled }, { default: wrapText }] = await Promise.all([
+const [React, { Writable, PassThrough }, { Terminal }, ui, { MessageList }, { JobCard, JobProgress }, { settled }, { default: wrapText }] = await Promise.all([
   import('react'),
   import('node:stream'),
   import('@xterm/headless'),
@@ -266,6 +267,171 @@ function list(rows: readonly ChatRow[], extra: Partial<React.ComponentProps<type
         && !text.includes('OUTPUT-TAIL') && !text.includes('2/5')
     }), lines().join('|'))
   })
+}
+
+// Inspect the full painted screen, not a viewport that could hide overflow.
+// A short title leaves progress in the 12-cell header at 100 columns and moves
+// it below the header at 44. Output gives both cards a visible closing rail.
+{
+  const [{ renderToScreen, scanPositions }, { cellAt }, { TerminalSizeContext }, { ClockContext }] = await Promise.all([
+    import('../src/ink/render-to-screen.js'), import('../src/ink/screen.js'),
+    import('../src/ink/components/TerminalSizeContext.js'), import('../src/ink/components/ClockContext.js'),
+  ])
+  const paint = (node: React.ReactNode, columns: number) => renderToScreen(
+    <ui.ThemeProvider theme="dark"><ClockContext.Provider value={null}>
+      <TerminalSizeContext.Provider value={{ columns, rows: 36 }}>{node}</TerminalSizeContext.Provider>
+    </ClockContext.Provider></ui.ThemeProvider>, columns,
+  )
+  const progressCases = [
+    { name: 'review counter', source: '120/300', marker: '120/', counter: true },
+    { name: 'long counter', source: '1200000000000000000000/3000000000000000000000', marker: '1200', counter: true },
+    { name: 'ANSI/control/multiline phase', source: '\x1b[31mgo\x1b[0m\n界\t👩‍💻\x07', marker: 'go 界 👩‍💻', counter: false },
+    { name: 'wide phase', source: '界👩‍💻'.repeat(20) + 'PHASE-END', marker: '界👩‍💻', counter: false },
+    { name: 'control-only presence', source: ' \n\x1b[0m\t\x07', marker: '', counter: false },
+  ]
+  for (const columns of [100, 44]) {
+    const progressRow = columns === 100 ? 0 : 1
+    const expectedRail = columns === 100 ? '╭╰' : '╭│╰'
+    for (const fixture of progressCases) {
+      const original = job('job-a', 'a', {
+        progress: fixture.source, outputLines: [{ text: 'OUTPUT-TAIL', channel: 'stdout' }],
+      })
+      const source = JSON.stringify(original)
+      const { screen, height } = paint(<JobCard job={original} marginTopOnTurn={false} rail={{ open: true, close: true }} />, columns)
+      const rail = Array.from({ length: height }, (_, row) => cellAt(screen, 0, row)?.char ?? '').join('')
+      const tag = `${fixture.name}/${columns}`
+      check(`${tag}: progress occupies one row and the rail covers every painted row`, height === expectedRail.length
+        && rail === expectedRail && scanPositions(screen, 'OUTPUT-TAIL')[0]?.row === height - 1, `height=${height} rail=${rail}`)
+      if (fixture.marker !== '') {
+        const marks = scanPositions(screen, fixture.marker)
+        check(`${tag}: the normalized progress is visible in its header/tail slot`, marks.length > 0
+          && marks.every(mark => mark.row === progressRow))
+        if (fixture.counter) {
+          const bar = scanPositions(screen, '██')[0]
+          check(`${tag}: the five-cell bar and counter share one row`, bar?.row === progressRow
+            && marks[0]?.row === progressRow && marks[0]?.col === bar.col + 6)
+        }
+        if (fixture.name === 'long counter' || fixture.name === 'wide phase' || (fixture.counter && columns === 100)) {
+          check(`${tag}: overflow is visibly truncated, not wrapped or silently dropped`,
+            scanPositions(screen, '…').some(mark => mark.row === progressRow) && scanPositions(screen, 'PHASE-END').length === 0)
+        }
+      }
+      check(`${tag}: rendering leaves the complete source job untouched`, JSON.stringify(original) === source)
+    }
+
+    // A second card closes the group even when the tested card is one row.
+    // No output/progress can mask a duplicate detail or an extra blank row.
+    for (const status of ['completed', 'failed', 'killed'] as const) {
+      const original = job('job-a', 'a', { status, detail: 'EXIT1', finishedAt: startedAt + 1000 })
+      const { screen, height } = paint(<ui.Box flexDirection="column">
+        <JobCard job={original} marginTopOnTurn={false} rail={{ open: true }} />
+        <JobCard job={job('job-b', 'b', { status: 'completed', finishedAt: startedAt + 1000 })}
+          marginTopOnTurn={false} rail={{ close: true }} />
+      </ui.Box>, columns)
+      const details = scanPositions(screen, 'EXIT1')
+      check(`${status}/${columns}: detail appears exactly once in the header or tail`,
+        details.length === 1 && details[0]!.row === progressRow)
+      check(`${status}/${columns}: no duplicate detail row and no gap in the group rail`, height === expectedRail.length
+        && Array.from({ length: height }, (_, row) => cellAt(screen, 0, row)?.char ?? '').join('') === expectedRail,
+        `height=${height}`)
+    }
+  }
+  const panelProgress = paint(<ui.Box width={11}><JobProgress progress="120/300" /></ui.Box>, 11)
+  check('/jobs eleven-cell progress slot keeps the complete bar and truncates only the counter',
+    panelProgress.height === 1 && scanPositions(panelProgress.screen, '██    120/…').length === 1)
+}
+
+// The equal-length phase→counter replacement must not outgrow a measured
+// spacer. Longer/non-visible nonempty text must not remount it either, while
+// removing or restoring progress must invalidate a narrow card's tail height.
+{
+  const { ClockContext } = await import('../src/ink/components/ClockContext.js')
+  for (const columns of [100, 44]) {
+    const original = job('job-a', 'a', { progress: 'working', startedAt: 0 })
+    const rows: ChatRow[] = [
+      { id: 1, kind: 'job', text: 'unchanged', job: original },
+      { id: 2, kind: 'job', text: 'unchanged', job: job('job-b', 'b', { startedAt: 0 }) },
+      ...Array.from({ length: 45 }, (_, index): ChatRow => ({
+        id: index + 3, kind: 'assistant', text: `progress tail ${index}`, streaming: false,
+      })),
+    ]
+    const refs = new Map<number, DOMElement>()
+    let mounts = 0
+    let revision = 0
+    let actualScroll: ScrollBoxHandle | null = null
+    const registerRowRef = (id: number, element: DOMElement | null): void => {
+      if (element === null) refs.delete(id)
+      else { refs.set(id, element); if (id === 1) mounts++ }
+    }
+    const windowHandle: ScrollBoxHandle = {
+      scrollTo() {}, scrollBy() {}, scrollToElement() {}, scrollToBottom() {},
+      getScrollTop: () => 490, getPendingDelta: () => 0, getScrollHeight: () => 500,
+      getFreshScrollHeight: () => 500, getViewportHeight: () => 10, getViewportTop: () => 0,
+      isSticky: () => true, subscribe: () => () => {}, setClampBounds() {},
+    }
+    const setScroll = (handle: ScrollBoxHandle | null): void => { actualScroll = handle }
+    const view = (forceMountRowId?: number): React.ReactNode => <ClockContext.Provider value={null}>
+      <ui.Box flexDirection="column">
+        <ui.ScrollBox ref={setScroll} height={10} flexDirection="column">
+          {list(rows, { scrollHandle: windowHandle, registerRowRef, forceMountRowId })}
+        </ui.ScrollBox>
+        <ui.Text>{`progress revision ${revision}`}</ui.Text>
+      </ui.Box>
+    </ClockContext.Provider>
+    await withTerminal(columns, () => view(1), async (lines, rerender) => {
+      const height = (): number => refs.get(1)?.yogaNode?.getComputedHeight() ?? 0
+      const rail = (): string => {
+        const frame = lines()
+        const first = frame.findIndex(line => line.startsWith('╭'))
+        const last = frame.findIndex(line => line.startsWith('╰'))
+        return first < 0 || last < first ? '' : frame.slice(first, last + 1).map(line => line[0] ?? ' ').join('')
+      }
+      const expectedRail = columns === 100 ? '╭╰' : '╭│╰'
+      check(`progress/${columns}: original group is visibly painted and measured`, await settled(() =>
+        height() > 0 && lines().some(line => line.includes('working')) && rail() === expectedRail))
+      const measured = height()
+      rerender(view())
+      check(`progress/${columns}: measured group becomes offscreen spacers`, await settled(() => !refs.has(1) && !refs.has(2)))
+      const spacerHeight = actualScroll?.getFreshScrollHeight()
+      check(`progress/${columns}: the real ScrollBox has a measured content height`, spacerHeight !== undefined && spacerHeight > 0)
+      for (const [progress, marker] of [
+        ['120/300', '120/'], ['phase extended to much longer', 'phase'], ['\n\x1b[0m\t\x07', ''],
+      ] as const) {
+        const beforeMounts = mounts
+        rows[0]!.job = { ...original, progress }
+        revision++
+        rerender(view())
+        check(`progress/${columns}/${revision}: nonempty replacement preserves the offscreen spacer`, await settled(() =>
+          lines().some(line => line.includes(`progress revision ${revision}`)) && !refs.has(1)
+          && mounts === beforeMounts && actualScroll?.getFreshScrollHeight() === spacerHeight))
+        rerender(view(1))
+        check(`progress/${columns}/${revision}: remount preserves real row/content heights and the whole rail`, await settled(() =>
+          mounts > beforeMounts && height() === measured && actualScroll?.getFreshScrollHeight() === spacerHeight
+          && rail() === expectedRail && (marker === '' || lines().some(line => line.includes(marker)))),
+          `old=${measured} new=${height()}`)
+        rerender(view())
+        check(`progress/${columns}/${revision}: updated group returns to spacers`, await settled(() => !refs.has(1) && !refs.has(2)))
+      }
+      if (columns === 44) {
+        for (const progress of [undefined, '120/300']) {
+          const beforeMounts = mounts
+          rows[0]!.job = { ...original, progress }
+          rerender(view())
+          check(`progress presence/${String(progress)}: the cached row is invalidated`, await settled(() => mounts > beforeMounts))
+          rerender(view(1))
+          const removed = progress === undefined ? 1 : 0
+          check(`progress presence/${String(progress)}: Yoga, ScrollBox and rail gain/lose exactly the tail row`, await settled(() =>
+            height() === measured - removed && spacerHeight !== undefined
+            && actualScroll?.getFreshScrollHeight() === spacerHeight - removed
+            && rail() === (removed === 1 ? '╭╰' : expectedRail)))
+          rerender(view())
+          check(`progress presence/${String(progress)}: remeasured group returns to spacers`, await settled(() => !refs.has(1) && !refs.has(2)))
+        }
+      }
+      check(`progress/${columns}: the original job remains intact`, original.progress === 'working'
+        && original.progress.length === '120/300'.length)
+    }, () => 1000)
+  }
 }
 
 // Render the actual card at a one-cell title budget as well as normal widths.
