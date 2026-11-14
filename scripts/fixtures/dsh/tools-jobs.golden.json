@@ -328,6 +328,9 @@
       {
         "id": "job-7",
         "command": "npm run build"
+      },
+      {
+        "id": "job-7"
       }
     ],
     "jobsOnOutputSeen": [
@@ -594,6 +597,9 @@
         {
           "id": "job-7",
           "command": "npm run build"
+        },
+        {
+          "id": "job-7"
         }
       ],
       "jobsOnOutputSeen": [

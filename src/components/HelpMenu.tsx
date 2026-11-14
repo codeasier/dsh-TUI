@@ -81,6 +81,9 @@ export function HelpMenu({
         <Text dimColor>{t('help-word-jumps', { mod: modLabel })}</Text>
       </Box>
       <Box>
+        <Text dimColor>{t('help-delete-word')}</Text>
+      </Box>
+      <Box>
         <Text dimColor>{t('help-complete-command')}</Text>
       </Box>
       <Box>
