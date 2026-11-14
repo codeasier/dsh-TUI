@@ -97,10 +97,11 @@ const scratch = mkdtempSync(join(tmpdir(), 'verify-migrate-browse-'))
 
 // ── 公共：假 HOME（adapter 经 os.homedir() 定位源目录；Windows 读 USERPROFILE）──
 const home = join(scratch, 'home')
-const savedEnv = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, GROK_HOME: process.env.GROK_HOME }
+const savedEnv = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, GROK_HOME: process.env.GROK_HOME, OPENCODE_DB: process.env.OPENCODE_DB }
 process.env.HOME = home
 process.env.USERPROFILE = home
 process.env.GROK_HOME = join(home, '.grok')
+process.env.OPENCODE_DB = join(home, 'opencode.db')
 const jsonl = rows => rows.map(row => JSON.stringify(row)).join('\n') + '\n'
 /** scan() 的结果按 sessionKey 排序后的 [sessionKey, title] 摘要，便于断言。 */
 const keyed = entries => entries.filter(e => e.summary !== null).map(e => e.summary).sort((a, b) => a.sessionKey.localeCompare(b.sessionKey))

@@ -261,8 +261,7 @@ export function TooltipLayer({
   // placed relative to the inset content-area origin, and useTerminalSize()
   // already reports the content size: convert the anchor into content
   // coordinates first, then clamp inside the content area. Adding the inset
-  // (the earlier bug) moved the whole card by the page margin — with the
-  // default margin one row low and two columns right, so its bottom border
+  // (the earlier bug) moved the whole card by the page margin, so its bottom border
   // landed ON the hovered row and that row's glyphs showed beside the card.
   const anchorRow = tooltip.anchorRow - inset.y
   const anchorCol = tooltip.anchorCol - inset.x

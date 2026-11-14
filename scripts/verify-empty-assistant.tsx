@@ -4,10 +4,11 @@
  * 工具卡上方的孤立 `●`。过滤发生在 visibleRows 管线（虚拟化之前）。
  *
  * 断言：
- *  1. 空 settled assistant 行被过滤——不出现孤立 ● 行（● 后无内容）；
+ *  1. 空 settled assistant 行被过滤——工具卡上方不出现任何标记行；
  *  2. 前后的工具卡与真实正文不受影响；
- *  3. 空文本但 streaming 的 assistant 行保留（live dot 是“正在回答”信号）；
- *  4. 落定翻转（streaming true→false 原地写、rows 身份不变）后过滤生效；
+ *  3. 空文本但 streaming 的 assistant 行不再画独立标记（live 指示在状态栏
+ *     的 working 行上；转录正文层是无标记的，所以这一行在屏上就是空白）；
+ *  4. 落定翻转（streaming true→false 原地写、rows 身份不变）后界面仍无标记行；
  *  5. 用户/通知等其他空文本行不受影响（kind 限定 assistant）。
  *
  * 运行：node --import tsx/esm scripts/verify-empty-assistant.tsx
@@ -103,10 +104,9 @@ const inst = await render(
   check('工具卡正常渲染', await settled(() => screenLines().some(l => l.includes('Bash'))), '')
   check('真实正文正常渲染', await settled(() => screenLines().join('\n').includes('REALBODY-END')), '')
   check('⏵ 行 + 正文混合行保留正文', await settled(() => screenLines().join('\n').includes('REALBODY2-END')), '')
-  check('空文本 streaming 行保留（live dot）', await settled(() => {
+  check('空 streaming assistant 行不画标记行（live 指示在状态栏）', await settled(() => {
     const ls = screenLines()
-    const t = ls.findIndex(l => l.includes('Bash'))
-    return t >= 0 && ls.slice(t).some(l => l.includes('●'))
+    return ls.some(l => l.includes('Bash')) && !ls.some(l => /^[●⏺]\s*$/.test(l))
   }), '')
   const lines = screenLines()
   const screen = lines.join('\n')

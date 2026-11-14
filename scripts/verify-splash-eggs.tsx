@@ -15,6 +15,8 @@
  */
 // 终端能力必须在 supports-hyperlinks 之前钉死——它在模块初始化时读一次 env。
 process.env.FORCE_HYPERLINK = '1'
+// Tagline/OSC-8 expectations below use Chinese copy, independent of CI locale.
+process.env.DSH_TUI_LANG = 'zh'
 
 const [
   React,

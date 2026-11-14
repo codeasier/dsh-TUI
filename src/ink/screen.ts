@@ -645,8 +645,84 @@ export type Screen = Size & {
    * blitRegion/shiftRows.
    */
   softWrap: Int32Array
+  /** Rows whose terminal cells were changed out of band; diff must rewrite even equal blanks. */
+  repaintRows?: Set<number>
   /** Bounded pane row spans share the existing cell/copy-region planes. */
   selectionPanes?: Map<string, Map<number, { start: number; end: number; wrap: number; viewport?: boolean; excluded?: readonly { start: number; end: number }[] }>>
+  /** Optional column-owned copy provenance for split/partial-width paint.
+   *  0 = unowned, -1 = hard break, >0 = previous fragment's content end.
+   *  -(N+1) = content end N with an elided separator (row softWrap uses -N).
+   *  Travels with its cells, unlike the row-only compatibility projection. */
+  copyWrap?: Int32Array
+}
+
+/** Translate signed row boundaries without colliding with the hard-break sentinel. */
+export function encodeCopyWrap(contentEnd: number): number {
+  return contentEnd < 0 ? contentEnd - 1 : contentEnd || -1
+}
+
+/** Decode an owned column to the signed row boundary (hard/unowned = zero). */
+export function decodeCopyWrap(boundary: number): number {
+  return boundary < -1 ? boundary + 1 : Math.max(0, boundary)
+}
+
+/** Activate column provenance, retaining any earlier whole-row paint. */
+export function ensureCopyWrap(screen: Screen): Int32Array {
+  if (screen.copyWrap === undefined) {
+    screen.copyWrap = new Int32Array(screen.width * screen.height)
+    for (let row = 0; row < screen.height; row++) {
+      const boundary = screen.softWrap[row]!
+      for (let col = 0; col < screen.width; col++) {
+        const index = row * screen.width + col
+        // Background-only padding is not a second source line: it must not
+        // veto a later Text continuation in another column of the same row.
+        if (boundary !== 0 || screen.charPool.get(screen.cells[index * 2]!) !== ' ') {
+          screen.copyWrap[index] = encodeCopyWrap(boundary)
+        }
+      }
+    }
+  }
+  return screen.copyWrap
+}
+
+/** Record a producer's copy boundary only in the columns it owns. */
+export function setCopyWrapSpan(screen: Screen, row: number, start: number, end: number, contentEnd: number, source = true): void {
+  if (row < 0 || row >= screen.height) return
+  const left = Math.max(0, Math.floor(start))
+  const right = Math.min(screen.width, Math.floor(end))
+  if (left >= right) return
+  if (screen.copyWrap !== undefined || left > 0 || right < screen.width) {
+    const wraps = ensureCopyWrap(screen)
+    const base = row * screen.width
+    if (source || contentEnd !== 0) wraps.fill(encodeCopyWrap(contentEnd), base + left, base + right)
+    else {
+      // Structural writes invalidate only painted cells. Blank fills are not
+      // source hard breaks, but visible border/overlay glyphs still are.
+      for (let col = left; col < right; col++) {
+        wraps[base + col] = screen.charPool.get(screen.cells[(base + col) * 2]!) === ' ' ? 0 : -1
+      }
+    }
+  }
+  screen.softWrap[row] = contentEnd
+}
+
+/** Row-only compatibility view: the leftmost eligible owned column. */
+function getCopyWrap(screen: Screen, row: number): number {
+  if (row < 0 || row >= screen.height) return 0
+  if (screen.copyWrap === undefined) return screen.softWrap[row]!
+  const base = row * screen.width
+  for (let col = 0; col < screen.width; col++) {
+    if (screen.noSelect[base + col] === 1) continue
+    const boundary = screen.copyWrap[base + col]!
+    if (boundary !== 0) return decodeCopyWrap(boundary)
+  }
+  return 0
+}
+
+/** Refresh the row-only view after final noSelect masks choose the Chat columns. */
+export function projectCopyWrap(screen: Screen): void {
+  if (screen.copyWrap === undefined) return
+  for (let row = 0; row < screen.height; row++) screen.softWrap[row] = getCopyWrap(screen, row)
 }
 
 function isEmptyCellByIndex(screen: Screen, index: number): boolean {
@@ -798,8 +874,13 @@ export function resetScreen(
   else screen.copyRegion.fill(0, 0, size)
   screen.copyTexts ??= new Map()
   screen.copyTexts.clear()
+  screen.repaintRows?.clear()
   screen.softWrap.fill(0, 0, height)
   screen.selectionPanes?.clear()
+  if (screen.copyWrap !== undefined) {
+    if (screen.copyWrap.length < size) screen.copyWrap = new Int32Array(size)
+    else screen.copyWrap.fill(0, 0, size)
+  }
 
   // Update dimensions
   screen.width = width
@@ -1006,6 +1087,7 @@ export function setCellAt(
           0,
           CellWidth.Narrow,
         )
+        if (screen.copyWrap !== undefined) screen.copyWrap[spacerCI >> 1] = 0
       }
     }
   }
@@ -1023,6 +1105,7 @@ export function setCellAt(
       if ((cells[wideCI + 1]! & WIDTH_MASK) === CellWidth.Wide) {
         cells[wideCI] = EMPTY_CHAR_INDEX
         cells[wideCI + 1] = packWord1(screen.emptyStyleId, 0, CellWidth.Narrow)
+        if (screen.copyWrap !== undefined) screen.copyWrap[wideCI >> 1] = 0
         clearedWideX = x - 1
       }
     }
@@ -1082,6 +1165,7 @@ export function setCellAt(
             0,
             CellWidth.Narrow,
           )
+          if (screen.copyWrap !== undefined) screen.copyWrap[orphanCI >> 1] = 0
         }
       }
       cells[spacerCI] = SPACER_CHAR_INDEX
@@ -1368,9 +1452,20 @@ export function blitRegion(
     }
   }
 
-  // softWrap is per-row — copy the row range regardless of stride/width.
-  // Partial-width blits still carry the row's wrap provenance since the
-  // blitted content (a cached ink-text node) is what set the bit.
+  // A narrow sibling owns only its columns, not the Chat row's copy joins.
+  // Carry column provenance with exactly the same slice as its cells.
+  if (src.copyWrap !== undefined || dst.copyWrap !== undefined || regionX > 0 || maxX < dst.width) {
+    const wraps = ensureCopyWrap(dst)
+    for (let row = regionY; row < maxY; row++) {
+      const dest = row * dst.width + regionX
+      if (src.copyWrap !== undefined) {
+        const start = row * src.width + regionX
+        wraps.set(src.copyWrap.subarray(start, start + rowLen), dest)
+      } else {
+        wraps.fill(encodeCopyWrap(src.softWrap[row]!), dest, dest + rowLen)
+      }
+    }
+  }
   dst.softWrap.set(src.softWrap.subarray(regionY, maxY), regionY)
 
   // Fast path: contiguous memory when copying full-width rows at same stride
@@ -1436,6 +1531,9 @@ export function blitRegion(
           0,
           CellWidth.SpacerTail,
         )
+        if (dst.copyWrap !== undefined) {
+          dst.copyWrap[y * dst.width + maxX] = src.copyWrap?.[y * src.width + maxX - 1] ?? encodeCopyWrap(src.softWrap[y]!)
+        }
         wroteSpacerOutsideRegion = true
       }
       srcLastCI += srcStride
@@ -1478,6 +1576,10 @@ export function clearRegion(
   const cells64 = screen.cells64
   const screenWidth = screen.width
   const rowBase = startY * screenWidth
+  for (let y = startY; y < maxY; y++) {
+    screen.copyWrap?.fill(0, y * screenWidth + startX, y * screenWidth + maxX)
+    if (startX === 0 && maxX === screenWidth) screen.softWrap[y] = 0
+  }
   let damageMinX = startX
   let damageMaxX = maxX
 
@@ -1511,6 +1613,7 @@ export function clearRegion(
           if ((cells[prevW1]! & WIDTH_MASK) === CellWidth.Wide) {
             cells[prevW1 - 1] = EMPTY_CHAR_INDEX
             cells[prevW1] = packWord1(screen.emptyStyleId, 0, CellWidth.Narrow)
+            screen.copyWrap?.fill(0, (leftEdge >> 1) - 1, leftEdge >> 1)
             damageMinX = startX - 1
           }
         }
@@ -1526,6 +1629,7 @@ export function clearRegion(
           if ((cells[nextW1]! & WIDTH_MASK) === CellWidth.SpacerTail) {
             cells[nextW1 - 1] = EMPTY_CHAR_INDEX
             cells[nextW1] = packWord1(screen.emptyStyleId, 0, CellWidth.Narrow)
+            screen.copyWrap?.fill(0, (rightEdge >> 1) + 1, (rightEdge >> 1) + 2)
             damageMaxX = maxX + 1
           }
         }
@@ -1604,8 +1708,9 @@ export function countPaintedFlankColumns(
  * frame is simulated full-width by the caller, while this model-side shift
  * keeps the columns outside the box at their correct places — the frame
  * diff then repairs them on the terminal). A column-scoped shift leaves the
- * per-row softWrap flags alone: they describe the whole row and the flanks'
- * wrap state is still live.
+ * row-only softWrap projection alone until paint completes, while copyWrap
+ * provenance shifts only inside the active slice. Flank cells and copy joins
+ * therefore remain stationary together.
  * @param screen - the screen to shift.
  * @param top - the first row of the shifted range (inclusive).
  * @param bottom - the last row of the shifted range (inclusive).
@@ -1648,6 +1753,7 @@ export function shiftRows(
     const cells64 = screen.cells64
     const noSel = screen.noSelect
     const copy = screen.copyRegion
+    const wraps = ensureCopyWrap(screen)
     const span = x2 - x1
     const absN = Math.abs(n)
     const clearSlice = (r: number): void => {
@@ -1655,6 +1761,7 @@ export function shiftRows(
       cells64.fill(EMPTY_CELL_VALUE, base, base + span)
       noSel.fill(0, base, base + span)
       copy?.fill(0, base, base + span)
+      wraps.fill(0, base, base + span)
     }
     if (absN > bottom - top) {
       for (let r = top; r <= bottom; r += 1) clearSlice(r)
@@ -1667,6 +1774,7 @@ export function shiftRows(
         cells64.copyWithin(dst, src, src + span)
         noSel.copyWithin(dst, src, src + span)
         copy?.copyWithin(dst, src, src + span)
+        wraps.copyWithin(dst, src, src + span)
       }
       for (let r = bottom - n + 1; r <= bottom; r += 1) clearSlice(r)
     } else {
@@ -1676,6 +1784,7 @@ export function shiftRows(
         cells64.copyWithin(dst, src, src + span)
         noSel.copyWithin(dst, src, src + span)
         copy?.copyWithin(dst, src, src + span)
+        wraps.copyWithin(dst, src, src + span)
       }
       for (let r = top; r < top - n; r += 1) clearSlice(r)
     }
@@ -1685,12 +1794,14 @@ export function shiftRows(
   const noSel = screen.noSelect
   const copy = screen.copyRegion
   const sw = screen.softWrap
+  const wraps = screen.copyWrap
   const absN = Math.abs(n)
   if (absN > bottom - top) {
     cells64.fill(EMPTY_CELL_VALUE, top * w, (bottom + 1) * w)
     noSel.fill(0, top * w, (bottom + 1) * w)
     copy?.fill(0, top * w, (bottom + 1) * w)
     sw.fill(0, top, bottom + 1)
+    wraps?.fill(0, top * w, (bottom + 1) * w)
     return
   }
   if (n > 0) {
@@ -1699,20 +1810,24 @@ export function shiftRows(
     noSel.copyWithin(top * w, (top + n) * w, (bottom + 1) * w)
     copy?.copyWithin(top * w, (top + n) * w, (bottom + 1) * w)
     sw.copyWithin(top, top + n, bottom + 1)
+    wraps?.copyWithin(top * w, (top + n) * w, (bottom + 1) * w)
     cells64.fill(EMPTY_CELL_VALUE, (bottom - n + 1) * w, (bottom + 1) * w)
     noSel.fill(0, (bottom - n + 1) * w, (bottom + 1) * w)
     copy?.fill(0, (bottom - n + 1) * w, (bottom + 1) * w)
     sw.fill(0, bottom - n + 1, bottom + 1)
+    wraps?.fill(0, (bottom - n + 1) * w, (bottom + 1) * w)
   } else {
     // SD: row top..bottom+n → top-n..bottom; clear top..top-n-1
     cells64.copyWithin((top - n) * w, top * w, (bottom + n + 1) * w)
     noSel.copyWithin((top - n) * w, top * w, (bottom + n + 1) * w)
     copy?.copyWithin((top - n) * w, top * w, (bottom + n + 1) * w)
     sw.copyWithin(top - n, top, bottom + n + 1)
+    wraps?.copyWithin((top - n) * w, top * w, (bottom + n + 1) * w)
     cells64.fill(EMPTY_CELL_VALUE, top * w, (top - n) * w)
     noSel.fill(0, top * w, (top - n) * w)
     copy?.fill(0, top * w, (top - n) * w)
     sw.fill(0, top, top - n)
+    wraps?.fill(0, top * w, (top - n) * w)
   }
 }
 
@@ -1891,8 +2006,9 @@ function diffRowBoth(
   cb: DiffCallback,
 ): boolean {
   let x = startX
+  const repaint = prev.repaintRows?.has(y) === true
   while (x < endX) {
-    const skip = findNextDiff(prevCells, nextCells, ci, endX - x)
+    const skip = repaint ? 0 : findNextDiff(prevCells, nextCells, ci, endX - x)
     x += skip
     ci += skip << 1
     if (x >= endX) break
@@ -2069,6 +2185,7 @@ function diffDifferentWidth(
 
     for (let x = startX; x < bothEndX; x++) {
       if (
+        !prev.repaintRows?.has(y) &&
         prevCells[prevCI] === nextCells[nextCI] &&
         prevCells[prevCI + 1] === nextCells[nextCI + 1]
       ) {
