@@ -106,6 +106,7 @@ const [
 ])
 const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')
 const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
+const { t } = await import('../src/i18n.js')
 
 class FakeStdout extends Writable {
   columns = 100
@@ -594,12 +595,18 @@ await sleep(800)
   })
 
   // Double-Esc on the empty input opens the picker (3s arming window).
+  const pickerFrameStart = stdout.frames.length
   stdin.write('\x1b')
   // 固定窗:pacing 两次 Esc 之间的按键步间：连写会被终端输入解析吞成转义
   // 序列前缀，无可观测条件。
   await sleep(120)
   stdin.write('\x1b')
-  const listShown = await settled(() => plainText(stdout.frames.slice(-30)).includes('消息 09'))
+  // The transcript already contains 消息 09. Wait for the NEW picker title
+  // as well, or Enter races the overlay commit and goes to the empty prompt.
+  const listShown = await settled(() => {
+    const tail = plainText(stdout.frames.slice(pickerFrameStart))
+    return tail.includes(t('rewind-title')) && tail.includes('消息 09')
+  })
   check('rewind picker opens on double-Esc', listShown)
 
   // Enter on the newest message → the plugin decision resolves → mode list.

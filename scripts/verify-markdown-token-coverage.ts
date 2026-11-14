@@ -170,14 +170,14 @@ assert.equal(stripAnsi(applyMarkdown('inline <span>tag</span> text\n')), 'inline
 
 assert.ok(stripAnsi(applyMarkdown('**bold** and `code`\n')).includes('bold and code'))
 assert.ok(applyMarkdown('## head\n').includes('head'), 'heading text renders')
-// The divider is three subtle-styled box-drawing dashes on one
+// The divider is sixteen semantic-styled box-drawing dashes on one
 // row (no trailing newline); the literal ASCII dashes are gone.
 const hrOut = applyMarkdown('---\n')
-assert.equal(stripAnsi(hrOut), '\u2500\u2500\u2500', 'hr renders the single-row divider')
+assert.equal(stripAnsi(hrOut), '\u2500'.repeat(16), 'hr renders the single-row divider')
 assert.notEqual(hrOut, stripAnsi(hrOut), 'divider carries the subtle style under FORCE_COLOR=3')
 const fence = applyMarkdown('```ts\nconst a = 1\n```\n')
 assert.ok(fence.includes('const a = 1'), 'fenced code body renders')
-assert.ok(stripAnsi(fence).includes('```ts'), 'fence line names the language')
+assert.ok(stripAnsi(fence).startsWith('ts\n'), 'caption names the language')
 
 // -- 5. Unknown tokens fail closed --------------------------------------
 
@@ -209,7 +209,7 @@ const throwHighlight = {
 const degraded = applyMarkdown('```ts' + '\n' + codeSrc + '\n' + '```' + '\n', throwHighlight)
 const degradedPlain = stripAnsi(degraded)
 assert.ok(degradedPlain.includes('const boom = 1'), 'body survives a throwing highlighter: ' + JSON.stringify(degradedPlain))
-assert.ok(degradedPlain.includes('```ts'), 'fence line and language label survive')
+assert.ok(degradedPlain.startsWith('ts\n'), 'caption and language label survive')
 
 const bodyDirect = formatCodeBody({ type: 'code' as const, raw: '', lang: 'ts', text: codeSrc }, throwHighlight)
 assert.equal(bodyDirect, codeSrc, 'formatCodeBody returns the plain body on throw')

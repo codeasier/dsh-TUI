@@ -1,35 +1,19 @@
 /**
- * EffortInputBorder — 输入框层上的三幕点焰叠加（对齐 Codex 的完整
- * 语义：光扫过、档位字样浮现、整体渐隐）。
- *
- * 输入框只有顶/底两条横边框（round、无左右）——本组件自绘这两行，
- * **同步**承载动画；档位字样由输入行尾的 EffortTierBadge 短暂显示
- * （见 PromptInput），动画全程行数恒定。切到最高思考强度档时：
- *
- *   1. 扫光 [0, 1s)——一段高亮彩色光带沿顶/底边框同步自左向右扫过
- *      （wave 波形逐列变色），期间输入框完全正常可用；
- *   2. 档位字样 [600ms, ~1.1s)——光带行至中段时，输入行居中浮现
- *      档名大写（由暗渐亮加粗、间距聚拢，见 EffortTierBadge）；
- *   3. 渐隐 [1.5s, 2s)——字样连同光色一起向主题色淡出，末帧归零：
- *      静止时顶/底边框就是原主题色，内容区无任何附加物。
- *
- * glyph 变化仅限字样行的出现/让位（一次性）；其余帧间变化全部是既
- * 有 `─` 的前景色。触发判定在渲染期做（props-变化-调整模式）；从
- * 「已有档位」切到档位表末位最高档才触发，冷启动恢复偏好/单档表/
- * 无档位表/无共享时钟均不触发。时钟复用 Ink core 共享时钟，仅动画
- * 窗口订阅（keepAlive），播完回到零开销静止边框。
+ * Filled composer surface with a heavy accent rail. The permanent top and
+ * bottom rows preserve the prompt's height and suggestion-overlay anchor.
+ * Effort ignition pulses the rail while EffortTierBadge handles the tier name;
+ * only colours change, and the shared clock is subscribed only while active.
  */
-import React, { useContext, useEffect, useReducer, useRef, useState } from 'react'
+import React, { useContext, useEffect, useReducer, useState } from 'react'
 import { Box, Text, useTheme } from '../ui.js'
 import { ClockContext } from '../ink/components/ClockContext.js'
 import type { Color } from '../ink/styles.js'
-import { stringWidth } from '../ink/stringWidth.js'
 import type { Theme } from '../theme.js'
 import { IGNITION_TIMELINE, ignitionColors, ignitionLineColors } from '../trajectory/effortIgnition.js'
 
 type Overlay = { label: string; startedAtMs: number }
 
-/** A static chip on the top border row used for the session label. */
+/** A static chip on the top padding row used for the session label. */
 export interface InputBorderLabel {
   /** Visible text (already width-truncated by the caller). */
   text: string
@@ -39,57 +23,11 @@ export interface InputBorderLabel {
   ink: keyof Theme | Color
 }
 
-/** 边框行（顶/底共用同一色段序列——同步变色）。顶行可在右圆角前插入
- *  一个静态标签 chip（会话名），占用的列数从色段序列里扣掉，行宽不变。 */
-function BorderRow({
-  left,
-  right,
-  runs,
-  idleColor,
-  label,
-}: {
-  left: string
-  right: string
-  runs: ReadonlyArray<{ glyph: string; color: keyof Theme | Color }>
-  idleColor: keyof Theme | Color
-  label?: InputBorderLabel
-}): React.ReactNode {
-  const labelWidth = label === undefined ? 0 : stringWidth(` ${label.text} `)
-  // chip 与右圆角之间的留白（边框线格数）：视觉上不让标签贴死 ╮。
-  const labelGap = label === undefined ? 0 : 2
-  // 裁剪色段序列到剩余列数（label 行与底行的列数一致，总宽不变）。
-  // 色段保留左侧部分，右侧让位给 chip + 留白（右上角布局）。
-  let budget = Math.max(0, runs.reduce((sum, run) => sum + run.glyph.length, 0) - labelWidth - labelGap)
-  const clipped: Array<{ glyph: string; color: keyof Theme | Color }> = []
-  for (const run of runs) {
-    if (budget <= 0) break
-    const take = Math.min(run.glyph.length, budget)
-    if (take > 0) clipped.push({ glyph: run.glyph.slice(0, take), color: run.color })
-    budget -= take
-  }
-  return (
-    <Box width="100%" height={1} flexShrink={0} overflow="hidden">
-      <Text wrap="truncate-end">
-        <Text color={idleColor}>{left}</Text>
-        {clipped.map((run, i) => (
-          <Text key={i} color={run.color}>
-            {run.glyph}
-          </Text>
-        ))}
-        {label !== undefined && (
-          <Text backgroundColor={label.color} color={label.ink}>{` ${label.text} `}</Text>
-        )}
-        {label !== undefined && <Text color={idleColor}>{'─'.repeat(labelGap)}</Text>}
-        <Text color={idleColor}>{right}</Text>
-      </Text>
-    </Box>
-  )
-}
-
 export function EffortInputBorder({
   effort,
   levels,
   columns,
+  onLight: _onLight,
   idleColor,
   topRightLabel,
   children,
@@ -99,15 +37,16 @@ export function EffortInputBorder({
   /** 当前路线的档位表（低→高，末位为最高档）；未知时传 `undefined`。 */
   levels: readonly string[] | undefined
   columns: number
+  /** Ignition colours now follow the active palette (brand-aware); the
+   *  historical light-surface hint is accepted and ignored. */
+  onLight: boolean
   /** 静止边框色（主题 token 名，如 'promptBorder' / 'planMode'）。 */
   idleColor: keyof Theme | Color
-  /** 顶边框右侧的静态标签 chip（会话名标签）；undefined = 不显示。 */
+  /** 顶部留白右侧的静态标签 chip（会话名标签）；undefined = 不显示。 */
   topRightLabel?: InputBorderLabel
   children: React.ReactNode
 }): React.ReactNode {
   const clock = useContext(ClockContext)
-  // 扫光色取自当前主题（ignition / ignitionDim），与 ─ 底色的取用方式一致；
-  // 缺键的旧主题回落到点火专属的蓝白对。
   const [themeName] = useTheme()
   const [overlay, setOverlay] = useState<Overlay | null>(null)
   const [prevEffort, setPrevEffort] = useState(effort)
@@ -138,31 +77,35 @@ export function EffortInputBorder({
     if (overlay !== null && elapsedMs >= IGNITION_TIMELINE.fadeEndMs) setOverlay(null)
   }, [overlay, elapsedMs])
 
-  const midWidth = Math.max(0, columns - 2)
-  const sweepColors =
-    overlay !== null && elapsedMs < IGNITION_TIMELINE.sweepMs && midWidth > 0
-      ? ignitionLineColors({ elapsedMs, width: midWidth, colors: ignitionColors(themeName) })
-      : []
-  // 顶/底共用的色段序列（同步）：扫光列取波形色，其余列回主题色。
-  const runs: Array<{ glyph: string; color: keyof Theme | Color }> = []
-  for (let index = 0; index < midWidth; index++) {
-    const color = sweepColors[index] as keyof Theme | Color | undefined ?? idleColor
-    const last = runs[runs.length - 1]
-    if (last !== undefined && last.color === color) last.glyph += '─'
-    else runs.push({ glyph: '─', color })
-  }
+  // Sample the travelling wave at its midpoint: the same effort timeline now
+  // lights the vertical rail rather than drawing a horizontal frame. The
+  // sweep pair comes from the active palette (brand- and surface-aware).
+  const sweepWidth = Math.max(1, columns - 2)
+  const railColor = overlay !== null && elapsedMs < IGNITION_TIMELINE.sweepMs
+    ? (ignitionLineColors({ elapsedMs, width: sweepWidth, colors: ignitionColors(themeName) })[Math.floor(sweepWidth / 2)] as Color | undefined) ?? idleColor
+    : idleColor
 
   return (
     <Box
       flexDirection="column"
-      alignItems="flex-start"
-      justifyContent="flex-start"
       width="100%"
       flexShrink={0}
+      backgroundColor="userPromptBackground"
+      borderStyle="bold"
+      borderColor={railColor}
+      borderTop={false}
+      borderBottom={false}
+      borderRight={false}
     >
-      <BorderRow left="╭" right="╮" runs={runs} idleColor={idleColor} label={topRightLabel} />
-      <Box flexShrink={0}>{children}</Box>
-      <BorderRow left="╰" right="╯" runs={runs} idleColor={idleColor} />
+      <Box height={1} flexShrink={0} justifyContent="flex-end" paddingRight={3} overflow="hidden">
+        {topRightLabel !== undefined && (
+          <Text backgroundColor={topRightLabel.color} color={topRightLabel.ink} wrap="truncate-end">
+            {` ${topRightLabel.text} `}
+          </Text>
+        )}
+      </Box>
+      <Box flexDirection="column" flexShrink={0}>{children}</Box>
+      <Box height={1} flexShrink={0} />
     </Box>
   )
 }

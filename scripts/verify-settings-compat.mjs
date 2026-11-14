@@ -22,7 +22,7 @@ import { configValues, createSettingsScope, editableConfig, resolveSettingsNames
 import { createSettingsHosts } from '../src/dsh-adapter/channel/settings-host.ts'
 import { SettingsForm } from '../src/dsh-adapter/settingsEditor.ts'
 import TuiSettingsSectionsRuntime, { getHostSettingsSections, getLocalSettingsSectionsHost, trackHostSettingsSection } from '../src/dsh-adapter/settings-sections.ts'
-import { ALL_SIDE_PANELS, DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, SIDE_PANEL_ID_PATTERN, isTemporarySidePanelId, isPageMarginMode, normalizePageMargin, normalizePluginFieldsOrder, normalizeSidePanelPanels, parsePageMarginSpec, parsePluginFieldsOrder, parseSidePanelPanels } from '../src/tuiDisplayPrefs.ts'
+import { ALL_SIDE_PANELS, DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, SIDE_PANEL_ID_PATTERN, isTemporarySidePanelId, isPageMarginMode, normalizePageMargin, normalizePluginFieldsOrder, normalizeSidePanelPanels, normalizeToolBackground, parsePageMarginSpec, parsePluginFieldsOrder, parseSidePanelPanels } from '../src/tuiDisplayPrefs.ts'
 import { SPLASH_FONTS, SPLASH_FONT_OPTIONS, normalizeSplashFont } from '../src/components/splashFonts.ts'
 import { normalizeBrandSetting } from '../src/branding.ts'
 import { getLang, isLang } from '../src/i18n.ts'
@@ -36,6 +36,12 @@ assert.equal(plain.fullscreen, false)
 assert.equal(plain.whale, false)
 assert.equal(plain.effortDefault, 'high')
 assert.equal(plain.statusBar.model, false)
+assert.equal(configValues(Config({})).catalogModelSync, true, 'catalog reporting defaults on')
+assert.equal(configValues(Config({ catalogModelSync: false })).catalogModelSync, false, 'profile can disable catalog reporting and repair')
+assert.equal(normalizeToolBackground(configValues(Config({})).toolBackground), 'subtle', 'unset Config uses subtle after runtime normalization')
+for (const mode of ['none', 'subtle', 'strong']) {
+  assert.equal(configValues(Config({ toolBackground: mode })).toolBackground, mode, `Config preserves explicit ${mode}`)
+}
 assert.equal(Config.dict.fullscreen.meta.volatile === true, modernSchema)
 for (const field of ['sessionId', 'model', 'provider', 'cwd', 'preset']) {
   assert.notEqual(Config.dict[field].meta.volatile, true, `${field} cannot change without agent lifecycle handling`)
@@ -159,6 +165,20 @@ function visit(node) {
 }
 visit(source)
 assert.ok(settingsBody && ts.isBlock(settingsBody))
+let legacyToolBackgroundSchema
+function visitToolBackground(node) {
+  if (ts.isPropertyAssignment(node) && node.name.getText(source) === 'toolBackground') {
+    assert.equal(legacyToolBackgroundSchema, undefined, 'one legacy tool background schema')
+    legacyToolBackgroundSchema = new Function('Schema', `return ${node.initializer.getText(source)}`)(Schema)
+  }
+  ts.forEachChild(node, visitToolBackground)
+}
+visitToolBackground(settingsBody)
+assert.ok(legacyToolBackgroundSchema)
+assert.equal(legacyToolBackgroundSchema(undefined), undefined, 'unset legacy user layer must not shadow cordis none')
+for (const mode of ['none', 'subtle', 'strong']) {
+  assert.equal(legacyToolBackgroundSchema(mode), mode, `legacy settings preserve explicit ${mode}`)
+}
 assert.ok(namespaceDeclaration)
 assert.ok(sectionRegistration)
 assert.equal(sectionDeclarations.size, 3)
@@ -283,7 +303,7 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
       ctx: root, trackHostSettingsSection,
       configOwner: owner, Config, resolveSettingsNamespace,
       config: configValues(runtime), SHORTCUT_ACTIONS, SHORTCUT_FIELD_META, SETTING_GROUPS, settingField, effectiveComboString, parseComboDraft, draftComboConflicts,
-      getLang, DEFAULT_PAGE_MARGIN, isPageMarginMode, parsePageMarginSpec, SPLASH_FONT_OPTIONS, normalizeSplashFont, normalizeBrandSetting,
+      getLang, DEFAULT_PAGE_MARGIN, isPageMarginMode, parsePageMarginSpec, SPLASH_FONT_OPTIONS, normalizeSplashFont, normalizeBrandSetting, normalizeToolBackground,
       // Side-panel fields (sidePanel.panels) format/parse through the
       // production sentinel, grammar and temporary-address gate, so the eval
       // scope mirrors those helpers too (issues #1662, #1695).
@@ -315,6 +335,10 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
     const form = new SettingsForm(host, view, section.fields)
     assert.equal(form.available, true, 'real describe() supplies the editable TUI section')
     assert.equal(form.field(diffField).text, 'split', 'the settings page shows the effective value')
+    const toolBackgroundField = section.fields.find(field => field.path.length === 1 && field.path[0] === 'toolBackground')
+    assert.ok(toolBackgroundField, 'the production section exposes toolBackground')
+    assert.equal(form.field(toolBackgroundField).text, 'subtle', 'unset tool background displays the effective default')
+    assert.equal(toolBackgroundField.format('none'), 'none', 'the settings formatter preserves an explicit transparent surface')
     // 开屏大字字体（splashFont）：面板选项直接由字体注册表推，所以这里同时钉住
     // 「选项覆盖全部合法取值」「未设置时显示生效值（daily）」与「每一位都能被选中
     // 并真的存进 profile」——select 的 parse 只认 options 里的值，写不进别的。
@@ -536,10 +560,45 @@ for (const api of ['legacy', 'forms']) {
   assert.equal(provider.routeExists('missing'), false)
   assert.equal(provider.listRefUsers('TEST_CREDENTIAL').length, 1)
   assert.equal(provider.listConfiguredProviders().length, 1)
+  assert.equal(provider.listConfiguredProviders()[0].hasRoutingOverrides, true,
+    `${api}: explicit endpoint overrides are visible to official catalog probes`)
   const host = hosts.settingsHost()
   assert.equal(host.listNamespaces()[0].revision, 7)
   const ops = [{ op: 'set', path: ['providers', 'test', 'baseURL'], value: 'https://new.invalid' }]
   await host.write('llm-pi-ai', ops, 7)
   assert.deepEqual(mutations, [['llm-pi-ai', ops, 7]], 'writes retain revision fencing and path operations')
 }
+// User-layer-only edits must not hide connection overrides inherited from
+// the composition base. Catalog identity still drives ordinary edit/delete;
+// official probing separately refuses these resolved connection settings.
+for (const api of ['legacy', 'forms']) {
+  for (const [label, inherited, routing, customHeaders] of [
+    ['catalog defaults', {}, false, false],
+    ['inherited endpoint', { baseURL: 'https://relay.invalid/v1' }, true, false],
+    ['inherited protocol', { api: 'openai-completions' }, true, false],
+    ['inherited headers', { headers: { 'x-proxy-key': 'fixture-only' } }, false, true],
+  ]) {
+    const stored = { apiKeyEnv: 'PROXY_KEY', models: [{ id: 'model-a' }] }
+    const user = { providers: { 'opencode-go': stored } }
+    const value = { providers: { 'opencode-go': { ...stored, ...inherited } } }
+    const settings = {
+      describe: () => [{ ns: 'llm-pi-ai', revision: 1, value, user }],
+      ...(api === 'legacy' ? { get: () => value } : {}),
+    }
+    const services = {
+      settings,
+      credentials: { resolve: async () => undefined, set: async () => {}, unset: async () => {} },
+      llm: { listConfigurableProviders: () => [{ settingsNs: 'llm-pi-ai', provider: 'opencode-go', displayName: 'OpenCode Go' }] },
+    }
+    const configured = createSettingsHosts({ get: name => services[name] }).providerSetup().listConfiguredProviders()[0]
+    assert.equal(configured.isCatalog, true, `${api}: ${label} retains catalog edit semantics`)
+    assert.equal(configured.baseURL, undefined, `${api}: ${label} does not invent a user-layer endpoint`)
+    assert.equal(configured.api, undefined, `${api}: ${label} does not invent a user-layer protocol`)
+    assert.equal(configured.hasRoutingOverrides === true, routing,
+      `${api}: ${label} reports resolved routing overrides`)
+    assert.equal(configured.hasCustomHeaders === true, customHeaders,
+      `${api}: ${label} reports resolved custom headers`)
+  }
+}
+
 console.log(`PASS: settings scopes, config snapshots and provider reads (${modernSchema ? 'production sections, exact Loader IDs, volatile updates, shortcut resets and disposal' : 'legacy schema'})`)

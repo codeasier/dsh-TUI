@@ -14,7 +14,8 @@
  *
  * Driver mode additionally unit-tests the reporter: debounce dedup with a
  * repeat count, cooldown silence, ANSI stripping, truncation, empty lines,
- * and late stderr after reporter disposal (#1979).
+ * content-graded severity, silent start-up banners, and late stderr after
+ * reporter disposal (#1979).
  */
 process.env.DSH_TUI_LANG = 'zh'
 
@@ -69,7 +70,7 @@ async function runLateTail(disposeReporter: boolean): Promise<void> {
   })
   try {
     const childProcess = (await import('node:child_process')).default
-    const child = childProcess.spawn(process.execPath, ['-e', 'setTimeout(() => process.stderr.write("late-tail"), 25)'], {
+    const child = childProcess.spawn(process.execPath, ['-e', 'setTimeout(() => process.stderr.write("Error: late-tail"), 25)'], {
       stdio: ['ignore', 'ignore', 'inherit'],
       windowsHide: true,
     })
@@ -81,7 +82,7 @@ async function runLateTail(disposeReporter: boolean): Promise<void> {
     const [code, signal] = await closed
     assert.equal(code, 0)
     assert.equal(signal, null)
-    assert.deepEqual(lines, ['late-tail'])
+    assert.deepEqual(lines, ['Error: late-tail'])
     // 固定窗:探针 销毁后不得产生通知，必须越过 debounce 窗口观察。
     await sleep(150)
     assert.equal(notices, 0)
@@ -126,15 +127,19 @@ async function runDriver(): Promise<void> {
   check('接管（字符串 stdio）：输出行进入受控 sink', guardedString.stdout.includes('SINK:BOOM-LINE'))
 
   const disposedTail = await runFixture('inner-disposed-tail')
-  check('销毁后：真实子进程的无换行 stderr 尾部仍进入 sink', disposedTail.stdout.includes('TAIL:late-tail') && !disposedTail.stderr.includes('late-tail'))
+  check('销毁后：真实子进程的无换行 stderr 尾部仍进入 sink', disposedTail.stdout.includes('TAIL:Error: late-tail') && !disposedTail.stderr.includes('Error: late-tail'))
   check('销毁后：尾部不再调度失效 Channel 通知，进程自然退出 0', disposedTail.code === 0 && disposedTail.stdout.includes('DISPOSED-TAIL-SURVIVED'))
   const activeTail = await runFixture('inner-active-tail')
-  check('负对照：未销毁 reporter 仍暴露失效 Channel 错误，不吞异常', activeTail.code === 7 && activeTail.stderr.includes('dsh-tui: Channel UI lifetime has ended') && activeTail.stdout.includes('TAIL:late-tail'))
+  check('负对照：未销毁 reporter 仍暴露失效 Channel 错误，不吞异常', activeTail.code === 7 && activeTail.stderr.includes('dsh-tui: Channel UI lifetime has ended') && activeTail.stdout.includes('TAIL:Error: late-tail'))
 
   // ── reporter: dedup / cooldown / cleanup ──────────────────────────────
-  const { createChildStderrReporter } = await import('../src/dsh-adapter/childStderr.js')
+  const { childStderrSeverity, createChildStderrReporter } = await import('../src/dsh-adapter/childStderr.js')
   const notices: string[] = []
-  const reporter = createChildStderrReporter(text => notices.push(text), {
+  const noticeColors: Array<string | undefined> = []
+  const reporter = createChildStderrReporter((text, options) => {
+    notices.push(text)
+    noticeColors.push(options?.color)
+  }, {
     debounceMs: 60,
     cooldownMs: 400,
     maxLineLength: 50,
@@ -160,13 +165,14 @@ async function runDriver(): Promise<void> {
   reporter.push(failing)
   check('冷却结束：同一行可再次通知', await settled(() => notices.length === 2))
 
-  reporter.push('Usage: tsx proxy.ts <url>')
-  check('不同的行各自成条通知', await settled(() => notices.length === 3 && (notices[2]?.includes('Usage:') ?? false)))
+  // 换一条带失败词汇的行：「不同行各自成条」要测的是通知路径，信息行已静默。
+  reporter.push('ENOENT: no such file or directory, open /etc/mcp.json')
+  check('不同的行各自成条通知', await settled(() => notices.length === 3 && (notices[2]?.includes('ENOENT') ?? false)))
 
-  reporter.push('\x1b[31mred-line\x1b[39m')
+  reporter.push('\x1b[31mError: red-line\x1b[39m')
   check('ANSI 转义被剥离', await settled(() => (notices.at(-1) ?? '').includes('red-line') && !(notices.at(-1) ?? '').includes('\x1b')))
 
-  const longLine = 'x'.repeat(100)
+  const longLine = `Error: ${'x'.repeat(100)}`
   reporter.push(longLine)
   check('超长行被截断（带省略号）', await settled(() => (notices.at(-1) ?? '').includes('…') && !(notices.at(-1) ?? '').includes(longLine)))
 
@@ -177,11 +183,56 @@ async function runDriver(): Promise<void> {
   await sleep(150)
   check('空行/纯空白行被丢弃', notices.length === countBefore)
 
+  // ── reporter: 信息行静默、问题行按内容分级 ────────────────────────────
+  // 出厂症状：MCP server 每次 tools/list 握手都往 stderr 播报一行诊断，
+  // 被当成错误横幅挂在每次启动的落地页上。
+  const benignStart = notices.length
+  reporter.push('[@agentmemory/mcp] Standalone MCP server v0.9.30 starting...')
+  reporter.push('[@agentmemory/mcp] proxying to agentmemory server at http://10.66.0.3:3111')
+  // 固定窗:探针 静默行不得产生通知：条件在 push 前就成立，轮询等于没测。
+  await sleep(150)
+  check('静默：正常启动播报不产生任何通知', notices.length === benignStart)
+
+  const failureStart = notices.length
+  reporter.push('Error: spawn agentmemory-mcp ENOENT')
+  check(
+    '失败行：出通知且为 error 色',
+    await settled(() => notices.length === failureStart + 1) && noticeColors[failureStart] === 'error',
+  )
+
+  const cautionStart = notices.length
+  reporter.push('Warning: AGENTMEMORY_URL points at an old host')
+  check(
+    '告警行：出通知但为 warning 色',
+    await settled(() => notices.length === cautionStart + 1) && noticeColors[cautionStart] === 'warning',
+  )
+
+  const graded: Array<[string, 'error' | 'warning' | 'info']> = [
+    ['[@agentmemory/mcp] proxying to agentmemory server at http://10.66.0.3:3111', 'info'],
+    ['Standalone MCP server v0.9.30 starting...', 'info'],
+    ['Usage: tsx proxy.ts <url>', 'info'],
+    ['no server reachable at http://localhost:3111; running reduced LOCAL FALLBACK with 7 of 8 tools.', 'error'],
+    ['Error: Non-HTTPS URLs are only allowed for localhost', 'error'],
+    ['unhandledRejection: ECONNREFUSED 10.66.0.3:3111', 'error'],
+    ['Warning: retrying in 5s', 'warning'],
+  ]
+  for (const [line, expected] of graded) {
+    check(`分级：${expected} ← ${line.slice(0, 44)}`, childStderrSeverity(line) === expected)
+  }
+
+  // 失败词落在显示上限之后：截断只该缩短正文，不得把失败吞成静默。
+  const tailStart = notices.length
+  reporter.push(`slow handshake, giving up: ${'y'.repeat(60)} ECONNRESET`)
+  check(
+    '截断只缩短正文，不吞失败判定',
+    await settled(() => notices.length === tailStart + 1) && noticeColors[tailStart] === 'error',
+  )
+
   const beforeDispose = notices.length
-  reporter.push('pending-before-dispose')
+  reporter.push('Error: pending-before-dispose')
   reporter.dispose()
   reporter.dispose()
-  reporter.push('late-after-dispose')
+  reporter.push('Error: late-after-dispose')
   // 固定窗:探针 已排队通知必须取消，重复销毁与迟到 push 也不得重新调度。
   await sleep(150)
   check('销毁是终态：取消在途通知、重复销毁安全、迟到 push 静默', notices.length === beforeDispose)
