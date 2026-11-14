@@ -824,13 +824,15 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
   )
 }
 
-/** Ordinary calls collapse to quiet inline summaries; output-heavy and failed
- * calls retain their cards. Shared with the transcript's spacing pre-pass. */
+/** Ordinary calls collapse to quiet inline summaries; output-heavy, failed
+ * and recognized SendMessage calls retain their cards. Shared with the
+ * transcript's spacing pre-pass, including the generic fallback for bad args. */
 export function isInlineToolSummary(tool: ToolRow): boolean {
   const card = (tool.resultView ?? tool.callView)?.card
   return tool.status !== 'error' && !tool.errorText && card !== 'terminal' && card !== 'diff'
     && !TOOL_NAME_EXEC.has(tool.name.toLowerCase()) && tool.name !== 'powershell'
     && !TOOL_NAME_MUTATE.has(tool.name.toLowerCase())
+    && sendMessageCardOf(tool) === undefined
 }
 
 /** Structured views remain channel-owned; expansion only changes presentation. */
@@ -856,9 +858,7 @@ export function AssistantToolUseMessage({
   // The send-message card's raw layer (args/result JSON) shows on verbose OR
   // a row click — the click is the mouse user's only「看全量」path.
   const sendMessageRawOpen = sendMessage !== undefined && (verbose || isExpanded)
-  // The SendMessage card is a first-class card surface: it never collapses
-  // to the quiet inline summary the ordinary tools use.
-  const inlineSummary = !verbose && sendMessage === undefined && isInlineToolSummary(tool)
+  const inlineSummary = !verbose && isInlineToolSummary(tool)
   const displayArgs = verbose ? tool.argsFull ?? tool.argsText : tool.argsText
   const result = tool.resultFull ?? tool.resultText
   // The settled view carries the applied diff / actual output; while running,

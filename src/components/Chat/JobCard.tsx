@@ -7,6 +7,7 @@ import type { Theme } from '../../theme.js'
 import { t } from '../../i18n.js'
 import wrapText, { wrapTextLines } from '../../ink/wrap-text.js'
 import { stringWidth } from '../../ink/stringWidth.js'
+import { clipToWidthGraphemes, notificationText } from '../../ink/terminal-notification.js'
 import { isMinimalUiMode } from '../../minimalUiMode.js'
 import { ProgressBar } from '../design-system/ProgressBar.js'
 import { MachineRail, RAIL_WIDTH } from '../messages/MachineRail.js'
@@ -15,6 +16,12 @@ import { MachineRail, RAIL_WIDTH } from '../messages/MachineRail.js'
 const WATERFALL_ROWS = 3
 /** The waterfall's own `  │ ` gutter prefix (the machine rail is separate). */
 const WATERFALL_GUTTER = 4
+/** Bound title layout before narrow columns turn it into one Text per cell.
+ * The jobs panel still reads the untouched title from the job itself. */
+const TITLE_MAX_WIDTH = 480
+/** Elapsed time must never change the title's wrap budget while a card is
+ * offscreen and MessageList is retaining its last measured height. */
+const DURATION_WIDTH = 7
 
 /** Static status marker — deliberately NOT the animated activity-indicator
  *  preset: a background job is parked work, and reusing the main spinner
@@ -162,7 +169,15 @@ export function JobCard({ job, marginTopOnTurn, onClick, rail, expanded: _expand
   }
   const activity = waterfallWindow(waterfall, rowWidth, WATERFALL_ROWS)
   const headerDetail = job.detail !== undefined && job.detail !== '' ? job.detail : undefined
-  const headerName = `${t('jobs-card-prefix')}${jobTitleOf(job)}`
+  const title = jobTitleOf(job)
+  const titlePrefix = t('jobs-card-prefix')
+  // Normalize line breaks too: a cell budget alone cannot bound a title
+  // containing thousands of empty lines. Clip only when the source changes,
+  // not on each live elapsed-time tick, and leave the durable title intact.
+  const headerName = React.useMemo(
+    () => clipToWidthGraphemes(notificationText(`${titlePrefix}${title}`, TITLE_MAX_WIDTH), TITLE_MAX_WIDTH),
+    [titlePrefix, title],
+  )
   const duration = formatJobDuration(job)
   const liveProgress = settled || job.progress === undefined || job.progress === '' ? undefined : job.progress
 
@@ -173,7 +188,7 @@ export function JobCard({ job, marginTopOnTurn, onClick, rail, expanded: _expand
     stringWidth(info.glyph),
     stringWidth(job.id),
     stringWidth(job.kind),
-    stringWidth(duration),
+    DURATION_WIDTH,
     stringWidth(info.label),
   ]
   let titleBudget = cardColumns - fixedWidths.reduce((sum, width) => sum + width, 0) - fixedWidths.length - 1
@@ -227,7 +242,9 @@ export function JobCard({ job, marginTopOnTurn, onClick, rail, expanded: _expand
             <JobProgress progress={liveProgress!} />
           </Box>
         )}
-        <Box flexShrink={0}><Text dimColor>{duration}</Text></Box>
+        <Box width={DURATION_WIDTH} flexShrink={0}>
+          <Text dimColor wrap="truncate-end">{duration}</Text>
+        </Box>
         {detailInHeader && <Box flexShrink={0}><Text dimColor>{headerDetail}</Text></Box>}
         <Box flexShrink={0}><Text color={info.color}>{info.label}</Text></Box>
       </Box>

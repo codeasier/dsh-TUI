@@ -18,6 +18,8 @@
  *
  * Run after build: `node scripts/verify-transcript-blocks.mjs [--inline] [--narrow]`
  */
+import './lib/fake-home.mjs'
+
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
@@ -308,6 +310,51 @@ stdin.write('\x0f')
 check('Ctrl+O collapse restores tight unfilled summaries', await settled(() =>
   rowOf('Read /tmp/next.ts') === rowOf('Read /tmp/handoff.md (63 - 82)') + 1 &&
   bandCells(rowOf('Read /tmp/next.ts')) === 0))
+
+// A recognized SendMessage is a full card even between ordinary read
+// summaries. Mutate the same tool/rows in place: the spacing pre-pass must
+// follow the renderer when args become recognizable (or cease to be so).
+const relayRow = toolRow(10, 'SendMessage', 'SendMessage FALLBACK')
+channel.rows = [
+  toolRow(9, 'read', 'Read /tmp/before.ts'),
+  relayRow,
+  toolRow(11, 'read', 'Read /tmp/after.ts'),
+]
+const relayCases = [
+  { label: 'message args', argsText: '{"to":"helper","message":"RELAY_MESSAGE"}', marker: 'RELAY_MESSAGE', fullCard: true },
+  { label: 'malformed args', argsText: '{', fullCard: false },
+  { label: 'missing body', argsText: '{"to":"helper"}', fullCard: false },
+  { label: 'legacy text args', argsText: '{"recipient":"helper","text":"RELAY_LEGACY"}', marker: 'RELAY_LEGACY', fullCard: true },
+  { label: 'full args over preview', argsText: '{', argsFull: '{"to":"helper","message":"RELAY_FULL"}', marker: 'RELAY_FULL', fullCard: true },
+  { label: 'malformed full args', argsText: '{"to":"helper","message":"RELAY_PREVIEW"}', argsFull: '{', fullCard: false },
+  { label: 'failed generic fallback', argsText: '{', status: 'error', errorText: 'RELAY_ERROR', marker: 'RELAY_ERROR', fullCard: true },
+]
+for (const [index, { label, marker, fullCard, ...input }] of relayCases.entries()) {
+  Object.assign(relayRow.tool, { argsFull: undefined, status: 'ok', errorText: undefined }, input)
+  const fallbackTitle = `SendMessage FALLBACK_${index}`
+  relayRow.tool.callView.title = fallbackTitle
+  channel.emit()
+  check(`SendMessage ${label}: transcript paints`, await settled(() =>
+    rowOf(marker ?? fallbackTitle) >= 0 && rowOf('Read /tmp/before.ts') >= 0 && rowOf('Read /tmp/after.ts') >= 0))
+  const before = rowOf('Read /tmp/before.ts')
+  const after = rowOf('Read /tmp/after.ts')
+  const title = rowOf('SendMessage → helper') >= 0 ? rowOf('SendMessage → helper') : rowOf(fallbackTitle)
+  if (fullCard) {
+    check(`SendMessage ${label}: read-to-card has a blank separator then padding`,
+      title === before + 3 && (lines()[before + 1] ?? '').trim() === '' && bandCells(before + 1) === 0 &&
+      (lines()[title - 1] ?? '').trim() === '│', `before=${before} title=${title}`)
+    check(`SendMessage ${label}: card-to-read has padding then a blank separator`,
+      after > title + 2 && (lines()[after - 2] ?? '').trim() === '│' &&
+      (lines()[after - 1] ?? '').trim() === '' && bandCells(after - 1) === 0, `title=${title} after=${after}`)
+    check(`SendMessage ${label}: card rail and surface remain distinct from summaries`,
+      cell(CARD_EDGE, title)?.getChars() === '│' && bandCells(title) > COLS - 2 * MARGIN &&
+      bandCells(before) === 0 && bandCells(after) === 0)
+  } else {
+    check(`SendMessage ${label}: unrecognized args keep the generic summary fallback`,
+      title === before + 1 && after === title + 1 && bandCells(title) === 0 &&
+      (lines()[title] ?? '').startsWith(`${' '.repeat(MARGIN)}→ SendMessage`), `before=${before} title=${title} after=${after}`)
+  }
+}
 
 await instance.unmount()
 term.dispose()

@@ -308,7 +308,8 @@ function signatureParts(
       break
     case 'job': {
       // The displayed title and group folding change the row height; output
-      // stays within a bounded visual tail.
+      // stays within a bounded visual tail. JobCard reserves a fixed-width,
+      // truncated duration column, so clock ticks are not height inputs.
       const group = row.jobGroup
       signatureScratch.push(
         // Localized title/status widths also determine the header wrap budget.

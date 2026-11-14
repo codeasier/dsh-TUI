@@ -98,6 +98,9 @@
  *    stored entry, hand-tuned fields beating the catalog.
  * 65. a selection that already matches writes nothing, while a bare stored
  *    entry gains the catalog fields exactly once.
+ * 45b. an enabled vendor-only id that joins the installed catalog stays
+ *    selectable and is retired only if the vendor actually drops it; boot
+ *    reporting and the wizard agree, and keeping the selection writes nothing.
  * 66. no resolvable key refuses by name and never probes.
  * 67. a failed vendor listing changes nothing.
  * 68. clearing every row retires the derived route; with no derived route it
@@ -2246,6 +2249,61 @@ for (const invalid of [
   check('45 header repair: an existing routing id is reused, not regenerated',
     keptOutcome === 'cancelled' && eq(kept.calls.mutations, []),
     JSON.stringify({ outcome: keptOutcome, mutations: kept.calls.mutations }))
+}
+
+// 45b. A newly installed catalog may now cover an enabled vendor-only id.
+// Its vendor presence, not catalog membership, decides retirement everywhere.
+for (const advertised of [true, false]) {
+  const label = `45b catalog upgrade (${advertised ? 'still advertised' : 'vendor removed'})`
+  const { deps, calls } = makeDeps({
+    'action': ACTION_SYNC,
+    'sync-models': { selected: ['grok-4.5'] },
+  }, {
+    catalogProviders: [{ provider: 'opencode-go', displayName: 'OpenCode Go' }],
+    configured: [
+      { route: 'opencode-go', ref: 'OPENCODE_GO_API_KEY', shadowed: false, isCatalog: true, models: ['glm-5.3'] },
+      {
+        route: 'opencode-go-live', ref: 'OPENCODE_GO_API_KEY', shadowed: false,
+        isCatalog: false, api: 'openai-completions', baseURL: 'https://opencode.ai/zen/go/v1',
+        models: ['grok-4.5'], modelEntries: [{ id: 'grok-4.5' }],
+        headers: { 'x-opencode-session': 'session-abc' },
+      },
+    ],
+    storedCredentials: { OPENCODE_GO_API_KEY: 'sk-zen' },
+    vendorCatalog: {},
+    discover: request => request.provider !== undefined
+      ? [{ id: 'glm-5.3' }, { id: 'grok-4.5' }]
+      : [{ id: 'glm-5.3' }, ...(advertised ? [{ id: 'grok-4.5' }] : []), { id: 'longcat-2.5-preview-free' }],
+  })
+  const [status] = await inspectCatalogRoutes(deps.host)
+  check(`${label}: only vendor-only ids remain available to enable`,
+    eq(status?.vendorOnly?.map(row => row.id), ['longcat-2.5-preview-free'])
+      && eq(status?.unenabled, ['longcat-2.5-preview-free']), JSON.stringify(status))
+  check(`${label}: retirement follows the full vendor listing`,
+    eq(status?.enabled, ['grok-4.5']) && eq(status?.retired, advertised ? [] : ['grok-4.5']),
+    JSON.stringify(status))
+
+  const lines = []
+  await reportCatalogRoutesQuietly(deps.host, (message, level) => lines.push([level, message]))
+  check(`${label}: boot reports a retired id only after vendor removal`,
+    eq(lines, [
+      ['debug', 'opencode-go: 1 official model(s) not enabled (longcat-2.5-preview-free) — enable them from /provider'],
+      ...(!advertised ? [['debug', 'opencode-go: 1 enabled model(s) the endpoint no longer advertises (grok-4.5)']] : []),
+    ]), JSON.stringify(lines))
+
+  const outcome = await runProviderWizard(deps)
+  const rows = calls.optionDescriptions['sync-models'] ?? {}
+  check(`${label}: the enabled row remains selectable and pre-checked`,
+    eq(Object.keys(rows), ['longcat-2.5-preview-free', 'grok-4.5'])
+      && eq(calls.defaults['sync-models'], ['grok-4.5']),
+    JSON.stringify({ rows, defaults: calls.defaults['sync-models'] }))
+  check(`${label}: the wizard uses the inspection's retirement result`,
+    rows['grok-4.5'] === t(advertised ? 'provider-sync-row-no-meta' : 'provider-sync-row-retired'),
+    JSON.stringify(rows))
+  check(`${label}: keeping the selection never rewrites or removes it`,
+    outcome === 'cancelled' && eq(calls.mutations, []) && eq(calls.removedProfiles, [])
+      && eq(calls.profiles, []) && eq(calls.credentials, []),
+    JSON.stringify({ outcome, mutations: calls.mutations, removed: calls.removedProfiles }))
 }
 
 // 46. No resolvable key: refused by name, and no probe is attempted.

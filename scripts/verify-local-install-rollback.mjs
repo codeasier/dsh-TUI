@@ -15,6 +15,12 @@ if (process.platform === 'win32') {
 }
 const repo = fileURLToPath(new URL('../', import.meta.url))
 const packageName = '@deepseek-harness-tui/dsh-tui'
+assert.doesNotMatch(readFileSync(join(repo, 'scripts/local-install.sh'), 'utf8'), /\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7f]/u,
+  'brace shell variables immediately before non-ASCII text for macOS /bin/sh')
+const utf8Locale = process.platform === 'darwin' ? 'en_US.UTF-8' : 'C.UTF-8'
+const charmap = spawnSync('locale', ['charmap'], { env: { ...process.env, LC_ALL: utf8Locale, LANG: utf8Locale }, encoding: 'utf8' })
+assert.equal(charmap.status, 0, `cannot check ${utf8Locale}: ${charmap.stderr}`)
+assert.match(charmap.stdout.trim(), /^UTF-?8$/i, 'UTF-8 cases must run with an available UTF-8 locale')
 const root = mkdtempSync(join(tmpdir(), 'dsh-tui-install-rollback-'))
 let verifiedCases = 0
 const put = (path, content) => {
@@ -67,7 +73,7 @@ const install = wrong => {
   if (mode === 'digest-fail') symlinkSync('index.js', join(target, 'lib/types/symlink.js'))
   if (mode === 'missing-lib') rmSync(join(target, 'lib'), { recursive: true, force: true })
 }
-if (command === 'git') process.stdout.write(args.includes('--abbrev-ref') ? 'v0.12.0-patch\\n' : 'bc79ca99\\n')
+if (command === 'git') process.stdout.write(args.includes('--abbrev-ref') ? process.env.BRANCH + '\\n' : 'bc79ca99\\n')
 else if (command === 'npm') {
   const output = join(args[args.indexOf('--pack-destination') + 1], 'deepseek-harness-tui-dsh-tui-0.12.0.tgz')
   const run = spawnSync('tar', ['-czf', output, '-C', fixture, 'package'])
@@ -77,7 +83,7 @@ else if (command === 'npm') {
 } else if (command === 'dsh') {
   if (mode === 'before-add') process.exit(42)
   config()
-  install(!['success', 'partial-add', 'restore-fail'].includes(mode))
+  install(!['success', 'partial-add', 'restore-fail', 'uncommitted-exit'].includes(mode))
   if (mode === 'terminated-add') process.kill(process.ppid, 'SIGTERM')
   if (['partial-add', 'restore-fail'].includes(mode)) process.exit(42)
 } else if (command === 'corepack') {
@@ -102,7 +108,13 @@ function verify(layout, mode, options = {}) {
   const target = layout === 'isolated' ? join(profile, 'node_modules/.pnpm/tui-old/node_modules', packageName) : entry
   for (const path of [bin, packDir, join(dir, 'home'), join(dir, 'tmp')]) mkdirSync(path, { recursive: true })
   for (const file of ['local-install.sh', 'with-publish-manifest.mjs']) {
-    put(join(fakeRepo, 'scripts', file), readFileSync(join(repo, 'scripts', file)))
+    let source = readFileSync(join(repo, 'scripts', file), 'utf8')
+    if (file === 'local-install.sh' && mode === 'uncommitted-exit') {
+      // Model an early EXIT trap receiving 0 after installation but before commit.
+      assert.match(source, /\ncommitted=1\n/)
+      source = source.replace('\ncommitted=1\n', '\nexit 0\ncommitted=1\n')
+    }
+    put(join(fakeRepo, 'scripts', file), source)
   }
   const development = JSON.stringify({ name: packageName, version: '0.12.0', packageManager: 'pnpm@11.21.0', dependencies: { '@dsh-std/core': 'workspace:*' } }) + '\n'
   put(join(fakeRepo, 'package.json'), development)
@@ -158,10 +170,11 @@ function verify(layout, mode, options = {}) {
   }
   put(join(bin, 'node'), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
   chmodSync(join(bin, 'node'), 0o755)
-  const env = { ...process.env, PATH: `${bin}:/usr/bin:/bin`, HOME: join(dir, 'home'), USERPROFILE: join(dir, 'home'), DSH_HOME: join(dir, 'dsh home'), DSH_TUI_PACK_DIR: packDir, TMPDIR: join(dir, 'tmp'), PROFILE_DIR: profile, FIXTURE: fixture, LAYOUT: layout, MODE: mode, STATE: state }
+  const locale = options.utf8 ? utf8Locale : 'C'
+  const env = { ...process.env, PATH: `${bin}:/usr/bin:/bin`, HOME: join(dir, 'home'), USERPROFILE: join(dir, 'home'), DSH_HOME: join(dir, 'dsh home'), DSH_TUI_PACK_DIR: packDir, TMPDIR: join(dir, 'tmp'), PROFILE_DIR: profile, FIXTURE: fixture, LAYOUT: layout, MODE: mode, STATE: state, BRANCH: options.nonPatchBranch ? 'feature/utf8-install' : 'v0.12.0-patch', LC_ALL: locale, LANG: locale }
   const lockDir = join(profile, '.dsh-tui-local-install.lock')
   if (options.lockHeld) put(join(lockDir, 'owner'), 'another installer\n')
-  const run = spawnSync('/bin/sh', [join(fakeRepo, 'scripts/local-install.sh'), 'test-profile'], { cwd: fakeRepo, env, encoding: 'utf8', timeout: 20000 })
+  const run = spawnSync('/bin/sh', [join(fakeRepo, 'scripts/local-install.sh'), 'test-profile'], { cwd: fakeRepo, env, input: '\n', encoding: 'utf8', timeout: 20000 })
   assert.equal(run.error, undefined)
   const success = ['success', 'relink-success', 'presets-relink-success'].includes(mode) && !options.lockHeld && !options.externalLink
   const expected = options.lockHeld || options.externalLink || mode === 'restore-fail' ? 1 : ({ 'before-add': 42, 'partial-add': 42, 'relink-fail': 43, 'pack-fail': 41, 'terminated-add': 143, 'digest-fail': 2 }[mode] ?? (success ? 0 : 1))
@@ -169,7 +182,13 @@ function verify(layout, mode, options = {}) {
   // BSD tar exits 1 for this bad archive; GNU tar exits 2. Both must roll back.
   if (['unpack-fail', 'pack-missing-presets'].includes(mode)) assert.notEqual(run.status, 0, diagnostic)
   else assert.equal(run.status, expected, diagnostic)
+  if (success) assert.match(run.stdout, /完成。在 TUI/, diagnostic)
+  else assert.doesNotMatch(run.stdout, /完成。在 TUI/, diagnostic)
+  if (options.nonPatchBranch) assert.match(run.stderr, /实际：feature\/utf8-install）/, diagnostic)
   const calls = existsSync(state) ? readFileSync(state, 'utf8').trim().split('\n').map(JSON.parse) : []
+  if (['relink-fail', 'relink-success', 'presets-relink-success'].includes(mode)) {
+    assert.equal(calls.filter(call => call.command === 'corepack' && call.args.includes('install')).length, 1, 'reach exactly one relink after a digest mismatch')
+  }
   if (options.lockHeld || options.externalLink) assert.equal(calls.some(call => call.command === 'dsh' || call.command === 'npm'), false, 'reject before mutating the profile/tarball')
   else if (['pack-fail', 'unpack-fail', 'pack-missing-presets', 'pack-omitted-preset'].includes(mode)) {
     assert.equal(calls.some(call => call.command === 'dsh'), false, 'invalid package rejected before profile installation')
@@ -217,10 +236,12 @@ try {
     for (const mode of ['before-add', 'partial-add', 'terminated-add', 'relink-fail', 'mismatch', 'missing-lib',
       'presets-mismatch', 'missing-presets', 'presets-relink-success', 'digest-fail',
       'pack-fail', 'unpack-fail', 'pack-missing-presets', 'pack-omitted-preset',
-      'success', 'relink-success', 'restore-fail']) verify(layout, mode)
+      'success', 'relink-success', 'restore-fail', 'uncommitted-exit']) verify(layout, mode)
     verify(layout, 'partial-add', { absoluteTar: true, noLock: true })
     verify(layout, 'success', { lockHeld: true })
     verify(layout, 'success', { externalLink: true })
+    for (const mode of ['relink-fail', 'relink-success', 'presets-relink-success']) verify(layout, mode, { utf8: true })
+    verify(layout, 'success', { utf8: true, nonPatchBranch: true })
   }
   console.log(`local-install rollback: ${verifiedCases} disposable profile cases passed`)
 } finally {

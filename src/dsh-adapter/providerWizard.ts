@@ -288,24 +288,32 @@ async function runCatalogSyncWizard(deps: ProviderWizardDeps): Promise<ProviderW
     notify(t('provider-sync-meta-unavailable'), { color: 'warning', timeoutMs: 8000 })
   }
 
-  const vendorRows = status.vendorOnly ?? []
-  const vendorIds = new Set(vendorRows.map(row => row.id))
-  const retiredRows = status.enabled.filter(id => !vendorIds.has(id))
+  const vendorOnly = status.vendorOnly ?? []
+  const vendorOnlyIds = new Set(vendorOnly.map(row => row.id))
+  // Keep every enabled id selectable, including those now in the installed
+  // catalog. Only the inspection's full vendor roster can mark one retired.
+  const otherEnabledIds = status.enabled.filter(id => !vendorOnlyIds.has(id))
+  const retiredIds = new Set(status.retired ?? [])
   const derivedList = status.derivedAnthropic === undefined
     ? status.derived
     : `${status.derived}, ${status.derivedAnthropic}`
   const modelsAnswer = await ask({
     questions: [optionQuestion('sync-models', t('provider-q-sync-models', { route: status.route }), [
-      ...vendorRows.map(row => ({
+      ...vendorOnly.map(row => ({
         label: row.id,
         description: vendorRowDescription(row.id, metadata.get(row.id)),
       })),
-      ...retiredRows.map(id => ({ label: id, description: t('provider-sync-row-retired') })),
+      ...otherEnabledIds.map(id => ({
+        label: id,
+        description: retiredIds.has(id)
+          ? t('provider-sync-row-retired')
+          : vendorRowDescription(id, metadata.get(id)),
+      })),
     ], {
       multiSelect: true,
       defaultSelected: status.enabled,
       detail: t('provider-sync-detail', {
-        total: vendorRows.length,
+        total: vendorOnly.length,
         enabled: status.enabled.length,
         unenabled: status.unenabled?.length ?? 0,
         derived: derivedList,
@@ -369,7 +377,7 @@ function splitSummaryLines(write: CatalogSyncWrite): readonly string[] {
 }
 
 /**
- * The panel description for one vendor-only model: what the vendor catalog
+ * The panel description for one managed model: what the vendor catalog
  * says about it, in the wizard's own words. An id the catalog does not
  * describe says so instead of pretending to know. A Claude id notes its
  * anthropic-only routing, since the vendor answers it over

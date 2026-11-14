@@ -95,7 +95,7 @@ echo
 
 case "$branch" in
   v*-patch) : ;;
-  *) echo "⚠ 当前分支不是 v*-patch（实际：$branch）—— 本机定制应落在 v*-patch 上。回车继续，Ctrl-C 中止。" >&2; read -r _ ;;
+  *) echo "⚠ 当前分支不是 v*-patch（实际：${branch}）—— 本机定制应落在 v*-patch 上。回车继续，Ctrl-C 中止。" >&2; read -r _ ;;
 esac
 
 # 锁和快照留在 profile 文件系统内，回滚依赖树可直接 rename，不依赖网络/store。
@@ -136,6 +136,10 @@ finish_install() {
   status=$?
   trap - 0 HUP INT TERM
   set +e
+  # 未通过最终校验并提交的退出不能报告成功，即使 EXIT trap 收到 0。
+  if [ "$committed" = 0 ] && [ "$status" -eq 0 ]; then
+    status=1
+  fi
   [ -z "$tmp_unpack" ] || rm -rf "$tmp_unpack"
   if [ "$snapshot_ready" = 1 ] && [ "$committed" = 0 ]; then
     if restore_profile; then
@@ -277,7 +281,7 @@ trees_match() {
     want="$(tree_digest "$tmp_unpack/package" "$sub")" || return 2
     have="$(tree_digest "$PROFILE_DIR/node_modules/@deepseek-harness-tui/dsh-tui" "$sub")" || return 2
     if [ "$want" != "$have" ]; then
-      echo "    $sub 与 tarball 不一致（$have ≠ $want）"
+      echo "    $sub 与 tarball 不一致（$have ≠ ${want}）"
       return 1
     fi
     echo "    $sub 摘要一致：$(printf '%s' "$have" | cut -c1-12)…"

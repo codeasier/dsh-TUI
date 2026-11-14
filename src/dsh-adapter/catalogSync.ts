@@ -367,8 +367,8 @@ export async function inspectCatalogRoute(
     return refused('derived-conflict', false, derivedAnthropic)
   }
 
-  // Pass 1: the ids the installed catalog describes — the catalog route
-  // already serves those, so they are never part of the managed set.
+  // Pass 1: the ids the installed catalog describes — these are not offered
+  // as new additions to the managed set, but previously enabled ids remain.
   let catalogIds: ReadonlySet<string>
   try {
     catalogIds = new Set((await host.discoverModels({ provider: provider.route }, { signal: options.signal }))
@@ -396,7 +396,9 @@ export async function inspectCatalogRoute(
   if (vendorRows.length === 0) return refused('listing-empty', true)
 
   const vendorOnly = vendorRows.filter(row => !catalogIds.has(row.id))
-  const vendorIds = new Set(vendorOnly.map(row => row.id))
+  // An enabled vendor-only id may have joined the installed catalog since
+  // it was picked. Only its absence from the full vendor roster retires it.
+  const vendorIds = new Set(vendorRows.map(row => row.id))
   return {
     route: provider.route,
     derived,
