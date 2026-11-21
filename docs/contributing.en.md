@@ -498,6 +498,7 @@ change, also run the closest focused script:
 | Mouse pointer event pipeline (wheel coords/modifier bits, click/hover dispatch, out-of-bounds clamping, pointer-state reset) | `node --import tsx/esm scripts/verify-pointer-events.ts` |
 | Hover event performance (complete interest boundaries, no-interest rect fast path, frame/multi-root invalidation) | `node --import tsx/esm scripts/verify-hover-coalesce.tsx` |
 | Prompt-input mouse selection editing (drag/Shift+click/double-click word select, delete/replace, layered Esc, Ctrl+C copy, CJK wide cells, fold-side clamping) | `node --import tsx/esm scripts/verify-input-selection.tsx` |
+| Prompt leading-empty-line Up navigation (ordinary drafts and folded tails, inline/fullscreen, column clamping) | `node --import tsx/esm scripts/verify-prompt-leading-empty-line.tsx` |
 | Sixel encoding, worker cache, thumbnail/preview lifecycle | `node --import tsx/esm scripts/verify-terminal-images-sixel.tsx`, `node --import tsx/esm scripts/verify-sixel-transcript.tsx`, `node --import tsx/esm scripts/verify-sixel-cursor-heal.tsx`; timing comparison `node --import tsx/esm scripts/bench-sixel-encode.tsx` |
 | Markdown list markers, task items, nested blocks, image descriptions, strikethrough and rules | `node scripts/verify-markdown-blocks.mjs` |
 | Markdown hanging indentation, soft-wrap copying and long-list scrolling | `node --import tsx/esm scripts/verify-hanging-wrap.tsx`, `node --import tsx/esm scripts/verify-markdown-hanging.tsx` |

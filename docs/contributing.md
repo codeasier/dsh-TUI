@@ -378,6 +378,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 鼠标指针事件管线（滚轮坐标/修饰位、点击/hover 派发、越界 clamp、指针态重置） | `node --import tsx/esm scripts/verify-pointer-events.ts` |
 | Hover 事件性能（兴趣边界完整、无兴趣矩形快路径、帧边界/多 root 失效） | `node --import tsx/esm scripts/verify-hover-coalesce.tsx` |
 | 输入框鼠标选区编辑（拖选/Shift+click/双击选词/删除替换/Esc 分层/Ctrl+C 复制、CJK 宽字符与 fold 侧钳制） | `node --import tsx/esm scripts/verify-input-selection.tsx` |
+| 输入框首行空行向上导航（普通草稿与折叠尾部、inline/fullscreen、列钳制） | `node --import tsx/esm scripts/verify-prompt-leading-empty-line.tsx` |
 | Sixel 编码、worker 缓存、缩略图/预览生命周期 | `node --import tsx/esm scripts/verify-terminal-images-sixel.tsx`、`node --import tsx/esm scripts/verify-sixel-transcript.tsx`, `node --import tsx/esm scripts/verify-sixel-cursor-heal.tsx`；耗时对比 `node --import tsx/esm scripts/bench-sixel-encode.tsx` |
 | Markdown 列表标记、任务项、列表内块、图片描述、删除线与分割线 | `node scripts/verify-markdown-blocks.mjs` |
 | Markdown 悬挂缩进、软换行复制与超长列表滚动 | `node --import tsx/esm scripts/verify-hanging-wrap.tsx`、`node --import tsx/esm scripts/verify-markdown-hanging.tsx` |
