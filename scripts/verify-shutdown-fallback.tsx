@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs'
 import { PassThrough, Writable } from 'node:stream'
 import { settled } from './lib/term-test.mjs'
 import React from 'react'
-import { createRoot, render, AlternateScreen, Text, useInput } from '../src/ui.js'
+import { createRoot, render, AlternateScreen, Text, ThemeProvider, useInput } from '../src/ui.js'
 import { claimShutdownInput, getShutdownInput } from '../src/ink/shutdown-input.js'
 import { cursorMove } from '../src/ink/termio/csi.js'
 import { Context } from '@deepseek-ai/cordis'
@@ -18,6 +18,7 @@ import { createExitFunnel, finishExit, runCrashExit, writeCrashResumeMarkers } f
 import { UNSERIALIZABLE } from '../src/utils/crashDetail.js'
 import instances from '../src/ink/instances.js'
 import { ESU, EXIT_ALT_SCREEN, DISABLE_MOUSE_TRACKING } from '../src/ink/termio/dec.js'
+import { osc, wrapForMultiplexer } from '../src/ink/termio/osc.js'
 
 let failures = 0
 const results: string[] = []
@@ -187,6 +188,83 @@ for (const mode of ['owned', 'revoked', 'replacement', 'revoked-before', 'replac
     replacement.unmount()
   }
   input.destroy()
+}
+
+// The themed IME surface is terminal state too. Normal exit and updater
+// handoff both detach without full unmount, while a superseded root must not
+// reset the replacement's default background.
+const resetImeSurface = wrapForMultiplexer(osc(111))
+for (const keepAltScreen of [false, true]) {
+  const input = new OwnedInput(), output = new CapturingStream()
+  const handle = await createRoot({
+    stdin: input as unknown as NodeJS.ReadStream, stdout: output as unknown as NodeJS.WriteStream,
+    patchConsole: false, terminalImages: false,
+  })
+  handle.render(<ThemeProvider theme="dark">
+    <AlternateScreen><Text>themed exit</Text></AlternateScreen>
+  </ThemeProvider>)
+  const ink = instances.get(output as unknown as NodeJS.WriteStream)!
+  try {
+    check(`${keepAltScreen ? 'handoff' : 'exit'}: real theme publishes its IME surface`, await settled(() =>
+      output.chunks.join('').includes(']11;#')))
+    output.chunks.length = 0
+    let resetBeforeContinuation = false
+    await finishExit(ctx, handle as never, true, 'surface-restored', undefined, () => {
+      resetBeforeContinuation = output.chunks.join('').includes(resetImeSurface)
+    }, { keepAltScreen })
+    const tail = output.chunks.join('')
+    check(`${keepAltScreen ? 'handoff' : 'exit'}: detach restores the IME surface exactly once`,
+      tail.split(resetImeSurface).length - 1 === 1)
+    check(`${keepAltScreen ? 'handoff' : 'exit'}: surface resets before the notice and continuation`,
+      resetBeforeContinuation && tail.indexOf(resetImeSurface) < tail.indexOf('surface-restored'))
+    check(`${keepAltScreen ? 'handoff' : 'exit'}: existing alternate-screen contract survives`,
+      tail.includes(EXIT_ALT_SCREEN) === !keepAltScreen)
+    const writes = output.chunks.length
+    await ink.detachForShutdown()
+    handle.unmount()
+    ink.setImeSurfaceColor({ r: 1, g: 2, b: 3 })
+    ink.setImeSurfaceColor(null)
+    check(`${keepAltScreen ? 'handoff' : 'exit'}: repeated detach and late theme cleanup are inert`,
+      output.chunks.length === writes)
+  } finally {
+    await ink.detachForShutdown()
+    input.destroy()
+  }
+}
+{
+  const input = new OwnedInput(), output = new CapturingStream()
+  const options = { stdin: input as unknown as NodeJS.ReadStream,
+    stdout: output as unknown as NodeJS.WriteStream, patchConsole: false, terminalImages: false }
+  const first = await createRoot(options)
+  first.render(<ThemeProvider theme="dark"><Text>old surface</Text></ThemeProvider>)
+  const oldInk = instances.get(options.stdout)!
+  check('replacement fixture publishes the old theme surface', await settled(() =>
+    output.chunks.join('').includes(']11;#')))
+  output.chunks.length = 0
+  const next = await createRoot(options)
+  next.render(<ThemeProvider theme="light"><Text>new surface</Text></ThemeProvider>)
+  const nextInk = instances.get(options.stdout)!
+  try {
+    check('replacement publishes its own theme surface', await settled(() =>
+      output.chunks.join('').includes(']11;#')))
+    check('revoked root never resets the replacement surface during cleanup',
+      !first.shutdownInput.ownsInput() && next.shutdownInput.ownsInput() &&
+      !output.chunks.join('').includes(resetImeSurface))
+    const writes = output.chunks.length
+    await oldInk.detachForShutdown()
+    first.unmount()
+    oldInk.setImeSurfaceColor(null)
+    check('late old-root cleanup leaves replacement state and output unchanged',
+      next.shutdownInput.ownsInput() && instances.get(options.stdout) === nextInk && output.chunks.length === writes)
+    output.chunks.length = 0
+    await finishExit(ctx, next as never, false, undefined, undefined, () => {})
+    check('the replacement restores its own surface when it exits',
+      output.chunks.join('').split(resetImeSurface).length - 1 === 1)
+  } finally {
+    await oldInk.detachForShutdown()
+    await nextInk.detachForShutdown()
+    input.destroy()
+  }
 }
 
 // Review regressions: exercise real roots, leases and shutdown, not copied policy.

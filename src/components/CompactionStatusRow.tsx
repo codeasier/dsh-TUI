@@ -21,6 +21,34 @@ const TICK_MS = 60
 /** Columns the classic dot occupies (`SpinnerGlyph`'s fixed two-column slot). */
 const DOT_SLOT = 2
 
+/** Fit the mandatory fields after optional phase/hint degradation. Never
+ * split graphemes or turn a clipped duration into a different elapsed value. */
+export function compactionBaseline(label: string, elapsed: string, indicatorWidth: number, budget: number): {
+  label: string
+  elapsed: string
+  indicator: boolean
+} {
+  const elapsedWidth = stringWidth(elapsed)
+  if (elapsedWidth > budget) return { label: '', elapsed: budget > 0 ? '…' : '', indicator: false }
+  let indicator = true
+  let labelWidth = budget - indicatorWidth - stringWidth(SEP) - elapsedWidth
+  if (labelWidth < 1) {
+    indicator = false
+    labelWidth = budget - stringWidth(SEP) - elapsedWidth
+  }
+  if (labelWidth < 1) return { label: '', elapsed, indicator: false }
+  if (stringWidth(label) <= labelWidth) return { label, elapsed, indicator }
+  let clipped = ''
+  let width = 0
+  for (const { segment } of getGraphemeSegmenter().segment(label)) {
+    const next = stringWidth(segment)
+    if (width + next > labelWidth - 1) break
+    clipped += segment
+    width += next
+  }
+  return { label: `${clipped}…`, elapsed, indicator }
+}
+
 /** A `/activity` preset resolved once per name, with its widest frame. */
 interface Indicator {
   readonly preset: FramePreset
@@ -89,32 +117,18 @@ export function CompactionStatusRow({
   const detailWidth = stringWidth(SEP) + stringWidth(detail)
   const showHint = hint !== undefined && base + elapsedWidth + hintWidth <= budget
   const showDetail = base + elapsedWidth + hintWidth + detailWidth <= budget
-  // Keep the timer atomic, then spend the remaining cells on whole graphemes.
-  // Drop an oversized indicator before sacrificing an otherwise fitting timer.
-  const showIndicator = indicatorWidth < budget
-    && (indicatorWidth + elapsedWidth < budget || elapsedWidth >= budget)
-  const remaining = budget - (showIndicator ? indicatorWidth : 0)
-  const showElapsed = elapsedWidth < remaining
-  const labelWidth = Math.max(0, remaining - (showElapsed ? elapsedWidth : 0)
-    - (showHint ? hintWidth : 0) - (showDetail ? detailWidth : 0))
-  let fittedLabel = label
-  if (stringWidth(label) > labelWidth) {
-    fittedLabel = ''
-    for (const { segment } of getGraphemeSegmenter().segment(label)) {
-      if (stringWidth(fittedLabel + segment) > labelWidth - 1) break
-      fittedLabel += segment
-    }
-    if (labelWidth > 0) fittedLabel += '…'
-  }
+  const fitted = compactionBaseline(label, elapsed, indicator?.width ?? DOT_SLOT, budget)
 
   return (
     <Box ref={viewportRef} flexDirection="row" flexWrap="nowrap" height={1} overflow="hidden" marginTop={1} width="100%">
-      {showIndicator && (glyph === null
-        ? <SpinnerGlyph frame={frame} messageColor="accent" />
-        : <Text color="activity">{`${glyph} `}</Text>)}
-      <Text color="accent">{fittedLabel}</Text>
+      {fitted.indicator && <Box width={indicator?.width ?? DOT_SLOT} flexShrink={0}>
+        {glyph === null
+          ? <SpinnerGlyph frame={frame} messageColor="accent" />
+          : <Text color="activity">{`${glyph} `}</Text>}
+      </Box>}
+      {fitted.label !== '' && <Text color="accent">{fitted.label}</Text>}
       {showDetail && <Text dimColor>{`${SEP}${detail}`}</Text>}
-      {showElapsed && <Text dimColor>{`${SEP}${elapsed}`}</Text>}
+      <Text dimColor>{`${fitted.label === '' ? '' : SEP}${fitted.elapsed}`}</Text>
       {showHint && <Text dimColor>{`${SEP}${hint}`}</Text>}
     </Box>
   )

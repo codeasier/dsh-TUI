@@ -1,23 +1,10 @@
 /**
  * Effort ignition regression — the three-act overlay on the prompt border.
  *
- * Part A asserts the math layer (waveform sampling, easings, envelope, the
- * per-column colour contract, boundary guards). Part B mounts the real
- * EffortInputBorder (self-drawn ╭─╮ / ╰─╯ rows; the top row carries the show)
- * in a headless xterm, one harness per scenario, and asserts:
- *
- * - The sweep is a single wave style (the shipped shape); the math layer
- *   below pins its contract directly.
- * - **Glyphs never change; only colours move.** The row's TEXT is
- *   byte-identical across frames (▁ × width, present at rest too) — the
- *   strongest form of the SGR-only rule, with no layout change at any
- *   point: the bright wave is foreground colour running over a constant
- *   ▁ layer, the dim rest is the same layer at its quiet end.
- * - **Mount/unmount never scroll**: the rows are permanent, but the whole
- *   stream still must contain no scroll sequences (#38/#39/#19/#10 family).
- * - **It returns to rest**: wave colours vanish after the style's total.
- * - **Negative paths stay dark**: cold mount on the top tier, single-tier
- *   table, missing table, and leaving the top tier sweep nothing.
+ * Part A pins the waveform math. Part B mounts the real filled composer:
+ * a single left rail, no horizontal frame, stable padding rows and background.
+ * The effort pulse changes only rail colour; the tier badge and negative
+ * paths retain the existing timeline without adding rows or scrolling.
  *
  * Run: node --import tsx/esm scripts/verify-effort-ignition.tsx
  */
@@ -27,11 +14,11 @@ const [
   { Writable, PassThrough },
   React,
   { Terminal: XTerm },
-  { render, Text, Box, ThemeProvider },
+  { render, Text, Box },
   { EffortInputBorder },
   { EffortTierBadge },
-  { EffortChargeGlyph },
   { ClockProvider },
+  { getTheme },
   math,
   { sleep },
 ] = await Promise.all([
@@ -41,8 +28,8 @@ const [
   import('../src/ui.js'),
   import('../src/components/EffortInputBorder.js'),
   import('../src/components/EffortTierBadge.js'),
-  import('../src/components/EffortChargeGlyph.js'),
   import('../src/ink/components/ClockContext.js'),
+  import('../src/theme.js'),
   import('../src/trajectory/effortIgnition.js'),
   import('./lib/term-test.mjs'),
 ])
@@ -126,17 +113,16 @@ async function makeHarness(rows: number, driver: React.ReactNode) {
   }
   const rowText = (y: number): string =>
     term.buffer.active.getLine(term.buffer.active.baseY + y)?.translateToString(true) ?? ''
-  const fgSet = (y: number): Set<number> => {
+  const fgColors = (y: number): number => {
     const line = term.buffer.active.getLine(term.buffer.active.baseY + y)
+    if (line === undefined) return 0
     const found = new Set<number>()
-    if (line === undefined) return found
     for (let x = 0; x < COLS; x++) {
       const cell = line.getCell(x)
       if (cell !== undefined && cell.isFgRGB()) found.add(cell.getFgColor())
     }
-    return found
+    return found.size
   }
-  const fgColors = (y: number): number => fgSet(y).size
   const instance = await render(
     React.createElement(ClockProvider, null, driver),
     {
@@ -147,17 +133,17 @@ async function makeHarness(rows: number, driver: React.ReactNode) {
       patchConsole: false,
     },
   )
-  return { term, writes, rowText, fgSet, fgColors, instance }
+  return { term, writes, rowText, fgColors, instance }
 }
 
 function borderNode(effort: string | undefined): React.ReactNode {
   // Children mirror the real empty input row: block caret + centered badge.
   return React.createElement(
     EffortInputBorder,
-    { effort, levels: LEVELS, columns: COLS, idleColor: 'promptBorder' },
+    { effort, levels: LEVELS, columns: COLS, onLight: false, idleColor: 'userPromptLabel' },
     React.createElement(Text, null,
       ' ',
-      React.createElement(EffortTierBadge, { effort, levels: LEVELS, columns: COLS, leadingColumns: 2 })),
+      React.createElement(EffortTierBadge, { effort, levels: LEVELS, onLight: false, columns: COLS, leadingColumns: 3 })),
   )
 }
 
@@ -180,17 +166,28 @@ function SweepDriver(): React.ReactNode {
     // 条件，轮询会立即返回等于没测；采样点也必须早于切档。
     await sleep(150)
     const restText = harness.rowText(0)
-    check('rest: plain theme border, no letters, one colour',
-      restText === '╭' + '─'.repeat(COLS - 2) + '╮' && harness.fgColors(0) <= 1)
+    const restRailColor = harness.term.buffer.active.getLine(0)?.getCell(0)?.getFgColor()
+    const surfaceColor = getTheme('dark').userPromptBackground.match(/\d+/g)!
+      .reduce((color, channel) => (color << 8) | Number(channel), 0)
+    check('rest: prompt surface differs from the session canvas',
+      getTheme('dark').userPromptBackground !== getTheme('dark').sessionBackground)
+    check('rest: prompt background fills all three rows through the right edge',
+      [0, 1, 2].every(y => [1, COLS - 1].every(x => {
+        const cell = harness.term.buffer.active.getLine(y)?.getCell(x)
+        return cell?.isBgRGB() === true && cell.getBgColor() === surfaceColor
+      })), `expected=${surfaceColor.toString(16)} actual=${[0, 1, 2].map(y => [1, COLS - 1].map(x => harness.term.buffer.active.getLine(y)?.getCell(x)?.getBgColor().toString(16)).join('/')).join(',')}`)
+    check('rest: bold yellow rail, no letters, one colour',
+      restText.trimEnd() === '┃' && restRailColor === 0xffdf80 && harness.fgColors(0) <= 1, JSON.stringify(restText))
     check('rest: exactly three rows — bottom border sits directly under the input row',
-      harness.rowText(2) === '╰' + '─'.repeat(COLS - 2) + '╯' && harness.rowText(3) === '')
-    // elapsed ≈ 300: mid-sweep, letters not started (LABEL_START 600).
-    await sleep(450) // 固定窗:墙钟 采样 sweep [0,800) 的中段，须早于 LABEL_START 600
-    check('act 1 sweep: a light band runs left→right on BOTH borders, no letters yet',
-      harness.fgColors(0) >= 2 && harness.fgColors(2) >= 2, `${harness.fgColors(0)}/${harness.fgColors(2)} colours`)
+      harness.rowText(2).trimEnd() === '┃' && harness.rowText(3) === '')
+    // elapsed ≈ 475: the wave reaches the rail's midpoint sample.
+    await sleep(625) // 固定窗:墙钟 采样波形中心，须早于 LABEL_START 600
+    check('act 1 pulse: the left rail changes colour without drawing a frame',
+      harness.term.buffer.active.getLine(0)?.getCell(0)?.getFgColor() !== restRailColor
+      && harness.rowText(0) === restText)
     // elapsed ≈ 950: the tier name shows centered on the input row, and NO
     // extra row appears — the row under it stays the bottom border.
-    await sleep(650) // 固定窗:墙钟 采样 elapsed≈950，字样已出但仍在收敛（收敛 600+800）
+    await sleep(475) // 固定窗:墙钟 采样 elapsed≈950，字样已出但仍在收敛（收敛 600+800）
     const inputRow = harness.rowText(1)
     const tierLetters = LEVELS[LEVELS.length - 1]!.toUpperCase().split('')
     const firstAt = inputRow.indexOf(tierLetters[0]!)
@@ -210,7 +207,7 @@ function SweepDriver(): React.ReactNode {
     check('act 2 label: settled dead-center on the terminal',
       Math.abs(midAt - terminalCenter) <= 1, `mid at ${midAt}, center ${terminalCenter}`)
     check('act 2 label: no extra row — bottom border never moves',
-      harness.rowText(2) === '╰' + '─'.repeat(COLS - 2) + '╯')
+      harness.rowText(2).trimEnd() === '┃')
     const labelColors = harness.fgColors(1)
     check('act 2 label: the badge carries the accent family', labelColors >= 1, `${labelColors} colours`)
     // elapsed ≈ 1700 (past FADE_END 1600): everything gone, border identical to rest.
@@ -219,98 +216,12 @@ function SweepDriver(): React.ReactNode {
     const stream = harness.writes.join('')
     const scroll = [/\x1b\[\d*S/, /\x1b\[\d*T/].some(pattern => pattern.test(stream))
     check('act 3 fade: badge and sweep are gone, border back to rest',
-      harness.rowText(0) === restText && harness.rowText(1).trim() === '' && harness.fgColors(0) <= 1)
+      harness.rowText(0) === restText && harness.rowText(1).trim() === '┃' && harness.fgColors(0) <= 1)
     check('lifecycle: no scroll sequences at any point', !scroll)
     check('after the fade both borders rest in a single colour', harness.fgColors(0) <= 1 && harness.fgColors(2) <= 1)
   } finally {
     harness.instance.unmount()
   }
-}
-
-// --- Part C: 主题接线 ----------------------------------------------------------
-// 三个点火组件都从 useTheme() 取名再查色对；不套 ThemeProvider 时上下文落到
-// 默认 `{ theme: 'dark' }`，把三处 `ignitionColors(themeName)` 写死成
-// `ignitionColors('dark')` 也照样全绿。这里用合成主题实渲染：它的点火是红
-// （#FF0000 → #2A0000，每通道 r > g），深色回退是蓝（#82B9FF → #1B1E28，
-// r < g），接错主题混进蓝列立刻红。
-{
-  const { getTheme, registerRuntimeThemeResolver } = await import('../src/theme.js')
-  const PROBE = 'ignition-probe'
-  // `promptBorder` 是采样行里静止列的颜色（idleColor），也必须偏红：否则
-  // 「整行 r > g」会被中性边框色破掉，判据就只剩波形列。
-  const probe = {
-    ...getTheme('dark'),
-    ignition: '#FF0000',
-    ignitionDim: '#2A0000',
-    promptBorder: '#5A2A2A',
-  }
-  const disposeProbe = registerRuntimeThemeResolver(name => name === PROBE ? probe : undefined)
-  const themed = (node: React.ReactNode): React.ReactNode =>
-    React.createElement(ThemeProvider, { theme: PROBE }, node)
-  const redOnly = (colors: Iterable<number>): boolean =>
-    [...colors].every(color => ((color >> 16) & 0xff) > ((color >> 8) & 0xff))
-
-  // 边框扫光 + 档位字样：与 Part B 同一组固定窗采样点。
-  const harness = await makeHarness(6, themed(React.createElement(SweepDriver)))
-  try {
-    await sleep(600) // 固定窗:墙钟 采样 sweep [0,800) 中段（切档在 t=300）
-    const wave = [...harness.fgSet(0)]
-    check('theme: 扫光/边框取主题的点火色对（红坡道，不是深色回退蓝）',
-      wave.length >= 2 && redOnly(wave), `${wave.length} colours`)
-    await sleep(650) // 固定窗:墙钟 采样 elapsed≈950，档位字样已出
-    const letters = [...harness.fgSet(1)]
-    check('theme: 档位字样与扫光同源（同一红坡道）',
-      letters.length >= 1 && redOnly(letters), `${letters.length} colours`)
-  } finally {
-    harness.instance.unmount()
-  }
-
-  // ❯ 前缀的稳态色就是点火原值：钉到具体通道，接错主题时值直接不等。
-  const glyph = await makeHarness(2, themed(
-    React.createElement(EffortChargeGlyph, { effort: 'high', levels: LEVELS, working: false })))
-  try {
-    await sleep(60) // 固定窗:墙钟 冷挂载在最高档不充能，等首帧
-    // 期望值是**字面量**，不取自 `ignitionColors(PROBE)`：从被测映射派生期望的
-    // 话，该映射自己回退时两边同漂、这条不红（verify-themes 另钉了解析层）。
-    const want = 0xff0000
-    const shown = [...glyph.fgSet(0)]
-    check('theme: ❯ 前缀取主题的 ignition 原值',
-      shown.includes(want), `fg=${shown.map(color => color.toString(16)).join(' ')}`)
-  } finally {
-    glyph.instance.unmount()
-    disposeProbe()
-  }
-}
-
-// --- Part D: 品牌优先（branding.ts × 色板）------------------------------------
-// claude 品牌在档时品牌色对直接接管，连**声明了自己 ignition 键**的调色板也让位
-// （与 StatusMetrics 的 `usedSegmentColor` 同一规则：切后端整屏换色）。deepseek 档
-// 不受影响——Part C 的合成主题已经钉住「色板键 → 屏上」那条链。
-{
-  const { setActiveBrand } = await import('../src/branding.js')
-  const CLAUDE_DARK = { ignition: { r: 232, g: 145, b: 63 }, ignitionDim: { r: 38, g: 30, b: 22 } }
-  const CLAUDE_LIGHT = { ignition: { r: 196, g: 96, b: 20 }, ignitionDim: { r: 240, g: 240, b: 242 } }
-  const same = (a: { r: number; g: number; b: number }, b: { r: number; g: number; b: number }): boolean =>
-    a.r === b.r && a.g === b.g && a.b === b.b
-  // 期望值是**字面量**：内置 `dark`/`light` 自己声明了 ignition 键，从被测映射
-  // 派生期望的话，品牌分支被删掉时两边同漂、这条不红。
-  setActiveBrand('claude')
-  try {
-    const dark = math.ignitionColors('dark')
-    check('brand: claude 档下色板声明的 ignition 让位（暖橙品牌对）',
-      same(dark.ignition, CLAUDE_DARK.ignition) && same(dark.ignitionDim, CLAUDE_DARK.ignitionDim),
-      JSON.stringify(dark))
-    const light = math.ignitionColors('light')
-    check('brand: claude 档浅底取品牌浅色对（更深的橙 + 浅带色）',
-      same(light.ignition, CLAUDE_LIGHT.ignition) && same(light.ignitionDim, CLAUDE_LIGHT.ignitionDim),
-      JSON.stringify(light))
-  } finally {
-    setActiveBrand('deepseek')
-  }
-  const restored = math.ignitionColors('dark')
-  check('brand: 复位 deepseek 后色板键重新生效',
-    restored.ignition.r === 130 && restored.ignition.g === 185 && restored.ignition.b === 255,
-    JSON.stringify(restored))
 }
 
 // --- Negative paths: no sweep, no letters, ever -------------------------------
@@ -335,7 +246,7 @@ await runDarkScenario('cold mount on the top tier', borderNode('high'))
 function SingleTierDriver(): React.ReactNode {
   return React.createElement(
     EffortInputBorder,
-    { effort: 'high', levels: ['high'], columns: COLS, idleColor: 'promptBorder' },
+    { effort: 'high', levels: ['high'], columns: COLS, onLight: false, idleColor: 'userPromptLabel' },
     React.createElement(Text, null, 'row'),
   )
 }
@@ -343,7 +254,7 @@ await runDarkScenario('single-tier table', React.createElement(SingleTierDriver)
 function NoTableDriver(): React.ReactNode {
   return React.createElement(
     EffortInputBorder,
-    { effort: 'high', levels: undefined, columns: COLS, idleColor: 'promptBorder' },
+    { effort: 'high', levels: undefined, columns: COLS, onLight: false, idleColor: 'userPromptLabel' },
     React.createElement(Text, null, 'row'),
   )
 }

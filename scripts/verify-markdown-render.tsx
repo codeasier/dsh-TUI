@@ -103,7 +103,7 @@ assert.ok(metaLang.rows.some(r => r.startsWith('┌─ js ')), 'fence info resol
 // -- Fallback: net width < 8 ---------------------------------------------
 
 const tiny = snap(<CodeBlockFrame token={codeToken('js', 'const a = 1')} highlight={null} />, 12)
-assert.ok(tiny.rows.some(r => r.startsWith('```js')), 'net width < 8 falls back to the ANSI fence: ' + JSON.stringify(tiny.rows))
+assert.ok(tiny.rows.some(r => r === 'js'), 'net width < 8 falls back to the ANSI caption: ' + JSON.stringify(tiny.rows))
 assert.ok(!tiny.rows.some(r => r.includes('┌')), 'no frame glyphs in the fallback')
 
 // -- Long-line and CJK wrap keep the rail --------------------------------

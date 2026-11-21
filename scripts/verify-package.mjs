@@ -58,6 +58,7 @@ if (missing.length > 0) {
   throw new Error(`package exports missing from tarball: ${missing.join(', ')}`)
 }
 for (const presetFile of [
+  'presets/ag-search.mjs',
   'presets/liangshen/agent.cordis.yml',
   'presets/liangshen/preset.yml',
   'presets/liangshen/.dsh-tui-managed.json',

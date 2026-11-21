@@ -46,6 +46,9 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
     import('./lib/term-test.mjs'),
   ])
 const { settled, viewportLines } = termTest
+const { applyPageMargin } = await import('../src/tuiDisplayPrefs.js')
+// Preserve the exact fractional-width trigger budgets from the upstream sweep.
+applyPageMargin('2x1')
 
 let failed = 0
 let checks = 0
@@ -150,7 +153,10 @@ function geometry(term: InstanceType<typeof XTerm>): Geometry {
   let lastNonBlank = -1
   for (let y = 0; y < lines.length; y++) {
     const line = lines[y]!
-    if (composer < 0 && /[╭┌]/.test(line)) composer = y
+    // Historical prompts use the same rail, but only the live composer has
+    // the session button. Its padding rows still define the original height.
+    if (composer < 0 && /┃\s*⌸\s*❯/.test(line)
+      && lines[y - 1]?.trim() === '┃' && lines[y + 1]?.trim() === '┃') composer = y - 1
     if (fields < 0 && /ctx [\d.]/.test(line)) fields = y
     if (hint < 0 && /^\s*\? 查看快捷键/.test(line)) hint = y
     if (line.trim() !== '') lastNonBlank = y

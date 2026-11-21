@@ -1,9 +1,12 @@
 import { FINALIZER, fromRGBA8888, introducer, PALETTE_ANSI_256, sixelEncode } from 'sixel'
-import { loadSharp } from '../dsh-adapter/sharp.js'
+import { loadSharp, loadSharpWorkerData } from '../dsh-adapter/sharp.js'
 import { isTerminalImageSource, TERMINAL_IMAGE_MAX_EDGE, TERMINAL_IMAGE_MAX_BYTES,
   TERMINAL_IMAGE_PREVIEW_MAX_EDGE, TERMINAL_IMAGE_PREVIEW_MAX_BYTES,
   SIXEL_MAX_ENCODED_BYTES, SIXEL_CACHE_BYTES, SIXEL_CACHE_ENTRIES } from './terminal-image.js'
 import type { TerminalImageSource } from './terminal-image.js'
+
+/** Keep worker decoder resolution behind the existing image codec boundary. */
+export const loadSixelWorkerData = loadSharpWorkerData
 
 /**
  * Coverage a transparent raster needs before a pixel is painted. Sixel alpha
