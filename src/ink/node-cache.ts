@@ -37,6 +37,10 @@ export type TextNoSelectRun = {
   height: number
   /** Leading columns of each row in the run to exclude from selection. */
   width: number
+  /** Columns owning a decoration hard break (defaults to width). Extra
+   *  excluded wrap padding keeps source provenance so it cannot veto a
+   *  preceding selectable inset's whitespace-preserving continuation. */
+  hardBreakWidth?: number
 }
 
 /** Current prepared text only: scrolling changes its position, not its lines.

@@ -39,6 +39,9 @@ type State = {
    *  the physical cursor position instead of diffing. See
    *  requestViewportReanchor. */
   reanchorPending: boolean
+  /** Overlay changes can coincide with new transcript rows: preserve their
+   *  incremental scrollback paint instead of replacing it with a tail slice. */
+  reanchorPreserveGrowth: boolean
   /** Rows of the current frame whose live copies live in terminal
    *  scrollback (set by shrinkAnchoredRepaint): the diff loop's viewportY
    *  must skip them and every height-based offset shifts down by this
@@ -65,6 +68,7 @@ export class LogUpdate {
     this.state = {
       previousOutput: '',
       reanchorPending: false,
+      reanchorPreserveGrowth: false,
       anchoredPad: 0,
     }
   }
@@ -87,8 +91,9 @@ export class LogUpdate {
    * (>5s idle then a keypress) — the same trigger that re-asserts DEC
    * modes after tmux attach / ssh reconnect.
    */
-  requestViewportReanchor(): void {
+  requestViewportReanchor(options?: { preserveGrowth?: boolean }): void {
     this.state.reanchorPending = true
+    this.state.reanchorPreserveGrowth = options?.preserveGrowth === true
   }
 
   /**
@@ -221,8 +226,11 @@ export class LogUpdate {
     // after the resize reset (which supersedes it; the flag survives to
     // the next frame) and before the DECSTBM path (alt-screen only, so
     // mutually exclusive anyway).
+    let reanchorPrefix: Diff = []
     if (this.state.reanchorPending && !altScreen) {
       this.state.reanchorPending = false
+      const preserveGrowth = this.state.reanchorPreserveGrowth
+      this.state.reanchorPreserveGrowth = false
       // Plain in-place viewport repaint, and the anchored layout (if any)
       // is superseded: pad 0. An earlier revision routed pad>0 frames
       // through shrinkAnchoredRepaint here to preserve the anchored layout
@@ -232,7 +240,17 @@ export class LogUpdate {
       // (idle gap right after a settle shrink) and its cost is one stale
       // scrollback copy, not a lost paint.
       this.state.anchoredPad = 0
-      return repaintViewportInPlace(prev, next, stylePool)
+      if (preserveGrowth && next.screen.height > prev.screen.height) {
+        // Closing the pending-input dock can share the first paint of a
+        // tool + async question. Repainting only the NEW viewport tail
+        // drops newly arrived rows above it before they ever reach native
+        // scrollback. Re-anchor the OLD frame, then let the normal diff
+        // update its reachable rows and LF the new rows into scrollback.
+        // Explicit transcript rewrites (Ctrl+O) keep the tail-only policy.
+        reanchorPrefix = repaintViewportInPlace(prev, prev, stylePool)
+      } else {
+        return repaintViewportInPlace(prev, next, stylePool)
+      }
     }
 
     // DECSTBM scroll optimization: when a ScrollBox's scrollTop changed,
@@ -672,6 +690,7 @@ export class LogUpdate {
     let result = scrollPatch.length > 0
       ? [...scrollPatch, ...screen.diff]
       : screen.diff
+    if (reanchorPrefix.length > 0) result = [...reanchorPrefix, ...result]
 
     // JetBrains IDE terminals (JediTerm) in main-screen (inline) mode:
     // append a visible-frame rewrite to the incremental diff.

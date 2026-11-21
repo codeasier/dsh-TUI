@@ -11,12 +11,11 @@
  * 断言：
  *  A. 纯函数单元：短文本零改动且保持引用（无分配快路径）、恰好等于预算
  *     不折、超 1 字符即折且字数准确、行边界不被改写、自定义预算生效。
- *  B. 转录渲染（真实 MessageList）：user 消息 / assistant 正文 / 工具卡
- *     （终端命令标题 + 终端输出）的超长单行都折叠——屏幕上出现折叠标记、
- *     行尾标记（1000 字符之后）不出现。
+ *  B. 转录渲染（真实 MessageList）：user 消息 / assistant 正文超长单行
+ *     显示折叠标记；工具卡标题和正文预览按宽度截断、不续行，尾部不泄露。
  *  C. Ctrl+O（expanded）是逃生门：同一行给出完整原文（行尾标记出现）。
- *  D. 工具卡独立渲染（AssistantToolUseMessage）：read 卡正文同样折叠，
- *     verbose 展开恢复；reasoning 行不折叠（自带三行预览，用户明确不做）。
+ *  D. 工具卡独立渲染（AssistantToolUseMessage）：read 卡默认显示行内摘要，
+ *     verbose 展开恢复完整正文。
  *
  * Run: `node --import tsx/esm scripts/verify-long-line-fold.tsx`
  */
@@ -63,10 +62,9 @@ const MARKER = 'chars folded (click or ctrl+o to expand)'
 const HEAD = 'FOLDHEAD'
 const TAIL = 'FOLDTAIL'
 
-/** The marker is a long tail-of-line string, so a terminal row boundary can
- *  land inside it; comparisons run on whitespace-stripped text so a wrap (or
- *  a row-split marker) still matches, in both directions. */
-const packed = (screen: string): string => screen.replace(/\s+/g, '')
+/** The marker can span visual rows. Strip only display-only left borders
+ *  before joining payload, so a prompt's continuous rail cannot split it. */
+const packed = (screen: string): string => screen.replace(/^\s*[│┃]/gm, '').replace(/\s+/g, '')
 const MARKER_PACKED = packed(MARKER)
 
 /** Compact screen digest for failure messages. */
@@ -292,12 +290,13 @@ console.log('--- B: transcript rows fold by default ---')
     () => <MessageList rows={[hugeToolRow]} {...listProps} />,
     async ({ screen }) => {
       const text = screen()
-      check('B5 tool card title (one 60k-char command): fold marker renders',
-        packed(text).includes(MARKER_PACKED), digest(text))
+      const content = text.split('\n').map(line => line.replace(/^\s*│\s*/, '')).filter(line => line.trim())
+      check('B5 tool card: one physical command row plus one truncated output row',
+        content.length === 2 && text.includes(`$ ${HEAD}-cmd-`) && text.includes('…'), digest(text))
       check('B6 tool card title: the clipped tail is gone',
         packed(text).includes(`${HEAD}-cmd-`) && !packed(text).includes(TAIL))
-      check('B7 tool card body (one 60k-char output line): the clipped tail is gone',
-        packed(text).includes(`${HEAD}-out-`) && !packed(text).includes(TAIL))
+      check('B7 tool card body (one 60k-char output line): preview is visible without wrapping or leaking its tail',
+        content.filter(line => line.includes(`${HEAD}-out-`)).length === 1 && !packed(text).includes(TAIL))
     },
   )
 }
@@ -324,6 +323,16 @@ console.log('--- C: Ctrl+O is the escape hatch ---')
       check('C3 expanded tool card paints the raw command/output tail',
         packed(text).includes(TAIL), digest(text))
       check('C4 expanded tool card drops the fold marker', !packed(text).includes(MARKER_PACKED))
+    },
+  )
+}
+
+{
+  const commandOnly: Row = { ...hugeToolRow, tool: { ...hugeToolRow.tool!, resultView: { card: 'terminal', output: '', exitCode: 0 } } }
+  await withMessageList(
+    () => <MessageList rows={[commandOnly]} {...listProps} expanded />,
+    async ({ screen }) => {
+      check('C5 expanded command alone retains the full 60k tail', packed(screen()).includes(TAIL), digest(screen()))
     },
   )
 }
@@ -355,7 +364,7 @@ console.log('--- E: mouse click toggles the fold ---')
       check('E4 a click on the folded row expands it',
         await settled(() => packed(screen()).includes(TAIL)), digest(screen()))
       check('E5 the expanded row drops the marker', !packed(screen()).includes(MARKER_PACKED))
-      clickedScreen = packed(screen())
+      clickedScreen = screen().replace(/\s+/g, '')
       const tail = findText(term, TAIL)
       // 独立断言：packed() 会吃掉换行，尾巴跨行时 E4 仍可能通过，而这里
       // findText 会返回 null —— 早退会让「收起失效」悄悄溜过 CI。
@@ -373,7 +382,7 @@ console.log('--- E: mouse click toggles the fold ---')
     () => <AlternateScreen><KeySink /><MessageList rows={rows} {...listProps} expanded /></AlternateScreen>,
     async ({ screen }) => {
       check('E6 expanding by click paints exactly what Ctrl+O paints',
-        packed(screen()) === clickedScreen && clickedScreen !== '', digest(screen()))
+        screen().replace(/\s+/g, '') === clickedScreen && clickedScreen !== '', digest(screen()))
     },
   )
 }
@@ -446,8 +455,10 @@ async function renderCard(verbose: boolean): Promise<string> {
 
 {
   const folded = await renderCard(false)
-  check('D2 read card body folds its over-long line',
-    packed(folded).includes(MARKER_PACKED) && !packed(folded).includes(TAIL), digest(folded))
+  const content = folded.split('\n').map(line => line.replace(/^\s*│\s*/, '')).filter(line => line.trim())
+  check('D2 collapsed read card keeps one inline summary and hides the output',
+    folded.includes('→ Read /tmp/huge.txt') && content.length === 1
+      && !packed(folded).includes(`${HEAD}-read-`) && !packed(folded).includes(TAIL), digest(folded))
   const verbose = await renderCard(true)
   check('D3 verbose read card paints the raw line',
     packed(verbose).includes(TAIL) && !packed(verbose).includes(MARKER_PACKED), digest(verbose))

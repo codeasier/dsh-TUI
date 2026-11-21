@@ -187,7 +187,8 @@ check('a single deliverable totals its size', single.includes('交付(1 个文�
       const preview = await draw({ cols, verbose: false, files: delivered, fullscreen, openable: fullscreen })
       check(`${context}: the collapsed name remains a preview`, !preview.screen.includes('FILENAME-MIDDLE'))
       const full = await draw({ cols, rows: 80, verbose: true, files: delivered, fullscreen, openable: fullscreen })
-      const unwrapped = full.screen.replace(/\s+/gu, '')
+      // The fork's card border is chrome, not part of a wrapped file path.
+      const unwrapped = full.screen.replace(/^ *│/gmu, '').replace(/\s+/gu, '')
       check(`${context}: expansion restores the complete resolved path`, unwrapped.includes(target))
       check(`${context}: expansion restores the description past 512 cells`,
         unwrapped.includes(description.replace(/\s+/gu, '')))
@@ -313,11 +314,11 @@ check('a newline in a delivered path stays on the file row',
     return (Number(match[1]) << 16) | (Number(match[2]) << 8) | Number(match[3])
   }
   check('the dark subtle face is 20% deep violet over the dim card surface',
-    mixColor(theme.toolCardBackgroundDim, theme.presentCardTint, 0.20) === 'rgb(40,36,73)')
+    mixColor(theme.toolCardBackgroundDim, theme.presentCardTint, 0.20) === 'rgb(52,42,68)')
   check('the warm face is the palette token when backgrounds are off',
     presentCardSurface('none', theme).background === theme.presentCardWarm)
   check('hover lifts the same hue toward white',
-    presentCardSurface('subtle', theme).hover === 'rgb(53,49,84)')
+    presentCardSurface('subtle', theme).hover === 'rgb(64,55,79)')
   const light = getTheme('light')
   check('light palettes keep the soft lavender',
     presentCardSurface('subtle', light).background === 'rgb(240,239,255)')

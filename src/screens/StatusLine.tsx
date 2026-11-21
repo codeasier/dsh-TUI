@@ -10,7 +10,7 @@ import { ActivityLine, contextPressurePct, type ActivityLineValue } from '../com
 import { formatClock } from '../trajectory/format.js'
 import { GoalStatusChip } from '../components/GoalTodoPanel.js'
 import { formatGoalBudget } from '../channel/goal-command.js'
-import { formatJobDuration, type BackgroundJobState } from '../dsh-adapter/jobs.js'
+import { formatJobDuration, jobTitleOf, type BackgroundJobState } from '../dsh-adapter/jobs.js'
 import type { TuiStatusFieldEntry, TuiStatusFieldSlot, TuiStatusFieldTone } from '../dsh-adapter/status.js'
 
 /** Stable fallback for stubbed channels: verify/repro harnesses render the
@@ -1084,7 +1084,7 @@ function buildHoverDetail(
       return (
         <Text wrap="truncate">
           {dim('jobs ')}
-          {shown.map(job => `${job.id} ${job.label} (${formatJobDuration(job)})`).join(' · ')}
+          {shown.map(job => `${job.id} ${jobTitleOf(job)} (${formatJobDuration(job)})`).join(' · ')}
           {rest > 0 ? ` · +${rest}` : ''}
         </Text>
       )

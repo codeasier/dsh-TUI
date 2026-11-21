@@ -16,6 +16,10 @@ const [
   { createChannel },
   { settle },
   { applyCompanionSkin },
+  { SPLASH_FONTS, resolveSplashTitleFont },
+  { pickSplashEgg },
+  { bigTextWidth },
+  { WHALE_BOX_WIDTH, COLUMN_GAP },
 ] = await Promise.all([
   import('node:assert'),
   import('node:stream'),
@@ -25,6 +29,10 @@ const [
   import('../src/dsh-adapter/channel.js'),
   import('./lib/term-test.mjs'),
   import('../src/tuiDisplayPrefs.js'),
+  import('../src/components/splashFonts.js'),
+  import('../src/components/splashEggs.js'),
+  import('../src/components/bigfont.js'),
+  import('../src/components/splashLayout.js'),
 ])
 // 本脚本测的是 dsh-tui.whale 的鲸鱼路径：经 LogoHeader（不透传
 // companionSkin）渲染，把吉祥物皮肤用 store 钉在 'whale'，避免默认
@@ -151,10 +159,15 @@ check('setWhale(true) restores the default view', () => {
 })
 
 // Real LogoHeader -> LogoV2 rendering: default, explicit opt-out, and narrow fallback.
-// 宽度按**阶梯**取，不按字体取：120 列放得下任何一款轮换字体与鲸鱼并排
-// （最宽的 wide 需要 40 + 2 + 71 = 113 列），35 列连大字都放不下——这样断言
-// 与「今天轮到哪款字体」无关。
-const BOTH_FIT_COLUMNS = 120
+// Derive the wide fixture from every current font (including 88-cell shadow)
+// and today's title override; fixed 120 columns no longer fits every tier.
+const BOTH_FIT_COLUMNS = Math.max(...SPLASH_FONTS.map(font => {
+  const title = resolveSplashTitleFont(font, 'deepseek', pickSplashEgg())
+  return Math.max(
+    bigTextWidth(title, title.tagline.top, title.tagline.topKerning) + title.tagline.topKerning,
+    bigTextWidth(title, title.tagline.bottom, title.tagline.bottomKerning) + title.tagline.bottomKerning,
+  ) + WHALE_BOX_WIDTH + COLUMN_GAP
+}))
 const NOTHING_FITS_COLUMNS = 35
 const wideDefault = await renderHeader({ columns: BOTH_FIT_COLUMNS, ready: raw => raw.includes(WHALE_OUTLINE) })
 check('wide LogoHeader shows whale by default', () => {

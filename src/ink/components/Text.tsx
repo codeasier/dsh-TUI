@@ -53,6 +53,8 @@ type BaseProps = {
    * compares it by reference.
    */
   readonly decoration?: Styles['decoration'];
+  /** Content column in cells per source logical line; zero uses ordinary wrapping. */
+  readonly continuationIndent?: readonly number[];
   readonly children?: ReactNode;
 };
 
@@ -75,7 +77,7 @@ const wrapStyles = new Map<NonNullable<Styles['textWrap']>, Styles>()
 
 /** A text leaf. Empty children produce no layout node. */
 function Text({ children, ref, wrap = 'wrap', color, backgroundColor,
-  bold, dim, italic, underline, strikethrough, inverse, decoration,
+  bold, dim, italic, underline, strikethrough, inverse, decoration, continuationIndent,
 }: Props) {
   const textStyles = React.useMemo<TextStyles>(() => {
     const values = { color, backgroundColor, bold, dim, italic, underline, strikethrough, inverse }
@@ -91,14 +93,14 @@ function Text({ children, ref, wrap = 'wrap', color, backgroundColor,
   [wrap, decoration])
   if (children == null) return null
   if (decoratedStyle !== undefined) {
-    return <ink-text ref={ref} style={decoratedStyle} textStyles={textStyles}>{children}</ink-text>
+    return <ink-text ref={ref} style={decoratedStyle} textStyles={textStyles} continuationIndent={continuationIndent}>{children}</ink-text>
   }
   let style = wrapStyles.get(wrap)
   if (!style) {
     style = { flexDirection: 'row', flexGrow: 0, flexShrink: 1, textWrap: wrap }
     wrapStyles.set(wrap, style)
   }
-  return <ink-text ref={ref} style={style} textStyles={textStyles}>{children}</ink-text>
+  return <ink-text ref={ref} style={style} textStyles={textStyles} continuationIndent={continuationIndent}>{children}</ink-text>
 }
 
 export default React.memo(Text)

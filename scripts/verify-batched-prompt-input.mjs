@@ -14,7 +14,9 @@ import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import tim
 import { PassThrough, Writable } from 'node:stream'
 import React from 'react'
 import xtermHeadless from '@xterm/headless'
-import { render } from '../lib/types/ui.js'
+import { render, useStdin } from '../lib/types/ui.js'
+import { InputEvent } from '../lib/types/ink/events/input-event.js'
+import { INITIAL_STATE, parseMultipleKeypresses } from '../lib/types/ink/parse-keypress.js'
 import { PromptInput } from '../lib/types/components/PromptInput.js'
 import { settled, sleep, viewportLines } from './lib/term-test.mjs'
 
@@ -269,9 +271,13 @@ check(
   'consecutive Option+Enter keeps both blank prompt lines visible',
   await settled(() => {
     const lines = viewportLines(term)
-    const top = lines.findIndex(line => line.includes('╭'))
-    const bottom = lines.findIndex((line, index) => index > top && line.includes('╰'))
-    return top >= 0 && bottom - top === 4 && lines.some(line => line.includes('b'))
+    const first = lines.findIndex(line => /^\s*┃\s*❯\s*a/u.test(line))
+    return first > 0
+      && /^\s*┃\s*$/u.test(lines[first - 1] ?? '')
+      && /^\s*┃\s*$/u.test(lines[first + 1] ?? '')
+      && /^\s*┃\s*b/u.test(lines[first + 2] ?? '')
+      && /^\s*┃\s*$/u.test(lines[first + 3] ?? '')
+      && !/^\s*┃/u.test(lines[first + 4] ?? '')
   }),
   viewportLines(term).join('\n'),
 )
@@ -283,6 +289,70 @@ check(
 )
 
 instance.unmount()
+
+// Keep PR #1703's generic composer readiness contract even though launchpad
+// newlines now edit in place: a remounted/suspended composer must not drain
+// held keys before adoption and listener activation, or replay on each render.
+for (const initiallySuspended of [false, true]) {
+  const streams = makeStreams()
+  const controller = { current: null }
+  const draftCache = { current: {
+    ownerAgentId: 'readiness', bindingGeneration: 0,
+    value: 'draft\n', cursor: 6, foldBlock: null, expanded: false,
+    vimEnabled: false, vimInsert: true, images: [],
+  } }
+  const readySnapshots = []
+  let pending = 'tail'
+  let change
+  let committed
+  function ReadinessHarness() {
+    const [state, setState] = React.useState({ suspended: initiallySuspended, tick: 0 })
+    change = setState
+    const { internal_eventEmitter: emitter } = useStdin()
+    React.useLayoutEffect(() => { committed = state })
+    return React.createElement(PromptInput, {
+      channel: { ...channel, agentId: 'readiness', working: false },
+      draftCache, controllerRef: controller, suspended: state.suspended,
+      helpOpen: false, onToggleHelp() {}, onRunCommand: () => false,
+      selectionActive: false,
+      onInputReady() {
+        readySnapshots.push({ text: controller.current?.text(), hasText: controller.current?.hasText() })
+        const keys = pending
+        pending = ''
+        for (const keypress of parseMultipleKeypresses(INITIAL_STATE, keys)[0]) {
+          if (keypress.kind === 'key') emitter.emit('input', new InputEvent(keypress))
+        }
+      },
+    })
+  }
+  const app = await render(React.createElement(ReadinessHarness),
+    { ...streams, exitOnCtrlC: false, patchConsole: false })
+  const label = initiallySuspended ? 'initially suspended' : 'initially active'
+  try {
+    await settled(() => draftCache.current === null)
+    if (initiallySuspended) {
+      check(`${label}: adoption does not announce readiness or drain held input`,
+        readySnapshots.length === 0 && pending === 'tail' && controller.current === null)
+      change({ suspended: false, tick: 1 })
+    }
+    check(`${label}: readiness sees the live adopted draft before replay`,
+      await settled(() => controller.current?.text() === 'draft\ntail')
+        && readySnapshots.length === 1 && readySnapshots[0].text === 'draft\n'
+        && readySnapshots[0].hasText === true, JSON.stringify(readySnapshots))
+    change({ suspended: false, tick: 2 })
+    await settled(() => committed?.tick === 2)
+    // 固定窗:探针 A new inline callback on an ordinary render must not replay.
+    await sleep(50)
+    check(`${label}: an ordinary render does not announce readiness again`, readySnapshots.length === 1)
+    change({ suspended: true, tick: 3 })
+    await settled(() => committed?.tick === 3 && controller.current === null)
+    pending = '!'
+    change({ suspended: false, tick: 4 })
+    check(`${label}: resuming replays the next held input once`,
+      await settled(() => controller.current?.text() === 'draft\ntail!')
+        && readySnapshots.length === 2 && pending === '', JSON.stringify(readySnapshots))
+  } finally { await app.unmount() }
+}
 
 if (failed > 0) {
   console.error(`verify-batched-prompt-input: ${failed} assertion(s) failed`)

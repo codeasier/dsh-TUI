@@ -51,6 +51,9 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat
     import('./lib/term-test.mjs'),
   ])
 const { sleep, settled, writeParsed, viewportLines, screenHas } = termTest
+const { applyPageMargin } = await import('../src/tuiDisplayPrefs.js')
+// Keep the original regression's content-width budget when product defaults change.
+applyPageMargin('2x1')
 
 let failed = 0
 let checks = 0
@@ -143,7 +146,11 @@ function geometry(term: InstanceType<typeof XTerm>): Geometry {
   let lastNonBlank = -1
   for (let y = 0; y < lines.length; y++) {
     const line = lines[y]!
-    if (composer < 0 && /[╭┌]/.test(line)) composer = y
+    // The patch composer has a heavy rail, not rounded corners. Its session
+    // button distinguishes it from historical user-message rails; retain the
+    // top-padding-row coordinate used by the original footer contract.
+    if (composer < 0 && /┃\s*⌸\s*❯/.test(line)
+      && lines[y - 1]?.trim() === '┃' && lines[y + 1]?.trim() === '┃') composer = y - 1
     if (fields < 0 && /ctx [\d.]/.test(line)) fields = y
     if (hint < 0 && /^\s*\? 查看快捷键/.test(line)) hint = y
     if (line.trim() !== '') lastNonBlank = y

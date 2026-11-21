@@ -1,8 +1,10 @@
 import React from 'react'
 import type { ChannelUi } from '../../adapter/ports/channel-ui.js'
 import type { LlmModelInfo, LlmProviderInfo } from '../../adapter/ports/channel-view.js'
-import { deriveModelGroups, modelPickerLanding, recentCatalogModels, RECENTS_GROUP_PROVIDER, type ModelRef } from '../../modelGroups.js'
+import { filterModelPickerModels, deriveModelGroups, modelPickerLanding, recentCatalogModels, RECENTS_GROUP_PROVIDER, type ModelRef } from '../../modelGroups.js'
 import type { Key } from '../../ui.js'
+import { getGraphemeSegmenter } from '../../utils/intl.js'
+import { sanitizeEditableText } from '../../utils/inputPaste.js'
 import { wrapIndex } from '../chatOverlay.js'
 
 type EffortCatalog = Awaited<ReturnType<ChannelUi['listEfforts']>>
@@ -15,7 +17,7 @@ const modelKey = (model: LlmModelInfo): string => `${model.provider}/${model.id}
  * with cursor animation or trails glide between providers, models and
  * effort levels (see `ModelPicker`). `model` is the resting zone.
  */
-export type ModelCursorZone = 'provider' | 'model' | 'effort'
+export type ModelCursorZone = 'provider' | 'model' | 'effort' | 'search'
 
 /** Provider/model navigation and per-model effort drafts for the single-page picker. */
 export function useModelPicker({ channel, models, providers, recents, open, onPick, onCancel }: {
@@ -28,6 +30,8 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
   onPick(model: LlmModelInfo, effort: string | undefined): void
   onCancel(): void
 }) {
+  const [search, setSearch] = React.useState({ query: '', caret: 0 })
+  const searchRef = React.useRef(search)
   const providerTabs = recents !== undefined
   const groups = React.useMemo(() => providerTabs ? deriveModelGroups(models, providers, recents) : [], [models, providers, recents, providerTabs])
   const [cursor, setCursor] = React.useState<Cursor>({ provider: providerTabs ? RECENTS_GROUP_PROVIDER : channel.provider, index: providerTabs ? 0 : -1 })
@@ -38,8 +42,15 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
   const draftsRef = React.useRef(drafts)
   const [catalogs, setCatalogs] = React.useState(new Map<string, EffortCatalog | 'error'>())
   const [cursorZone, setCursorZone] = React.useState<ModelCursorZone>('model')
+  const cursorZoneRef = React.useRef<ModelCursorZone>('model')
+  const focusZone = (zone: ModelCursorZone): void => {
+    cursorZoneRef.current = zone
+    setCursorZone(zone)
+  }
 
-  const modelsFor = (provider: string): readonly LlmModelInfo[] => recents === undefined ? models : provider === RECENTS_GROUP_PROVIDER
+  const modelsFor = (provider: string): readonly LlmModelInfo[] => searchRef.current.query.trim() !== ''
+    ? filterModelPickerModels(models, searchRef.current.query, providers)
+    : recents === undefined ? models : provider === RECENTS_GROUP_PROVIDER
     ? recentCatalogModels(recents, models)
     : models.filter(model => model.provider === provider)
   const normalize = (value: Cursor): Cursor => {
@@ -54,7 +65,7 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
   }
   const selected = normalize(cursor)
   const provider = selected.provider
-  const listed = React.useMemo(() => modelsFor(provider), [provider, models, recents])
+  const listed = React.useMemo(() => modelsFor(provider), [provider, models, recents, providers, search.query])
   const focused = listed[selected.index]
   const focusedKey = focused === undefined ? undefined : modelKey(focused)
   const catalog = focusedKey === undefined ? undefined : catalogs.get(focusedKey)
@@ -71,7 +82,16 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
     tabFocus.current.set(value.provider, value.index)
     setCursor(value)
   }
+  const editSearch = (query: string, caret: number): void => {
+    const changed = query !== searchRef.current.query
+    searchRef.current = { query, caret }
+    setSearch(searchRef.current)
+    if (changed) focus({ ...cursorRef.current, index: 0 })
+    focusZone('search')
+  }
   const reset = (): void => {
+    searchRef.current = { query: '', caret: 0 }
+    setSearch(searchRef.current)
     const landing = modelPickerLanding(models, channel.provider, channel.model, recents)
     activeRef.current = true
     tabFocus.current.clear()
@@ -80,7 +100,7 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
     cursorRef.current = initial
     setCursor(initial)
     // Opening is model navigation: the caret starts on the focused model row.
-    setCursorZone('model')
+    focusZone('model')
     draftsRef.current = new Map()
     setDrafts(draftsRef.current)
     setCatalogs(new Map())
@@ -117,14 +137,14 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
     const initial = provider === RECENTS_GROUP_PROVIDER ? 0
       : Math.max(0, list.findIndex(model => model.provider === channel.provider && model.id === channel.model))
     focus({ provider, index: tabFocus.current.get(provider) ?? initial })
-    setCursorZone('provider')
+    focusZone('provider')
   }
   const moveModel = (delta: 1 | -1): void => {
     const current = normalize(cursorRef.current)
     const count = modelsFor(current.provider).length
     if (count === 0) return
     focus({ ...current, index: wrapIndex(current.index, delta, count) })
-    setCursorZone('model')
+    focusZone(searchRef.current.query !== '' ? 'search' : 'model')
   }
   const pickEffort = (index: number): void => {
     const current = normalize(cursorRef.current)
@@ -136,11 +156,11 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
     if (option === undefined) return
     draftsRef.current = new Map(draftsRef.current).set(modelKey(model), option.id)
     setDrafts(draftsRef.current)
-    setCursorZone('effort')
+    focusZone('effort')
   }
   const focusModel = (index: number): void => {
     focus({ ...normalize(cursorRef.current), index })
-    setCursorZone('model')
+    focusZone('model')
   }
   const confirm = (): void => {
     if (!activeRef.current) return
@@ -157,6 +177,37 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
   }
   const handleKey = (input: string, key: Key, plainReturn: boolean): void => {
     if (!activeRef.current) return
+    const { query, caret } = searchRef.current
+    if (key.ctrl && input === 'u') {
+      editSearch('', 0)
+      return
+    }
+    if (key.escape && query !== '') {
+      editSearch('', 0)
+      return
+    }
+    const searchEditing = cursorZoneRef.current === 'search'
+    if (key.home || key.end || ((key.leftArrow || key.rightArrow) && searchEditing)) {
+      const boundaries = [...getGraphemeSegmenter().segment(query)].map(part => part.index)
+      boundaries.push(query.length)
+      editSearch(query, key.home ? 0 : key.end ? query.length : key.leftArrow
+        ? boundaries.filter(index => index < caret).at(-1) ?? 0
+        : boundaries.find(index => index > caret) ?? query.length)
+      return
+    }
+    if (key.backspace || key.delete) {
+      const boundaries = [...getGraphemeSegmenter().segment(query)].map(part => part.index)
+      boundaries.push(query.length)
+      const start = key.backspace ? boundaries.filter(index => index < caret).at(-1) ?? 0 : caret
+      const end = key.backspace ? caret : boundaries.find(index => index > caret) ?? query.length
+      editSearch(query.slice(0, start) + query.slice(end), start)
+      return
+    }
+    if (input && !key.ctrl && !key.meta && !key.super && !key.return && !key.tab && !key.escape && !key.upArrow && !key.downArrow && !key.leftArrow && !key.rightArrow) {
+      const text = sanitizeEditableText(input).replace(/[\r\n]+/gu, ' ')
+      if (text) editSearch(query.slice(0, caret) + text + query.slice(caret), caret + text.length)
+      return
+    }
     if (key.tab) {
       if (!providerTabs || groups.length === 0) return
       const index = groups.findIndex(group => group.provider === normalize(cursorRef.current).provider)
@@ -178,6 +229,7 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
     }
   }
   return {
+    query: search.query, cursorOffset: search.caret,
     groups, provider: selected.provider, models: listed, index: selected.index,
     efforts: catalog === undefined || catalog === 'error' ? [] : catalog.efforts,
     effortId: focused === undefined ? undefined : effortFor(focused, catalog),
