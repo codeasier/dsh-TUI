@@ -197,6 +197,7 @@ function CodeBlockFrameFull({
       />
       <Box flexDirection="row">
         <NoSelect
+          flexShrink={0}
           borderStyle="single"
           borderLeft
           borderTop={false}
@@ -273,6 +274,7 @@ function CodeBlockFrameHybrid({
       )}
       <Box flexDirection="row">
         <NoSelect
+          flexShrink={0}
           borderStyle="single"
           borderLeft
           borderTop={false}

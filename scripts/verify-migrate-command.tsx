@@ -22,6 +22,8 @@ const fixtureHome = mkdtempSync(join(tmpdir(), 'verify-migrate-command-'))
 process.env.HOME = fixtureHome
 process.env.USERPROFILE = fixtureHome
 process.env.GROK_HOME = join(fixtureHome, '.grok')
+process.env.OPENCODE_DB = join(fixtureHome, 'opencode.db')
+process.env.XDG_DATA_HOME = join(fixtureHome, '.local', 'share')
 
 const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS }] = await Promise.all([
   import('node:stream'),
@@ -175,11 +177,11 @@ const PICKER_TITLE = '迁移哪个代理的对话？'
 const UNKNOWN = '未知迁移源'
 
 // ── 1. fresh 会话的 /migrate <agent>（本回归的存在理由）──────────────────
-{
+for (const source of ['claude-code', 'opencode']) {
   const chat = await mountChat()
-  const after = await chat.run('/migrate claude-code')
+  const after = await chat.run(`/migrate ${source}`)
   const unknown = chat.channel.notifyCalls.filter(text => text.includes(UNKNOWN))
-  check('1a. fresh mount 直接 /migrate claude-code 不报未知源', unknown.length === 0, unknown.join(' | '))
+  check(`1a. fresh mount 直接 /migrate ${source} 不报未知源`, unknown.length === 0, unknown.join(' | '))
   check('1b. 打开二次确认层', after.includes(CONFIRM_TITLE))
   check('1c. 不误开选择器', !after.includes(PICKER_TITLE))
   await chat.unmount()

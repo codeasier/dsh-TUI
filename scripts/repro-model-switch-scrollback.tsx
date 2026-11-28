@@ -233,6 +233,7 @@ await sleep(200) // 固定窗:pacing 按键步间
 stdin.write('\r')
 // 固定窗:探针 同上，沉积「恰好一份」是不得改变的断言。
 await sleep(1500)
+check('二次切换后模型名生效', channel.model === 'deepseek-v4-flash', `实际 ${channel.model}`)
 check('二次切换后 splash 恰好一份', countMarker(SPLASH) === 1, `实际 ${countMarker(SPLASH)}`)
 
 // ---- Esc 只关不切换：浮层整体条件挂载的回归场景 -----------------------------

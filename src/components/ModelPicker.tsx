@@ -8,6 +8,7 @@ import type { ModelCursorZone } from '../screens/chat/useModelPicker.js'
 import { useDeclaredCursor, useNativeCursor } from '../ink/hooks/use-declared-cursor.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
+import { SearchBox } from './SearchBox.js'
 import { Pane } from './design-system/Pane.js'
 import { ListItem } from './design-system/ListItem.js'
 import { HintLine } from './design-system/HintLine.js'
@@ -26,9 +27,12 @@ import { useOverlayListRows } from './OverlayAbove.js'
 export function ModelPicker({
   groups, provider, models, focusIndex, currentModel, loading,
   efforts, effortId, effortsLoading, effortError, levelsFallback,
-  cursorZone = 'model',
+  cursorZone = 'model', query = '', cursorOffset, isTerminalFocused = true,
   onProvider, onFocus, onEffort, onMove, onConfirm, onCancel,
 }: {
+  query?: string
+  cursorOffset?: number
+  isTerminalFocused?: boolean
   groups: readonly ModelGroupRow[]
   provider: string
   models: readonly LlmModelInfo[]
@@ -51,7 +55,12 @@ export function ModelPicker({
 }): React.ReactNode {
   const { columns } = useTerminalSize()
   const width = Math.max(1, columns - 4) // Pane's horizontal padding.
-  const availableRows = useOverlayListRows(0)
+  const overlayRows = useOverlayListRows(0)
+  // Preserve the upstream two/three-row model+effort+actions fallback.
+  // Once editing starts the query itself takes priority over effort hints.
+  const showSearch = overlayRows >= 5 || cursorZone === 'search' || query !== ''
+  const availableRows = Math.max(1, overlayRows - (showSearch ? 1 : 0))
+  const showFooter = !showSearch || overlayRows > 3
   const showProviders = groups.length > 0
   const shortcuts = [
     ...(showProviders ? [{ text: t('hint-model-provider'), onPick: undefined }] : []),
@@ -95,12 +104,12 @@ export function ModelPicker({
   // Without header hints the overlay clips from the top. A mounted provider
   // strip is visible only if the models, effort row and footer leave it space.
   const rowsBelowProviders = Math.max(1, modelHeights.slice(start, end).reduce((sum, rows) => sum + rows, 0))
-    + (showEfforts ? 1 : 0) + 1
+    + (showEfforts ? 1 : 0) + (showFooter ? 1 : 0)
   const providerVisible = showHeaderHints || availableRows > rowsBelowProviders
   // The caret follows the last-touched region, but only while that region is
   // rendered with a focused cell; otherwise it rests on the model list so it
   // can never be parked nowhere (which reads as a vanished caret).
-  const caretZone: ModelCursorZone = cursorZone === 'provider' && showProviders && providerVisible && providerFocus >= 0 ? 'provider'
+  const caretZone: ModelCursorZone = cursorZone === 'search' ? 'search' : cursorZone === 'provider' && showProviders && providerVisible && providerFocus >= 0 ? 'provider'
     : cursorZone === 'effort' && showEffortTabs && effortFocus >= 0 ? 'effort'
       : 'model'
   const shortcutBar = (
@@ -136,12 +145,16 @@ export function ModelPicker({
             onPick={index => onProvider(groups[index]!.provider)}
           />
         </Box> : null}
+        {showSearch ? <SearchBox query={query} cursorOffset={cursorOffset}
+          placeholder={t('picker-model-search-placeholder')} placeholderAlign="left"
+          borderless width="100%" isFocused isTerminalFocused={isTerminalFocused}
+          declareCursor={caretZone === 'search'} /> : null}
         <Box flexDirection="column" marginTop={!showProviders && !compact ? 1 : 0} onWheel={event => {
           event.stopImmediatePropagation()
           if (event.deltaY !== 0) onMove(event.deltaY < 0 ? -1 : 1)
         }}>
           {models.length === 0 ? (
-            <Text dimColor wrap="truncate">{t(loading ? 'model-loading' : provider === RECENTS_GROUP_PROVIDER ? 'picker-recents-empty' : 'picker-models-empty')}</Text>
+            <Text dimColor wrap="truncate">{t(loading ? 'model-loading' : query.trim() !== '' ? 'picker-model-empty' : provider === RECENTS_GROUP_PROVIDER ? 'picker-recents-empty' : 'picker-models-empty')}</Text>
           ) : models.slice(start, end).map((model, index) => {
             const absoluteIndex = start + index
             return (
@@ -156,7 +169,7 @@ export function ModelPicker({
                 nativeCursor
                 onClick={event => { event.stopImmediatePropagation(); onFocus(absoluteIndex) }}
               >
-                {provider === RECENTS_GROUP_PROVIDER ? `${model.provider} / ${model.name}` : model.name}
+                {query.trim() !== '' || provider === RECENTS_GROUP_PROVIDER ? `${model.provider} / ${model.name}` : model.name}
               </ListItem>
             )
           })}
@@ -191,7 +204,7 @@ export function ModelPicker({
           </Box>
         </Box> : null}
         {showDescription ? <Text dimColor wrap="truncate">{description!.replace(/[\r\n]+/g, ' ')}</Text> : null}
-        {!showHeaderHints ? shortcutBar : null}
+        {!showHeaderHints && showFooter ? shortcutBar : null}
       </Pane>
     </Box>
   )

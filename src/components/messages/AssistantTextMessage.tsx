@@ -1,6 +1,5 @@
 import React from 'react'
-import { Box, NoSelect, Text } from '../../ui.js'
-import { BLACK_CIRCLE } from '../../terminal-utils/figures.js'
+import { Box } from '../../ui.js'
 import { Markdown } from '../Markdown.js'
 
 type Props = {
@@ -14,7 +13,13 @@ type Props = {
 }
 
 /**
- * Assistant text message: bullet + markdown body.
+ * Assistant text: markdown body at col 0, no marker, full brightness.
+ *
+ * The absence of chrome IS the signal — machine activity (tool cards,
+ * thinking) is railed and dim at col 2, so the unmarked bright text reads as
+ * the model talking. A `●` bullet here made prose and tool rows wear the same
+ * leading dot at nearly the same weight, which is exactly the wall of grey
+ * this layout removes.
  *
  * Deliberately not clickable: the transcript is reading material and the
  * mouse's job there is text selection (user feedback — row hover tints and
@@ -28,9 +33,7 @@ export function AssistantTextMessage({
 }: Props): React.ReactNode {
   return (
     <Box
-      alignItems="flex-start"
-      flexDirection="row"
-      justifyContent="space-between"
+      flexDirection="column"
       marginTop={marginTopOnTurn ? 1 : 0}
       width="100%"
       backgroundColor={
@@ -41,14 +44,7 @@ export function AssistantTextMessage({
             : undefined
       }
     >
-      <Box flexDirection="row">
-        <NoSelect fromLeftEdge minWidth={2}>
-          <Text color={isSelected ? 'suggestion' : 'text'}>{BLACK_CIRCLE}</Text>
-        </NoSelect>
-        <Box flexDirection="column">
-          <Markdown>{text}</Markdown>
-        </Box>
-      </Box>
+      <Markdown>{text}</Markdown>
     </Box>
   )
 }

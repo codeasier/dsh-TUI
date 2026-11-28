@@ -84,20 +84,29 @@ The startup **launchpad** and the **first-run wizard** each own the keyboard; bo
 results back to the chat screen and add no new behavior.
 
 - **Launchpad**: printable input goes into the input box (the prefix turns from `❯` to `⌘` when the line
-  starts with `/`), `Backspace`/`Delete`/`←`/`→`/`Home`/`End` edit it; the **native terminal cursor**
-  inherits your terminal's shape, color, blinking, and enabled animation or trail effects.
-  Cursor movement never adds a cell or eats a character. Static rendering retains the
-  [theme-painted fallback](themes.en.md); `Alt+R` continues the most recent session
-  (= the first entry row slot, bound only on this screen, no-op when there is nothing to continue,
-  remappable in `/settings`);
+  starts with `/`); the editing keys are **the same set as the chat composer** — `Backspace`/`Delete`/`←`/`→`/
+  `Home`/`End`, plus `Ctrl/Option/Alt+←/→` (and `Alt+B/F`) jumping by Unicode word boundaries, `Ctrl+W`
+  deleting the preceding word, and `Ctrl+A/E/U/K` for line start/end and delete-to-start/end; Chinese
+  without spaces deletes by word and punctuation/emoji are separate units (word boundaries are shared
+  with the chat page, see `utils/inputWordBoundary.ts`); when focus is not on the input box the editing keys no-op.
+  `Shift+Enter` / `Option+Enter` / `Ctrl+J` (legacy LF included) **insert a newline**, so the launcher
+  draft can be multi-line: the box grows with it (up to 6 rows, beyond that the rows window around the
+  caret and the hero art gives way first), `↑`/`↓` move the caret between the draft's lines by display
+  column, `Home`/`End` and `Ctrl+A/E/U/K` stay scoped to the current line (readline semantics, matching
+  the chat composer), `Tab` still walks the focus ring, and `Ctrl+L` clears and repaints the screen
+  (`redraw` — the recovery key when a terminal or input method wrote over the frame).
+  The native terminal cursor inherits the terminal's shape, color, blinking and animation.
+  Static rendering retains the theme-painted fallback; IME composition keeps slack to its right.
+  `Alt+R` continues the most recent session (= the first entry row slot,
+  bound only on this screen, no-op when there is nothing to continue, remappable in `/settings`);
+  `Alt+S` stars the session exactly like clicking the star on the hero art;
   a leading `/` opens the
   **command palette** (the same data source and component as the chat composer: `↑`/`↓` move the selection,
-  `Tab` **completes** the selected command in the input box with the caret at the end,
-  `Enter`/click **run** it and clear the input, `Esc` dismisses only the palette and keeps the draft);
+  `Tab` fills the selection into the input box, `Enter`/click **run** it, `Esc` dismisses only the palette and keeps the draft);
   with the palette dismissed, `Enter` **sends** the line straight away (a leading `/` line — including
   plugin/registry commands — goes through the chat page's merged command table and never reaches the model);
   `↑`/`↓`/`Tab` walk the focus ring (input box → the four param segments under the box → the quick
-  actions → the Tips line) and `Enter` activates the focused one (`Enter` on the Tips line rotates the
+  actions → the Tips line; `↑`/`↓` belong to the caret only while the draft actually holds a newline) and `Enter` activates the focused one (`Enter` on the Tips line rotates the
   tip), while typing returns focus to the input box; `Esc` clears
   a non-empty line and opens sessions when empty, and `Ctrl+C` on an empty line takes the exit funnel.
 - **Launchpad param row** (under the box: model · effort · mode · permission; model shows the bare model
@@ -122,9 +131,9 @@ results back to the chat screen and add no new behavior.
   jobs`; update detected → `Update available`; usage milestone reached and never starred → `Feed us a
   star`; fallback `Help`). Full screens opened from the launchpad (sessions & workspaces / settings /
   background jobs / the family tree / the wizard) render **above the launchpad** — `Esc` closes them
-  back onto the launchpad (draft, params and focus intact); there are two ways off the launchpad into
-  the chat: submit a non-command line with Enter, or press `Shift+Enter` (`Option+Enter`) in the input
-  to carry the unsent draft over and start a new line at the caret. Overlays on the launchpad side
+  back onto the launchpad (draft, params and focus intact). Submit a non-command message with Enter
+  to enter chat. `Shift+Enter` (`Option+Enter`, `Ctrl+J`) inserts an in-place draft newline without
+  submitting or leaving the launchpad. Overlays on the launchpad side
   (pickers, the command palette) are a **clean cutout** — every cell in the overlay rect is space-filled (host
   glyphs never bleed through), yet no background color is emitted (no white block; Kitty splash
   art still shows through the terminal-default cells; the chat page's pickers are unaffected).
@@ -168,14 +177,25 @@ results back to the chat screen and add no new behavior.
 | Key | Behavior |
 | --- | --- |
 | `Left/Right` | Move by character; **with a selection, collapse to the corresponding edge** |
-| `Ctrl+Left/Right` / `Alt/Option+Left/Right` | Move by whitespace-delimited words; also supported on the launchpad |
+| `Ctrl+Left/Right` / `Alt+Left/Right` / `Alt+B/F` | Move by Unicode word boundaries, including Chinese without spaces; macOS `Option` is `Alt`; with a selection, collapse to the corresponding edge first |
 | `Home/End` | Move to the start/end of the current logical line |
 | `Ctrl+A` / `Ctrl+E` | `Ctrl+A` opens the subagent dashboard (`Mod+A` in the editor still moves to line start); `Ctrl+E` moves to line end and also expands or folds hidden older rows in long transcripts |
 | `Ctrl+U` | Delete to the current line start, preserving text to the right; also supported in the focused launchpad input, with image chips removed whole |
 | `Ctrl+K` | Delete after the caret |
-| `Ctrl+W` / `Alt/Option+Backspace` | Delete the preceding word; staged image attachments are removed whole |
+| `Ctrl+W` / `Alt/Option+Backspace` | Delete the preceding Unicode word segment and trailing whitespace; supports Chinese without spaces, with punctuation and emoji as separate units; with a selection, delete only that selection; staged image attachments are removed whole |
 | `Backspace` / `Delete` | Delete the character before / after the caret; **with a selection, delete the whole selection** |
 | Typing | **Replaces an active selection** (standard editor semantics), caret after the inserted text |
+
+**CJK input methods (IME)**: the terminal paints the composition (preedit) itself at the **physical
+cursor** and reserves part of that row with the terminal's own default background — on a themed canvas
+that reads as a black bar trailing the caret, and the composition caret can sit past the input box.
+The app publishes the canvas colour as that default background for the session (restored on exit) and
+erases the row past the input box, so the band and its end caret stay inside. It also parks the cursor
+exactly on the caret cell, with a few cells of slack to its right (the windowed single-line input
+reserves 4), and rewrites the caret's row the moment a composition **commits** — committed text is the
+only signal an input method hands an app. Ordinary typing, arrows and pastes never rewrite the caret
+cell, so a live preedit is never erased. If anything else writes over the frame, `Ctrl+L` repaints the
+whole screen.
 
 ### vim editing mode (`/vim`)
 
@@ -291,6 +311,7 @@ Click a staged `[Image #N]` token or a transcript thumbnail to open one shared, 
 - The prompt, status rows and sticky header stay visible.
 - Open original opens the unchanged bytes in the system viewer and preserves colors and animation.
 - Without Kitty/Sixel graphics, the preview falls back to a metadata-only card; narrow terminals get the same.
+- A few clients paint images as cell content (the xterm.js family, e.g. Orca Remote): **Sixel wins there whenever it is available**, because their Kitty layer never paints a negative placement, adds a placement per `a=p` instead of replacing the one with the same id, and frees the raster when a placement is deleted — an image could neither move nor be parked. Without Sixel they fall back to Kitty with placements at `z >= 0`, where a panel covering part of an image lets it show through.
 
 ### Zoom, pan, and switching
 
@@ -670,8 +691,15 @@ In inline mode, the terminal emulator owns native scrollback and selection.
 - **Code blocks** — A body-anchored selection joins soft-wrapped rows without frame padding or extra newlines, for light and full frames. Hard line breaks and hard-line insets keep their existing screen-copy behavior; this is not a byte-for-byte source export.
 - **Single-click a message row** — Plain text rows (user/assistant) do nothing — the
   transcript is a reading surface, selection is the mouse's job there.
-- **Single-click a tool card / thinking / compact summary** — Expand / collapse (header
-  brightens on hover; trailing blank cells do not trigger).
+- **Click `[Copy code]` / `[Copy table]`** — The button in a top-level code header copies
+  the entire body without fences; the button above a table copies its original Markdown.
+  Source indentation, blank lines and trailing spaces survive, without terminal borders or
+  visual wrapping. Streaming blocks copy the content received so far; partial text selection
+  is unchanged. Buttons hide for empty content or when a narrow column/code caption leaves
+  too little room, and are not shown in inline mode.
+- **Single-click a tool card surface** — Expand / collapse the full command and output. The title,
+  preview and padding are clickable; file-path links still open the file separately.
+- **Single-click a thinking / compact summary** — Expand / collapse; the header brightens on hover.
 - **Single-click a subagent card** — Open that subagent's detail scene (status glyph
   brightens on hover).
 - **Single-click the input box** — Place the text caret at the click (multi-line, wrapped
@@ -840,6 +868,7 @@ The command menu merges local commands with the DSH command registry. Type `/` t
   in `/settings`.
 - `/panel` — side panel: toggle / focus / zoom / switch panels (subcommands in the user guide §2.8).
 - `/lang`.
+- `/fast` — interactive fast switch registered by this plugin's OAuth entry; forms and scope below.
 
 **Account and policy**
 
@@ -885,11 +914,25 @@ Additional forms:
   `triangle`, `box`, `box2`, `corners`, `point`, `layer`, `flip`, `aesthetic`,
   `hamburger`, `moon`, `moon8`, `whale-spout`, `whale-spin`, `whale-bubbles`, `clock`,
   `traffic_lights`, `comet`, `breathe`, `dots`, `arrow`, `spark`, `bar`, `braille`, `arc`,
-  `circle`, `grow`, `noise`, `bounce`, `rainbow`, `bar2`, `dqpb`, `toggle`; default `moon8`.
+  `circle`, `grow`, `noise`, `bounce`, `rainbow`, `bar2`, `dqpb`, `toggle`; default `moon`.
 - A legacy local `claude` setting is read as `moon8`, and the picker does not show that legacy preset.
 - `/activity status` reports the current choice.
 - `/preset <id>` and `/preset status` are described in the configuration guide.
 - `/effort` opens the reasoning-effort slider (←/→ adjusts live); `/effort <id>` sets a level directly; `/effort status` reports the current one.
+- Bare `/fast` or `/fast toggle` switches fast; `/fast on` sets `priority`,
+  `/fast off` sets `default`, and `/fast status` only reports the current state.
+  - Applies from the next model request, without changing already-sent requests
+    or reasoning `effort`; no restart needed.
+  - Covers all supported OAuth routes registered by this plugin in the current
+    TUI process (`openai-codex-responses` / `openai-responses`), not just the
+    current session or model; other protocols and other plugins' routes are unaffected.
+  - Writes neither config nor persistent files; restart restores the optional
+    `config.serviceTier` startup default (unset: off/provider default).
+    Interactive `/fast` takes precedence over that startup default.
+  - An unmounted OAuth entry does not provide the command; a mounted entry
+    with no successfully registered supported route gives a clear unavailable
+    error. The backend owns tier acceptance and quota; the TUI guarantees
+    neither approval nor additional quota. See [built-in subscription OAuth](configuration.en.md#built-in-subscription-oauth).
 - `/model` opens a two-level picker:
   - A pinned **Recently used** group first — the last 10 switched models, persisted at `~/.dsh-tui/model-recents.json` — then provider groups.
   - `Enter` drills into a group's models, and a single provider with no recents skips straight to the list.

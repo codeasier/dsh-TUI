@@ -424,14 +424,13 @@ check('↑ moves onto the provider row', cardRows(live.lines()).some(line => lin
 live.stdin.write('\r')
 await settled(() => live.lines().some(line => line.includes('Cube（Blender 对象）')))
 {
-  // Read the prompt row with box-drawing residue folded to spaces: in a
-  // process that already rendered once, this headless harness leaves the old
-  // border's `─` cells under the input row after the popup closes (accepting
-  // a FILE row on unmodified main shows the same), which is not what this
-  // check is about.
-  const lines = live.lines().map(line => (line.startsWith('❯') ? line.replace(/─/gu, ' ') : line))
-  check('Enter inserts the plain insertText in place of @cu', lines.some(line => line.includes('Cube（Blender 对象）')) && !lines.some(line => line.includes('@cu')),
-    lines.filter(line => line.trim() !== '').join('\n'))
+  // Check the payload independently of the prompt rail, while still requiring
+  // the accepted text to be visible and the replaced token to leave the screen.
+  const lines = live.lines()
+  check('Enter inserts the plain insertText in place of @cu',
+    live.controllerRef.current?.text() === 'Cube（Blender 对象） '
+      && lines.some(line => line.includes('Cube（Blender 对象）')) && !lines.some(line => line.includes('@cu')),
+    JSON.stringify({ draft: live.controllerRef.current?.text(), lines }))
 }
 live.stdin.write('\r')
 await settled(() => live.channel.submitted.length > 0)
@@ -484,7 +483,8 @@ for (const [keyName, key] of [['Enter', '\r'], ['Tab', '\t']] as const) {
     cardRows(app.lines()).some(line => line.includes('❯ @ Camera')), app.lines().join('\n'))
   app.stdin.write('\r')
   check('late files: Enter inserts the selected Camera payload',
-    await settled(() => app.lines().some(line => line.startsWith('❯') && line.includes('Camera') && !line.includes('@c'))), app.lines().join('\n'))
+    await settled(() => app.controllerRef.current?.text() === 'Camera '),
+    JSON.stringify({ draft: app.controllerRef.current?.text(), lines: app.lines() }))
   app.instance.unmount()
 }
 

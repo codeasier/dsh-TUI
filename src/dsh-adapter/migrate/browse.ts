@@ -8,10 +8,10 @@
  * source id.
  *
  * Nothing is persisted, and the cost is paid only by the tab that needs it:
- * - opening the session screen probes presence alone — each source's walk
- *   stops at its first candidate, a handful of directory reads;
- * - a source is listed when its tab is opened, and within this run an
- *   unchanged conversation (same mtime and size) is not read a second time.
+ * - opening the session screen probes presence alone via the source's storage
+ *   probe or a file walk that stops at its first candidate;
+ * - a source is listed when its tab is opened. File sources may reuse summaries
+ *   by mtime/size; database sources own their snapshot and cache policy.
  *
  * @module @deepseek-harness-tui/dsh-tui/migrate/browse
  */
@@ -30,7 +30,7 @@ interface Known {
 
 /** Whether an adapter can be browsed (summary scan + full load). */
 export function isBrowsable(adapter: MigrationAdapter): boolean {
-  return adapter.walk !== undefined && adapter.scan !== undefined && adapter.load !== undefined
+  return (adapter.walk !== undefined || adapter.hasSessions !== undefined) && adapter.scan !== undefined && adapter.load !== undefined
 }
 
 const isAbort = (error: unknown): boolean => error instanceof Error && error.name === 'AbortError'
@@ -65,8 +65,10 @@ export function createForeignBrowser(
     return rows.sort(newestFirst)
   }
 
-  /** Whether a source has at least one candidate; the walk stops at the first. */
+  /** Whether a source has at least one candidate, using its storage contract. */
   const hasCandidate = async (adapter: MigrationAdapter): Promise<boolean> => {
+    signal?.throwIfAborted()
+    if (adapter.hasSessions !== undefined) return adapter.hasSessions()
     for await (const _file of walkFiles(adapter.roots(), { ...adapter.walk!, signal })) return true
     return false
   }

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /**
- * Regression: Ctrl/Option word editing in PromptInput (#156, #158, #1448).
+ * Regression: Ctrl/Option/Alt word movement and Ctrl+W in PromptInput.
+ * Covers legacy, CSI-u and modifyOtherKeys encodings, Chinese without spaces,
+ * whitespace, punctuation, emoji, middle-of-draft deletion and empty input.
  *
  * Windows Terminal (and most xterm-family terminals) deliver Ctrl+Left as
  * ESC[1;5D — parsed to { name: 'left', ctrl: true } (parse-keypress.ts) and
@@ -26,13 +28,16 @@
  * differs. A word-jump-on-bare-arrow regression likewise moves marker Z.
  *
  * Option-as-Meta arrows, ESC b/f and all three Option+Backspace encodings
- * must reach the same whitespace-delimited editing path, including a text
+ * must reach the same Unicode editing path, including a text
  * and Option+Backspace pair delivered in one stdin batch.
+ * Plus a static invariant (verify-cordis-approval style): in the source the
+ * word-boundary moves must textually precede the bare arrow arms.
  *
  * Run with plain node against the compiled lib:
  *   node scripts/verify-word-jump.mjs
  * Exits 1 on any failed assertion (CI gate).
  */
+import { readFileSync } from 'node:fs'
 import { Writable, PassThrough } from 'node:stream'
 // Redirect HOME/USERPROFILE into a throwaway sandbox before the app modules
 // load: this fixture submits text, and `rememberHistory` persists it into
@@ -56,6 +61,8 @@ const columns = Number(process.env.DSH_TEST_COLUMNS ?? 100)
 const fullscreen = process.env.DSH_TEST_FULLSCREEN === '1'
 const terminal = new xterm.Terminal({ cols: columns, rows: 30, allowProposedApi: true })
 const screen = () => viewportLines(terminal).join('\n')
+const controller = { current: null }
+let backgroundRequests = 0
 
 function makeStreams() {
   const stdout = new Writable({ write(chunk, _e, cb) { terminal.write(String(chunk), cb) } })
@@ -99,6 +106,8 @@ const prompt = React.createElement(PromptInput, {
   onToggleHelp() {},
   onRunCommand: () => false,
   selectionActive: false,
+  controllerRef: controller,
+  onBackgroundRequest() { backgroundRequests += 1 },
 })
 const instance = await render(
   fullscreen ? React.createElement(AlternateScreen, null, prompt) : prompt,
@@ -156,8 +165,66 @@ check('Option word jumps submit the expected unmodified text',
   await settled(() => submitted.length === before + 1 && submitted.at(-1) === 'aaa Ybbb ZXcccQ'),
   JSON.stringify(submitted.at(-1)))
 
+// Observe the synchronous draft controller instead of adding fixed waits for
+// each new case. One stdin batch exercises cursor/edit composition as well.
+async function editCase(name, sequence, expected) {
+  controller.current.clear()
+  stdin.write(sequence)
+  check(name, await settled(() => controller.current?.text() === expected),
+    JSON.stringify(controller.current?.text()))
+}
+
+const wordKeys = [
+  ['Ctrl+arrows', '\x1b[1;5D', '\x1b[1;5C'],
+  ['Option/Alt+arrows', '\x1b[1;3D', '\x1b[1;3C'],
+  ['Option/Alt+Shift+arrows', '\x1b[1;4D', '\x1b[1;4C'],
+  ['Option/Alt+B/F (legacy)', '\x1bb', '\x1bf'],
+  ['Option/Alt+B/F (CSI-u)', '\x1b[98;3u', '\x1b[102;3u'],
+  ['Option/Alt+B/F (modifyOtherKeys)', '\x1b[27;3;98~', '\x1b[27;3;102~'],
+]
+for (const [label, left, right] of wordKeys) {
+  await editCase(`${label}: left moves by word`, `hello world${left}X`, 'hello Xworld')
+  await editCase(`${label}: right moves by word`, `hello world\x1b[H${right}X`, 'hello Xworld')
+  await editCase(`${label}: Chinese left does not jump across the whole draft`,
+    `你好世界${left}X`, '你好X世界')
+  await editCase(`${label}: Chinese right moves to the next word`,
+    `你好世界\x1b[H${right}X`, '你好X世界')
+  await editCase(`${label}: empty draft does not background the session`, `${left}X`, 'X')
+}
+check('modified word-left never backgrounds an empty draft', backgroundRequests === 0)
+
+for (const [label, key] of [
+  ['Ctrl+W (legacy)', '\x17'],
+  ['Ctrl+W (CSI-u)', '\x1b[119;5u'],
+  ['Ctrl+W (modifyOtherKeys)', '\x1b[27;5;119~'],
+  ['Option+Backspace (DEL)', '\x1b\x7f'],
+  ['Option+Backspace (BS)', '\x1b\b'],
+  ['Option+Backspace (CSI-u)', '\x1b[127;3u'],
+]) {
+  await editCase(`${label}: Chinese deletes only the preceding word`, `你好世界${key}`, '你好')
+  await editCase(`${label}: deletes a word with trailing whitespace`, `hello  world  ${key}`, 'hello  ')
+  await editCase(`${label}: keeps text after the caret`,
+    `hello world tail\x1b[1;5D${key}`, 'hello tail')
+  await editCase(`${label}: preserves the previous line`,
+    `\x1b[200~first line\n你好世界\x1b[201~${key}`, 'first line\n你好')
+  await editCase(`${label}: punctuation is a separate boundary`, `foo-bar${key}`, 'foo-')
+  await editCase(`${label}: emoji stays a complete grapheme`, `hello 👩‍💻${key}`, 'hello ')
+  await editCase(`${label}: empty draft stays usable`, `${key}X`, 'X')
+  await editCase(`${label}: deleting a single word may empty the draft`, `word${key}`, '')
+  await editCase(`${label}: combining marks are not split`, `hello e\u0301${key}`, 'hello ')
+}
+
 instance.unmount()
 terminal.dispose()
+
+// ── static invariant: modified arrow arms precede bare arrow arms ─────────
+const source = readFileSync(new URL('../src/components/PromptInput.tsx', import.meta.url), 'utf8')
+const wordLeft = source.indexOf('wordBoundaryLeft(value, cursor)')
+const bareLeft = source.indexOf('if (key.leftArrow)')
+const wordRight = source.indexOf('wordBoundaryRight(value, cursor)')
+const bareRight = source.indexOf('if (key.rightArrow)')
+check('source: word-left arm exists and precedes bare left arm', wordLeft !== -1 && bareLeft !== -1 && wordLeft < bareLeft)
+check('source: word-right arm exists and precedes bare right arm', wordRight !== -1 && bareRight !== -1 && wordRight < bareRight)
 
 if (failed > 0) {
   console.error(`verify-word-jump: ${failed} assertion(s) failed`)

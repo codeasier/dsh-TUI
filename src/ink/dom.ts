@@ -11,6 +11,7 @@ import type { Styles, TextDecoration, TextStyles } from './styles.js'
 import { decoratedWrapBudget, wrapDecoratedLine } from './text-decoration.js'
 import { expandTabs } from './tabstops.js'
 import wrapText from './wrap-text.js'
+import { addSyntheticIndents, hangingWrap } from './hanging-wrap.js'
 
 type InkNode = {
   parentNode: DOMElement | undefined
@@ -164,7 +165,7 @@ export type DOMNode<T = { nodeName: NodeNames }> = T extends {
 /**
  * Attribute values storable on an ink DOM element.
  */
-export type DOMNodeAttribute = boolean | string | number | Uint8Array | undefined
+export type DOMNodeAttribute = boolean | string | number | readonly number[] | Uint8Array | undefined
 
 /**
  * Create an element node of the given kind, allocating its yoga layout node
@@ -441,6 +442,7 @@ export const createTextNode = (text: string): TextNode => {
 }
 
 type TextMeasureCache = {
+  continuationIndent: readonly number[] | undefined
   rawText: string
   text: string
   wrap: NonNullable<Styles['textWrap']>
@@ -468,12 +470,16 @@ const measureTextNode = function (
 
   const textWrap = node.style.textWrap ?? 'wrap'
   const decoration = node.style.decoration
+  const continuationIndent = node.nodeName === '#text'
+    ? undefined
+    : node.attributes['continuationIndent'] as readonly number[] | undefined
   let cache = textMeasureCache.get(node)
   if (
     cache === undefined ||
     cache.rawText !== rawText ||
     cache.wrap !== textWrap ||
-    cache.decoration !== decoration
+    cache.decoration !== decoration ||
+    cache.continuationIndent !== continuationIndent
   ) {
     // Tabs use the same measurement expansion as the uncached path.
     cache = {
@@ -481,6 +487,7 @@ const measureTextNode = function (
       text: expandTabs(rawText),
       wrap: textWrap,
       decoration,
+      continuationIndent,
       entries: [],
     }
     textMeasureCache.set(node, cache)
@@ -494,7 +501,7 @@ const measureTextNode = function (
   const result =
     decoration !== undefined
       ? measureDecoratedText(cache.text, rawText, width, textWrap, decoration)
-      : measureTextDimensions(cache.text, width, widthMode, textWrap)
+      : measureTextDimensions(cache.text, width, widthMode, textWrap, continuationIndent)
   if (cache.entries.length === TEXT_MEASURE_CACHE_SIZE) cache.entries.shift()
   cache.entries.push({ width, widthMode, result })
   return result
@@ -566,6 +573,7 @@ function measureTextDimensions(
   width: number,
   widthMode: LayoutMeasureMode,
   textWrap: NonNullable<Styles['textWrap']>,
+  continuationIndent?: readonly number[],
 ): { width: number; height: number } {
   const dimensions = measureText(text, width)
 
@@ -603,7 +611,10 @@ function measureTextDimensions(
     return measureText(text, effectiveWidth)
   }
 
-  const wrappedText = wrapText(text, width, textWrap)
+  const hanging = continuationIndent === undefined ? undefined : hangingWrap(text, width, textWrap, continuationIndent)
+  const wrappedText = hanging === undefined
+    ? wrapText(text, width, textWrap)
+    : addSyntheticIndents(hanging.wrapped, hanging.syntheticIndents)
   // The wrapper has already chosen physical rows. Reapplying width-based
   // row counting here double-counts trailing spaces at fractional widths.
   return measureText(wrappedText, Infinity)

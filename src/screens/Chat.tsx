@@ -10,9 +10,10 @@ import { envThemeOverride } from '../components/design-system/ThemeProvider.js'
 import { resolveBrand, setActiveBrand } from '../branding.js'
 import { hasPath } from '../dsh-adapter/settingsEditor.js'
 import { planReload, type ReloadKind } from '../reload.js'
-import { AlternateScreen, Box, Image, Text, InputCaret, useInput, useApp, useStdin, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
+import { AlternateScreen, Box, Image, Text, InputCaret, useInput, useApp, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
 import * as tuiKit from '../ui.js'
 import { usePageInset } from '../components/PageMargin.js'
+import { TerminalSizeContext } from '../ink/components/TerminalSizeContext.js'
 import { POINTER } from '../terminal-utils/figures.js'
 import { previousCodePoint } from '../components/AgentMessageComposer.js'
 import { resetRevealSession } from '../components/smoothReveal.js'
@@ -60,7 +61,6 @@ import { AskUserQuestionPanel } from '../components/questions/AskUserQuestionPan
 import { ApprovalPanel } from '../components/approvals/ApprovalPanel.js'
 import { ExtensionDialog } from '../components/ExtensionDialog.js'
 import { consumeBoundaryRecoveryRemount } from '../ink/update-overflow-guard.js'
-import { InputEvent } from '../ink/events/input-event.js'
 import type { DOMElement } from '../ink/dom.js'
 import { useSearchHighlight } from '../ink/hooks/use-search-highlight.js'
 import { ChatTitle } from '../components/ChatTitle.js'
@@ -148,7 +148,7 @@ import { PlanPicker } from '../components/PlanPicker.js'
 import { LangPicker } from '../components/LangPicker.js'
 import { ThemePicker, getThemeOptions } from '../components/ThemePicker.js'
 import { AUTO_THEME_NAME, getAutoThemeBase } from '../theme.js'
-import { FRAME_PRESETS, PRESET_NAMES } from '../components/activityFrames.js'
+import { DEFAULT_PRESET, FRAME_PRESETS, PRESET_NAMES } from '../components/activityFrames.js'
 import { ThinkingToggle } from '../components/ThinkingToggle.js'
 import { HistorySearchDialog } from '../components/HistorySearchDialog.js'
 import { RewindPicker } from '../components/RewindPicker.js'
@@ -620,7 +620,6 @@ export function Chat({
    */
   promptControllerRef?: React.RefObject<PromptController | null>
 }) {
-  const { internal_eventEmitter: inputEmitter } = useStdin()
   const writeRaw = React.useContext(TerminalWriteContext)
   // Re-render whenever the channel mutates; rows/status are read fresh below.
   // DEFAULT lane on purpose (useExternalVersion): the channel version bumps
@@ -915,7 +914,7 @@ export function Chat({
       // live-switch branch already dropped the completion cache via
       // switchModelRecorded — this covers keep-current, add, edit, delete and
       // OAuth login/logout.
-      if (outcome === 'added' || outcome === 'updated' || outcome === 'deleted' || outcome === 'signed-out') {
+      if (outcome === 'added' || outcome === 'updated' || outcome === 'synced' || outcome === 'deleted' || outcome === 'signed-out') {
         refreshProviderCatalog()
       }
       return outcome
@@ -2328,7 +2327,6 @@ export function Chat({
    * the user into a different conversation.
    */
   const promptDraftRef = React.useRef<PromptDraftCache>({ current: null })
-  const launchpadPendingInputRef = React.useRef<InputEvent['keypress'][]>([])
   /**
    * Latest channel for the unmount release below: that effect must not re-run
    * on a channel identity change, yet its cleanup must release against the
@@ -2430,7 +2428,6 @@ export function Chat({
     // A stored draft can only belong to the conversation being replaced: the
     // composer is the one that writes it, and it writes it on the way out.
     promptDraftRef.current.current = null
-    launchpadPendingInputRef.current = []
     if (pendingFillRef.current === draftSessionId) {
       pendingFillRef.current = null
       return
@@ -2957,28 +2954,6 @@ export function Chat({
     return true
   }
 
-  /** Move the unsent draft to chat, inserting a newline at the launchpad caret. */
-  const newlineLaunchpad = (text: string, cursor: number): void => {
-    promptDraftRef.current.current = {
-      ownerAgentId: String(channel.agentId),
-      bindingGeneration: resolveBindingGeneration(channel),
-      value: text.slice(0, cursor) + '\n' + text.slice(cursor),
-      cursor: cursor + 1,
-      foldBlock: null,
-      expanded: false,
-      vimEnabled: false,
-      vimInsert: true,
-      images: [...launchpadImagesRef.current],
-    }
-    // The composer snapshot now owns the capabilities behind the image chips.
-    launchpadImagesRef.current.clear()
-    setSupervisorOpen(false)
-    setLaunchpadOpen(false)
-    setLaunchpadFocus(-1)
-    setLaunchpadDraft('')
-    setLaunchpadCaret(0)
-  }
-
   /**
    * Submit launchpad input or a selected command through the chat routes.
    *
@@ -3110,7 +3085,7 @@ export function Chat({
         if (parts[0] === 'status') {
           setHelpOpen(false)
           channel.pushLocal('/activity', [
-            t('activity-current-preset', { name: channel.activityFrames ?? 'moon8' }),
+            t('activity-current-preset', { name: channel.activityFrames ?? DEFAULT_PRESET }),
             t('activity-switch-hint'),
             t('activity-persist-hint'),
           ])
@@ -3124,7 +3099,7 @@ export function Chat({
           }
           const current = channel.activityFrames
           channel.pushLocal('/activity', [
-            t('activity-current-direct', { name: current ?? 'moon8' }),
+            t('activity-current-direct', { name: current ?? DEFAULT_PRESET }),
             ...PRESET_NAMES.map(name =>
               `${name.padEnd(10)} ${name === 'random' ? t('activity-random-each') : FRAME_PRESETS[name].frames.slice(0, 5).join(' ')}${name === current ? t('activity-current-marker') : ''}`,
             ),
@@ -4613,7 +4588,7 @@ export function Chat({
    * count, so it recomputes when the session actually grows rather than on
    * every animation tick. The tick only re-colours the cells it already has.
    */
-  const { columns: terminalColumns } = useTerminalSize()
+  const { columns: terminalColumns, screenRows } = useTerminalSize()
   const pageInsetX = usePageInset().x
   // 侧栏控制器：几何（chatColumns/panelColumns）、焦点与键盘分发都在
   // 这个 hook 里（设计文档 §16.5——Chat 只多一次调用、一处键盘让位、
@@ -4694,6 +4669,14 @@ export function Chat({
   // 所有显式下传的宽度（gutter / 图片预览区 / wake 条）都改用它；转录
   // 子树则经 SidePanelLayout 的 TerminalSizeContext 覆盖自动拿到。
   const chatColumns = sidePanel.chatColumns
+  const transcriptLeftBleed = pageInsetX
+  const transcriptRightBleed = sidePanel.split ? 0 : pageInsetX
+  const transcriptColumns = Math.max(1, chatColumns - Math.max(0,
+    (normalizeScrollGutter(channel.scrollGutter) === 'hidden' ? 0 : 2) - transcriptRightBleed))
+  const transcriptSize = React.useMemo(
+    () => ({ columns: transcriptColumns, rows: terminalRows, screenRows: screenRows ?? terminalRows }),
+    [transcriptColumns, terminalRows, screenRows],
+  )
   const wakeWidth = miniWakeWidth(chatColumns)
   const panelPickerRows = usePanelPickerRows(sidePanel)
   const wakeBand = React.useMemo(
@@ -4882,7 +4865,11 @@ export function Chat({
       && (previous === null
         || (previous.columns === columns && previous.rows === rows
           && (!previous.visible || height < previous.height)))) {
-      instances.get(stdout)?.reanchorViewport()
+      // This is an overlay lifecycle change, not an explicit transcript
+      // rewrite. A coupon can appear in the same commit as new rows and a
+      // closing prompt dock; do not replace its child's preserve-growth policy
+      // with a tail-only repaint before those rows reach native scrollback.
+      instances.get(stdout)?.reanchorViewport({ preserveGrowth: true })
     }
   })
   const markCouponShown = React.useCallback((orderId: Parameters<WhaleCouponStore['shown']>[0]) => {
@@ -6204,6 +6191,9 @@ export function Chat({
           {overlay.kind === 'model' && (
             <Box flexDirection="column" marginTop={1}>
               <ModelPicker
+                query={modelPicker.query}
+                cursorOffset={modelPicker.cursorOffset}
+                isTerminalFocused={terminalFocused}
                 groups={modelPicker.groups}
                 provider={modelPicker.provider}
                 models={modelPicker.models}
@@ -6997,8 +6987,6 @@ export function Chat({
         }}
         onQueryChange={changeLaunchpadDraft}
         onSubmit={submitLaunchpad}
-        onNewline={newlineLaunchpad}
-        onHandoffInput={event => launchpadPendingInputRef.current.push(event.keypress)}
         onFocusChange={setLaunchpadFocus}
         onAction={(action) => {
           // 第八版（用户实测：「刚点帮助，不知道为什么直接进入聊天页面了」）：
@@ -7186,15 +7174,13 @@ export function Chat({
           }}
         />
       )}
-      {/* Transcript row. Under PageMargin the negative right margin makes
-          the row stretch past the content column to the terminal edge —
-          the gutter (timeline rail / scrollbar) thus lands at the very
-          edge while the transcript TEXT stays inside the page margin
-          (structural chrome convention: dividers and the rail bleed, text
-          and cards keep the content column). No explicit width: cross-axis
-          stretch with the margin yields exactly content+margin. */}
-      <Box flexDirection="row" flexGrow={1} flexShrink={1} marginRight={sidePanel.split ? 0 : -pageInsetX}>
+      {/* The scroll viewport includes the allowed canvas margins so card
+          surfaces are not clipped. Text keeps its content inset; in split
+          mode the right gutter stays inside chat, before the divider. */}
+      <Box flexDirection="row" flexGrow={1} flexShrink={1} marginLeft={-transcriptLeftBleed} marginRight={-transcriptRightBleed}>
         <ScrollBox ref={setHandle} flexDirection="column" flexGrow={1} flexShrink={1} stickyScroll>
+        <TerminalSizeContext.Provider value={transcriptSize}>
+        <Box flexDirection="column" flexShrink={0} marginLeft={transcriptLeftBleed} width={transcriptColumns}>
         <LogoHeader
           key={logoNonce}
           model={channel.modelDisplay ?? channel.model}
@@ -7272,6 +7258,8 @@ export function Chat({
           olderHistory={channel.olderHistory}
           onWatchJobOutput={watchJobOutput}
         />
+        </Box>
+        </TerminalSizeContext.Provider>
         </ScrollBox>
         {(() => {
           // Gutter mode (settings `dsh-tui.scrollGutter`): the timeline
@@ -7488,6 +7476,8 @@ export function Chat({
           key="prompt-input"
           channel={channel}
           mentionProviders={extensionMentions}
+          bleed
+          collapsedColumns={transcriptColumns}
           suspended={promptReplacementOpen}
           // 选择器、搜索框或侧栏持有键盘焦点时，让对应输入框接管原生
           // 光标与 IME 锚点，避免主输入框在后续提交中抢回声明。
@@ -7498,13 +7488,6 @@ export function Chat({
           // 先闪一帧 toast 再消失。
           toastSuppressed={petSaysNotices}
           draftCache={promptDraftRef.current}
-          onInputReady={() => {
-            // Restore the draft and register the composer listener before
-            // replaying keys captured during the launchpad's final stdin batch.
-            const pending = launchpadPendingInputRef.current
-            launchpadPendingInputRef.current = []
-            for (const keypress of pending) inputEmitter.emit('input', new InputEvent(keypress))
-          }}
           helpOpen={helpOpen}
           onToggleHelp={() =>{  setHelpOpen(previous => !previous) }}
           onRunCommand={runCommand}
